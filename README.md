@@ -1,7 +1,7 @@
 # ⚡ Quasi-Quantum Annealing (QQA)
 
-A **PyTorch implementation** of the paper:  
-**Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling**  
+A **PyTorch implementation** of the [ICLR2025](https://iclr.cc/) paper:
+**[Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling](https://openreview.net/forum?id=9EfBeXaXf0)**  
 
 ---
 
@@ -37,17 +37,7 @@ Below is an example of how to use QQA for a **Maximum Independent Set** (MIS) pr
 ### **Step 1: Define a Custom Problem Class**
 
 ```python
-import torch
-import networkx as nx
-from abc import ABC, abstractmethod
-
-# Abstract Base Class for a Combinatorial Optimization (CO) problem
-class COProblem(ABC):
-    @abstractmethod
-    def loss_fn(self, x):
-        pass
-
-# Example: Maximum Independent Set
+# Example: ProblemClass (Maximum Independent Set)
 class MaximumIndependentSet(COProblem):
     def __init__(self, nx_graph, penalty=3, device="cpu"):
         super().__init__()
