@@ -6,8 +6,8 @@ import pickle
 from abc import ABC, abstractmethod
 
 # Define base directory for data (relative to this file)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data')
+# SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# DATA_DIR = os.path.join(SCRIPT_DIR, '..', 'data')
 
 
 class COProblem(ABC):
@@ -196,9 +196,7 @@ class Coloring(QUBOProblem):
         return [self.loss_fn(x).item()]
 
 # Load Data
-def mis_er_small(penalty=3, problem_type='list', device='cpu'):
-    # Load small ER graphs from ../data/mis/er_test
-    path = os.path.join(DATA_DIR, 'mis', 'er_test')
+def mis_er_small(penalty=3, problem_type='list', device='cpu', path="../data/mis/er-small"):
     files = os.listdir(path)
     graphs = []
     for f in files:
