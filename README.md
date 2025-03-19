@@ -9,7 +9,7 @@ Learning-based methods have gained attention as general-purpose solvers due to t
 
 ## Demo: Annealing Process
 <p align="center">
-  <img src="data/fig/demo.gif" width="180px">
+  <img src="data/fig/demo.gif" width="350px">
 </p>
 
 ---
