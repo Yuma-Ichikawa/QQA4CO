@@ -246,8 +246,13 @@ def anneal(
         try:
             score = problem.score_summary(best_sol)
         except Exception as exc:  # noqa: BLE001 - surface but never abort
-            score = {"label": "loss", "value": float(best_obj), "unit": "",
-                     "feasible": True, "extra": {"error": str(exc)}}
+            score = {
+                "label": "loss",
+                "value": float(best_obj),
+                "unit": "",
+                "feasible": True,
+                "extra": {"error": str(exc)},
+            }
 
     return AnnealResult(
         best_sol=best_sol,

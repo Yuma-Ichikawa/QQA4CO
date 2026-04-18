@@ -148,7 +148,7 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.02, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.chart_holder.plotly_chart(fig, width='stretch')
+        self.chart_holder.plotly_chart(fig, width="stretch")
 
         # --- Population heatmap: replicas sorted by best-so-far --------
         pop = np.stack(self.pop, axis=1)  # (sol_size, T)
@@ -186,13 +186,15 @@ class StreamlitCallback(Callback):
                 xaxis_title="Epoch",
                 yaxis_title="Replica (sorted by best-so-far)",
                 yaxis2={
-                    "overlaying": "y", "side": "right", "showgrid": False,
+                    "overlaying": "y",
+                    "side": "right",
+                    "showgrid": False,
                     "title": "best loss",
                 },
                 legend={"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.pop_holder.plotly_chart(pop_fig, width='stretch')
+        self.pop_holder.plotly_chart(pop_fig, width="stretch")
 
         # --- Diversity curve: std across replicas vs epoch --------------
         div_fig = go.Figure()
@@ -216,7 +218,7 @@ class StreamlitCallback(Callback):
                 showlegend=False,
             )
         )
-        self.diversity_holder.plotly_chart(div_fig, width='stretch')
+        self.diversity_holder.plotly_chart(div_fig, width="stretch")
 
 
 run = st.button("▶  Run QQA", type="primary")
@@ -236,8 +238,13 @@ if run:
     diversity_holder = st.empty()
 
     cb = StreamlitCallback(
-        progress, metrics, chart, pop_holder, diversity_holder,
-        sol_size=sol_size, update_every=update_every,
+        progress,
+        metrics,
+        chart,
+        pop_holder,
+        diversity_holder,
+        sol_size=sol_size,
+        update_every=update_every,
     )
     pop_tracker = PopulationTracker(stride=max(1, update_every), record_x=True)
 
@@ -262,8 +269,10 @@ if run:
 
     # Clear the "still running" progress bar and display the polished result.
     progress.empty()
-    raw = result.best_obj if isinstance(result.best_obj, float) else float(
-        __import__("numpy").asarray(result.best_obj).mean()
+    raw = (
+        result.best_obj
+        if isinstance(result.best_obj, float)
+        else float(__import__("numpy").asarray(result.best_obj).mean())
     )
     with score_holder.container():
         render_score_card(result.score, raw_loss=raw)

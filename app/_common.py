@@ -54,7 +54,7 @@ _LIGHT_PALETTE = {
     "border": "#e4e1d6",
     "text": "#0f172a",
     "muted": "#64748b",
-    "accent": "#0f766e",   # deep teal
+    "accent": "#0f766e",  # deep teal
     "accent2": "#be5a3c",  # warm terracotta
     "grid": "#e5e7eb",
     "palette": ["#0f766e", "#be5a3c", "#1e3a8a", "#b45309", "#6d28d9", "#047857"],
@@ -112,15 +112,16 @@ def plotly_layout(theme: str | None = None, **overrides) -> dict:
         "template": "plotly_white" if (theme or get_theme()) == "light" else "plotly_dark",
         "paper_bgcolor": "rgba(0,0,0,0)",
         "plot_bgcolor": "rgba(0,0,0,0)",
-        "font": {"family": "Inter, -apple-system, sans-serif", "size": 13,
-                 "color": p["text"]},
-        "title_font": {"family": "'Source Serif 4', Georgia, serif",
-                       "size": 17, "color": p["text"]},
+        "font": {"family": "Inter, -apple-system, sans-serif", "size": 13, "color": p["text"]},
+        "title_font": {
+            "family": "'Source Serif 4', Georgia, serif",
+            "size": 17,
+            "color": p["text"],
+        },
         "colorway": p["palette"],
         "xaxis": {"gridcolor": p["grid"], "linecolor": p["border"], "zerolinecolor": p["grid"]},
         "yaxis": {"gridcolor": p["grid"], "linecolor": p["border"], "zerolinecolor": p["grid"]},
-        "legend": {"bgcolor": "rgba(0,0,0,0)", "bordercolor": p["border"],
-                   "borderwidth": 0.5},
+        "legend": {"bgcolor": "rgba(0,0,0,0)", "bordercolor": p["border"], "borderwidth": 0.5},
         "margin": {"l": 50, "r": 20, "t": 48, "b": 46},
     }
     base.update(overrides)
@@ -137,13 +138,13 @@ def apply_theme() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
         :root {{
-            --qqa-bg: {p['bg']};
-            --qqa-card: {p['bg_card']};
-            --qqa-border: {p['border']};
-            --qqa-text: {p['text']};
-            --qqa-muted: {p['muted']};
-            --qqa-accent: {p['accent']};
-            --qqa-accent2: {p['accent2']};
+            --qqa-bg: {p["bg"]};
+            --qqa-card: {p["bg_card"]};
+            --qqa-border: {p["border"]};
+            --qqa-text: {p["text"]};
+            --qqa-muted: {p["muted"]};
+            --qqa-accent: {p["accent"]};
+            --qqa-accent2: {p["accent2"]};
         }}
         html, body, [class*="css"] {{
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -156,7 +157,7 @@ def apply_theme() -> None:
             color: var(--qqa-text);
         }}
         section[data-testid="stSidebar"] {{
-            background: {p['bg_sidebar']};
+            background: {p["bg_sidebar"]};
             border-right: 1px solid var(--qqa-border);
         }}
         h1, h2, h3, h4 {{
@@ -286,13 +287,13 @@ def apply_theme() -> None:
         <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&display=swap');
         :root {{
-            --qqa-bg: {p['bg']};
-            --qqa-card: {p['bg_card']};
-            --qqa-border: {p['border']};
-            --qqa-text: {p['text']};
-            --qqa-muted: {p['muted']};
-            --qqa-accent: {p['accent']};
-            --qqa-accent2: {p['accent2']};
+            --qqa-bg: {p["bg"]};
+            --qqa-card: {p["bg_card"]};
+            --qqa-border: {p["border"]};
+            --qqa-text: {p["text"]};
+            --qqa-muted: {p["muted"]};
+            --qqa-accent: {p["accent"]};
+            --qqa-accent2: {p["accent2"]};
         }}
         html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
         .stApp {{
@@ -303,7 +304,7 @@ def apply_theme() -> None:
             color: var(--qqa-text);
         }}
         section[data-testid="stSidebar"] {{
-            background: {p['bg_sidebar']};
+            background: {p["bg_sidebar"]};
             backdrop-filter: blur(14px);
             border-right: 1px solid var(--qqa-border);
         }}
@@ -408,15 +409,10 @@ def render_score_card(score: dict, raw_loss: float | None = None) -> None:
         else '<span class="qqa-badge warn">infeasible</span>'
     )
     value = score.get("value", "-")
-    if isinstance(value, float):
-        value_s = f"{value:.4g}"
-    else:
-        value_s = str(value)
+    value_s = f"{value:.4g}" if isinstance(value, float) else str(value)
     unit = score.get("unit", "")
     unit_html = f'<span class="unit">{unit}</span>' if unit else ""
-    raw_html = (
-        f'<div class="raw">raw loss = {raw_loss:.4g}</div>' if raw_loss is not None else ""
-    )
+    raw_html = f'<div class="raw">raw loss = {raw_loss:.4g}</div>' if raw_loss is not None else ""
     value_cls = "value" if feas else "value infeasible"
     st.markdown(
         f'<div class="qqa-score">'
@@ -584,7 +580,7 @@ def _graph_preview(g: nx.Graph, title: str) -> None:
         yaxis={"visible": False},
         height=380,
     )
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 
 
 def _coupling_preview(J: np.ndarray, title: str) -> None:
@@ -595,7 +591,7 @@ def _coupling_preview(J: np.ndarray, title: str) -> None:
         plot_bgcolor="rgba(0,0,0,0)",
         height=400,
     )
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, width="stretch")
 
 
 def preview_problem(problem: Any, cfg: dict) -> None:
@@ -619,7 +615,7 @@ def preview_problem(problem: Any, cfg: dict) -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             height=400,
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
         return
     if kind == "custom":
         import torch
