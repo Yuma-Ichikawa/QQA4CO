@@ -335,7 +335,7 @@ evolution (`plot_population_evolution`).
 We run QQA against a ground truth or a strong baseline for every problem in
 the catalog via `scripts/verify_all_problems.py`. The most recent sweep
 (29 instances across 9 problem families) is stored in
-[`tasks/verification_report.md`](tasks/verification_report.md); headline
+[`docs/verification.md`](docs/verification.md); headline
 numbers:
 
 | Problem | Instances | Reference | QQA |

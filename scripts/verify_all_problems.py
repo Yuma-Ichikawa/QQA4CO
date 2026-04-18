@@ -3,7 +3,8 @@
 For each problem family, we run QQA on one or more instances and compare the
 best objective (or a problem-specific metric) against a ground truth or a
 strong baseline. Results are aggregated into a Markdown report written to
-``tasks/verification_report.md``.
+``docs/verification.md`` so it renders both on GitHub and in the MkDocs
+site.
 
 References used:
 - MIS & MaxClique: NetworkX greedy heuristics (independent_set, max_weight_clique).
@@ -35,7 +36,7 @@ import torch
 import qqa
 
 PARISI_SK = -0.7631667  # known thermodynamic limit
-REPORT = Path(__file__).resolve().parents[1] / "tasks" / "verification_report.md"
+REPORT = Path(__file__).resolve().parents[1] / "docs" / "verification.md"
 
 
 # ---------------------------------------------------------------------------
