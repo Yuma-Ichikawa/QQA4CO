@@ -1,0 +1,29 @@
+# Streamlit Community Cloud / lightweight deployment dependency list.
+#
+# Notes
+# -----
+# * We pin the CPU wheel of PyTorch to avoid pulling the ~900 MB CUDA build
+#   (which blows through the 1 GB Community Cloud image budget).
+# * The trailing `.` installs this repository itself as the ``qqa`` package
+#   so ``import qqa`` works inside the Streamlit app.
+#
+# Local development should still use ``uv sync --all-extras``; this file is
+# only consumed by pip-based deploy targets (Streamlit Community Cloud,
+# Hugging Face Spaces, Render, etc.).
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1+cpu
+
+numpy>=1.24
+networkx>=3.1
+scipy>=1.11
+matplotlib>=3.8
+tqdm>=4.66
+
+# Interactive plots + GUI
+plotly>=5.17
+pandas>=2.0
+streamlit>=1.30
+
+# Install this repository (reads pyproject.toml)
+.

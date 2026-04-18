@@ -14,9 +14,13 @@ versions.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
+
+# The Home page hides the custom-problem toggle unless this env var is set.
+os.environ.setdefault("QQA_ALLOW_CUSTOM", "1")
 
 pytest.importorskip("streamlit", minversion="1.29.0")
 
