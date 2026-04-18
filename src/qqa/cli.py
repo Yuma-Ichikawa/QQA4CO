@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
             "sk",
             "perceptron",
             "hopfield",
-            # New (v0.4+) problems.
+            # Phase-A problems (added in v0.3).
             "knapsack",
             "number_partition",
             "vertex_cover",
@@ -182,7 +182,7 @@ def _build_problem(args: argparse.Namespace):
             N=args.size, patterns=args.patterns, seed=args.seed, device=device
         )
 
-    # New Phase-A problems.
+    # Phase-A problems (added in v0.3).
     if kind == "knapsack":
         return qqa.Knapsack(N=args.size, seed=args.seed, device=device)
     if kind == "number_partition":
@@ -319,6 +319,33 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     return 1
 
 
+def _resolve_streamlit_app() -> Path | None:
+    """Locate ``app/streamlit_app.py`` for both wheel and source installs.
+
+    When installed from a wheel, ``hatch`` places the Streamlit app at
+    ``qqa/_app/streamlit_app.py`` (see ``pyproject.toml`` ``force-include``).
+    When run from a source checkout (``pip install -e .`` or ``python -m``),
+    that directory does not exist, so we fall back to ``repo_root/app/``
+    resolved relative to this file.
+    """
+    try:
+        from importlib.resources import files
+
+        candidate = Path(str(files("qqa").joinpath("_app", "streamlit_app.py")))
+        if candidate.exists():
+            return candidate
+    except (ModuleNotFoundError, FileNotFoundError, OSError):
+        pass
+
+    here = Path(__file__).resolve()
+    # src/qqa/cli.py -> src/qqa -> repo_root
+    repo_root = here.parents[2]
+    candidate = repo_root / "app" / "streamlit_app.py"
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def _cmd_gui(args: argparse.Namespace) -> int:
     if shutil.which("streamlit") is None:
         print(
@@ -328,13 +355,15 @@ def _cmd_gui(args: argparse.Namespace) -> int:
         )
         return 2
 
-    # Resolve the bundled app file.
-    here = Path(__file__).resolve()
-    # src/qqa/cli.py -> src/qqa -> repo_root
-    repo_root = here.parents[2]
-    app = repo_root / "app" / "streamlit_app.py"
-    if not app.exists():
-        print(f"[qqa gui] Streamlit app not found at {app}", file=sys.stderr)
+    app = _resolve_streamlit_app()
+    if app is None:
+        print(
+            "[qqa gui] Streamlit app not found in the installed package or "
+            "the source tree. Re-install qqa (``pip install qqa[gui]``) or "
+            "clone https://github.com/Yuma-Ichikawa/QQA4CO and run from the "
+            "repository root.",
+            file=sys.stderr,
+        )
         return 2
 
     cmd = [

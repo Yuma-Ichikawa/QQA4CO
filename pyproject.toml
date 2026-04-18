@@ -35,7 +35,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 dependencies = [
-    "torch>=2.1",
+    # The lower bound matches ``requirements.txt`` (used by Streamlit Community
+    # Cloud) so that local ``uv sync`` and the Cloud deploy resolve the same
+    # torch wheel. Cloud pins an upper bound too; we keep the lower bound here
+    # and leave the upper to the deploy file to avoid churning PyPI users.
+    "torch>=2.2",
     "numpy>=1.24",
     "networkx>=3.1",
     "scipy>=1.11",
@@ -84,9 +88,17 @@ Paper = "https://openreview.net/forum?id=9EfBeXaXf0"
 [tool.hatch.build.targets.wheel]
 packages = ["src/qqa"]
 
+# Ship the Streamlit dashboard inside the wheel so ``qqa gui`` works after
+# ``pip install qqa`` (without a repo checkout). At runtime the CLI resolves
+# the app via ``importlib.resources.files("qqa")`` and falls back to the
+# repo-root ``app/`` directory for editable / source installs.
+[tool.hatch.build.targets.wheel.force-include]
+"app" = "qqa/_app"
+
 [tool.hatch.build.targets.sdist]
 include = [
     "src/qqa",
+    "app",
     "README.md",
     "LICENCE.txt",
     "CHANGELOG.md",

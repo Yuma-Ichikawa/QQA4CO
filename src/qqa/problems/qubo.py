@@ -13,7 +13,7 @@ from collections.abc import Sequence
 import networkx as nx
 import torch
 
-from qqa.problems.base import COProblem, QUBOProblem
+from qqa.problems.base import COProblem, QUBOProblem, normalize_graph
 from qqa.relaxation import BinaryInstanceRelaxation, BinaryRelaxation
 
 
@@ -31,10 +31,10 @@ class MaximumIndependentSet(QUBOProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
-        self.nx_graph = nx_graph
+        self.nx_graph = normalize_graph(nx_graph)
         self.penalty = penalty
         self.device = device
-        self.num_nodes = nx_graph.number_of_nodes()
+        self.num_nodes = self.nx_graph.number_of_nodes()
         self.Q_mat = self.generate_qubo_matrix()
         self.relaxation = BinaryRelaxation()
 
@@ -88,6 +88,7 @@ class MaximumIndependentSetInstance(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        nx_graph_list = [normalize_graph(g) for g in nx_graph_list]
         Q_list = []
         for g in nx_graph_list:
             Q = torch.zeros((max_node, max_node))
@@ -118,10 +119,10 @@ class MaxClique(QUBOProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
-        self.nx_graph = nx_graph
+        self.nx_graph = normalize_graph(nx_graph)
         self.penalty = penalty
         self.device = device
-        self.num_nodes = nx_graph.number_of_nodes()
+        self.num_nodes = self.nx_graph.number_of_nodes()
         self.Q_mat = self.generate_qubo_matrix()
         self.relaxation = BinaryRelaxation()
 
@@ -175,6 +176,7 @@ class MaxCliqueInstance(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        nx_graph_list = [normalize_graph(g) for g in nx_graph_list]
         Q_list = []
         for g in nx_graph_list:
             Q = torch.full((max_node, max_node), float(penalty))
@@ -200,9 +202,9 @@ class MaxCut(QUBOProblem):
 
     def __init__(self, nx_graph: nx.Graph, device: str | torch.device = "cpu"):
         super().__init__()
-        self.nx_graph = nx_graph
+        self.nx_graph = normalize_graph(nx_graph)
         self.device = device
-        self.num_nodes = nx_graph.number_of_nodes()
+        self.num_nodes = self.nx_graph.number_of_nodes()
         self.Q_mat = self.generate_qubo_matrix()
         self.relaxation = BinaryRelaxation()
 
@@ -251,6 +253,7 @@ class MaxCutInstance(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        nx_graph_list = [normalize_graph(g) for g in nx_graph_list]
         Q_list = []
         for g in nx_graph_list:
             Q = torch.zeros((max_node, max_node))

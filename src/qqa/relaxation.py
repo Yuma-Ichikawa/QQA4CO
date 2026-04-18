@@ -128,7 +128,13 @@ class SpinRelaxation(BinaryRelaxation):
             x.clamp_(0.0, 1.0)
 
     def num_variables(self, problem):
-        return getattr(problem, "num_spins", getattr(problem, "num_nodes", None))
+        n = getattr(problem, "num_spins", getattr(problem, "num_nodes", None))
+        if n is None:
+            raise TypeError(
+                f"SpinRelaxation requires the problem to expose 'num_spins' "
+                f"or 'num_nodes'; got {type(problem).__name__}."
+            )
+        return n
 
     def init(self, sol_size, problem, device):
         if self._shape_fn is not None:
@@ -159,15 +165,26 @@ class CategoricalRelaxation:
     """
 
     def init(self, sol_size, problem, device):
+        K = getattr(problem, "num_category", None)
+        if K is None or K < 2:
+            raise ValueError(
+                "CategoricalRelaxation requires the problem to expose "
+                f"num_category >= 2; got {K!r}."
+            )
         return torch.rand(
-            (sol_size, problem.num_node, problem.num_category),
+            (sol_size, problem.num_node, K),
             device=device,
             dtype=torch.float32,
             requires_grad=True,
         )
 
     def forward(self, x):
-        return x / x.sum(dim=2, keepdim=True)
+        # AdamW can push ``x`` negative / very close to zero, so the raw
+        # ``x / x.sum`` normalisation can blow up (NaN / Inf). Clamp to a
+        # small positive floor before dividing; the normalisation still
+        # yields a proper simplex and the discrete projection is unchanged.
+        x_pos = x.clamp(min=1e-8)
+        return x_pos / x_pos.sum(dim=2, keepdim=True)
 
     def project(self, x):
         idx = torch.argmax(x, dim=2)
@@ -178,6 +195,10 @@ class CategoricalRelaxation:
     def penalty(self, x, curve_rate):
         x_norm = self.forward(x)
         K = x.shape[2]
+        if K < 2:
+            raise ValueError(
+                f"CategoricalRelaxation.penalty is undefined for K={K}; use num_category >= 2."
+            )
         num = torch.sum((K * x_norm - 1) ** curve_rate, dim=2)
         denom = (K - 1) ** curve_rate + (K - 1)
         return torch.sum(1 - num / denom, dim=1)

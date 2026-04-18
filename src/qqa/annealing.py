@@ -114,6 +114,19 @@ def anneal(
     verbose:
         If True, print periodic progress.
     """
+    if sol_size < 1:
+        raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
+    if num_epochs < 0:
+        raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
+
+    # Surface a helpful message when CUDA is requested but unavailable,
+    # before torch raises its own (cryptic) error deep inside .to().
+    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"device={device!r} requested but torch.cuda.is_available() is False. "
+            "Install a CUDA-enabled torch build, or pass device='cpu'."
+        )
+
     if schedule is None:
         schedule = LinearBGSchedule(
             -2.0 if min_bg is None else min_bg,
@@ -151,22 +164,24 @@ def anneal(
             # sees a clean ``(N, ...)`` tensor rather than ``(B, N, ...)``.
             best_sol = x_disc[int(min_idx.item())].detach().clone()
 
+    # Pre-seed ``state`` with the post-init evaluation so ``on_train_end`` has
+    # a valid CallbackState even when ``num_epochs == 0``. The loop below will
+    # overwrite it as it iterates.
+    state = CallbackState(
+        epoch=-1,
+        num_epochs=num_epochs,
+        bg=float(schedule(0, num_epochs)),
+        x=x,
+        losses=torch.zeros(1, device=x.device),
+        penalties=torch.zeros(1, device=x.device),
+        diversity=torch.zeros((), device=x.device),
+        best_obj=best_obj,
+        hyperparams=hp,
+        problem=problem,
+        relaxation=relax,
+    )
     for cb in cb_list:
-        cb.on_train_begin(
-            CallbackState(
-                epoch=-1,
-                num_epochs=num_epochs,
-                bg=float(schedule(0, num_epochs)),
-                x=x,
-                losses=torch.zeros(1),
-                penalties=torch.zeros(1),
-                diversity=torch.zeros(()),
-                best_obj=best_obj,
-                hyperparams=hp,
-                problem=problem,
-                relaxation=relax,
-            )
-        )
+        cb.on_train_begin(state)
 
     for epoch in range(num_epochs):
         optimizer.zero_grad()
@@ -246,11 +261,14 @@ def anneal(
         try:
             score = problem.score_summary(best_sol)
         except Exception as exc:  # noqa: BLE001 - surface but never abort
+            # ``feasible=False`` (not True) so that downstream UIs / CLI don't
+            # mis-advertise an unchecked solution as valid just because the
+            # scorer itself crashed.
             score = {
                 "label": "loss",
                 "value": float(best_obj),
                 "unit": "",
-                "feasible": True,
+                "feasible": False,
                 "extra": {"error": str(exc)},
             }
 

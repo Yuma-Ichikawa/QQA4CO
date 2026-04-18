@@ -17,9 +17,27 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
+import networkx as nx
 import torch
 
 from qqa.relaxation import Relaxation
+
+
+def normalize_graph(graph: nx.Graph) -> nx.Graph:
+    """Return a graph whose nodes are ``0, 1, ..., N-1``.
+
+    Many QUBO constructors use node labels directly as matrix/tensor indices
+    (``Q[u, v] = ...``), so a graph whose nodes are ``{10, 20, 30}`` (or
+    strings, or a subset of ``range(N)``) silently produces a wrong QUBO or
+    raises an ``IndexError``. This helper returns ``graph`` unchanged when
+    the labels are already a contiguous ``0..N-1`` range and returns a
+    relabelled *copy* otherwise. It does **not** mutate the input.
+    """
+    N = graph.number_of_nodes()
+    labels = list(graph.nodes())
+    if labels == list(range(N)):
+        return graph
+    return nx.convert_node_labels_to_integers(graph, ordering="sorted")
 
 
 class COProblem(ABC):

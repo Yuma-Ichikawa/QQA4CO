@@ -16,6 +16,15 @@ class LinearBGSchedule:
     When ``min_bg < 0`` and ``max_bg > 0`` the landscape transitions from
     "convex, half-integer minima" (the quasi-quantum regime) to the discrete
     regime where binary corners are favoured.
+
+    .. note::
+       The annealing loop calls this with ``epoch ∈ {0, ..., T-1}``, so the
+       final value is ``min_bg + (T-1)/T * (max_bg - min_bg)`` rather than
+       exactly ``max_bg`` — the schedule approaches ``max_bg`` as ``T → ∞``.
+       For short runs (small ``num_epochs``) the last ``bg`` can therefore be
+       visibly smaller than ``max_bg``. Increase ``num_epochs`` if you need to
+       reach ``max_bg`` (matching the published QQA curves), or supply a
+       custom callable for a different endpoint convention.
     """
 
     min_bg: float = -2.0

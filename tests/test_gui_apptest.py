@@ -44,8 +44,8 @@ def test_home_page_renders_default_problem():
 
 
 def test_home_page_custom_problem_flow():
-    """Toggle Custom mode, supply a simple snippet, and confirm a UserProblem
-    is built (the preview panel does not raise)."""
+    """Toggle Custom mode, click Validate, and confirm a UserProblem is built
+    (the preview panel does not raise)."""
     at = AppTest.from_file(str(APP), default_timeout=60)
     at.run()
     # Enable custom mode via the sidebar toggle.
@@ -57,7 +57,15 @@ def test_home_page_custom_problem_flow():
     cfg = at.session_state["problem_config"]
     assert cfg["kind"] == "custom"
     assert "source" in cfg["extra"]
-    # The snippet executes without raising.
+
+    # Custom-problem preview is gated behind an explicit "Validate snippet"
+    # click so we don't ``exec`` user code on every keystroke.  Click it
+    # and then assert the preview ran cleanly.
+    validate_btns = [b for b in at.button if "Validate" in b.label]
+    assert validate_btns, "Validate snippet button missing"
+    validate_btns[0].click()
+    at.run()
+    assert not at.exception
 
     # The preview panel must succeed end-to-end. Regression: previously the
     # preview called ``problem.relaxation(x)`` which raised
@@ -209,9 +217,107 @@ def test_custom_problem_available_by_default(monkeypatch):
     assert not at.exception
     # The dropdown of curated examples should be on the page.
     select_labels = [s.label for s in at.selectbox]
-    assert any("Load example" in lab for lab in select_labels), (
+    assert any("Template" in lab for lab in select_labels), (
         "Curated example dropdown should be present in Custom mode"
     )
+
+
+def test_visualize_tab_order_solution_first(tmp_path):
+    """Solution must be the first tab on the Visualize page (user-requested
+    information hierarchy: result first, dynamics second). We seed a tiny
+    AnnealResult so the page renders past the early-return."""
+    import sys
+
+    sys.path.insert(0, str(APP.parent))
+    from _common import build_problem as _build  # noqa: F811
+
+    import qqa  # noqa: F811
+
+    cfg = {"kind": "ising1d", "size": 6, "seed": 0, "device": "cpu", "extra": {}}
+    problem = _build(cfg)
+    result = qqa.anneal(
+        problem, sol_size=4, num_epochs=10, learning_rate=0.1, device="cpu", verbose=False
+    )
+
+    at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=60)
+    at.session_state["last_result"] = result
+    at.session_state["last_problem"] = problem
+    at.session_state["problem_config"] = cfg
+    at.run()
+    assert not at.exception, at.exception
+
+    tab_labels = [t.label for t in at.tabs]
+    assert tab_labels, "No tabs rendered on the Visualize page"
+    assert tab_labels[0] == "Solution", f"Solution must be the first tab (got order: {tab_labels})"
+
+
+def test_solve_dynamics_separates_discrete_and_relaxed_best():
+    """Regression: the per-replica chart used to plot the running discrete
+    best (``state.best_obj``) on the same y-axis as the relaxed mean.  For
+    losses spanning orders of magnitude the discrete line visually pinned
+    to 0 (see ``tasks/lessons.md``).  We now plot the *relaxed* best of the
+    current epoch on that line and surface the discrete best as its own
+    metric tile.  This test asserts that both metric tiles are rendered
+    after a tiny anneal run."""
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 8,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    _set_slider(at, "sol_size", 4)
+    _set_slider(at, "epochs", 100)
+    _set_slider(at, "UI update every", 10)
+    at.run()
+
+    runs = [b for b in at.button if "Run" in b.label]
+    runs[0].click()
+    at.run()
+    assert not at.exception, at.exception
+
+    metric_labels = [m.label for m in at.metric]
+    assert any("best (discrete)" in lab for lab in metric_labels), (
+        f"Expected a 'best (discrete)' metric tile; got {metric_labels!r}"
+    )
+    assert any("best (relaxed" in lab for lab in metric_labels), (
+        f"Expected a 'best (relaxed, this epoch)' metric tile; got {metric_labels!r}"
+    )
+
+
+def test_plot_history_plotly_uses_qqa_theme():
+    """``plot_history(backend='plotly')`` must produce a figure that matches
+    the shared QQA plotly theme (transparent background, no fixed pixel
+    width forcing horizontal scrolling, and a readable colorway)."""
+    pytest.importorskip("plotly")
+    from qqa.visualization import plot_history
+
+    class _R:
+        history = {
+            "loss_mean": [0.0, -1.0, -2.0],
+            "loss_std": [0.5, 0.4, 0.3],
+            "penalty_mean": [1.0, 0.8, 0.6],
+            "penalty_std": [0.1, 0.1, 0.1],
+            "diversity": [0.2, 0.3, 0.4],
+            "bg": [-2.0, -1.0, 0.1],
+            "best_obj": [0.0, -0.5, -1.5],
+        }
+
+    fig = plot_history(_R(), backend="plotly", show=False)
+    layout = fig.layout
+    # Transparent canvas (so it composes onto any background).
+    assert layout.paper_bgcolor in ("rgba(0,0,0,0)",)
+    assert layout.plot_bgcolor in ("rgba(0,0,0,0)",)
+    # No hard-coded pixel width — Streamlit's container should drive layout.
+    assert layout.width is None, (
+        f"plot_history figure pinned width={layout.width}; let containers size it"
+    )
+    # Centered title.
+    assert layout.title.x == 0.5
 
 
 def test_solution_viz_smoke_across_problem_kinds(tmp_path):

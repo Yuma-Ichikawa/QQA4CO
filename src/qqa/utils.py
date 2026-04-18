@@ -12,7 +12,14 @@ import torch
 
 
 def fix_seed(seed: int) -> None:
-    """Seed Python/Numpy/Torch (CPU + CUDA) for deterministic runs."""
+    """Seed Python/Numpy/Torch (CPU + CUDA) for deterministic runs.
+
+    .. note::
+       This call flips ``torch.backends.cudnn.deterministic`` to ``True`` for
+       the whole process, which disables some CuDNN auto-tuning and may slow
+       non-QQA code sharing the same interpreter. Call it once near the start
+       of your script (or test session) and not inside hot loops.
+    """
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

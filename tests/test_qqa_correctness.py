@@ -13,9 +13,19 @@ import itertools
 
 import networkx as nx
 import numpy as np
+import pytest
 import torch
 
 import qqa
+
+
+@pytest.fixture(autouse=True)
+def _deterministic_seed() -> None:
+    """Seed every RNG before each test so QQA's stochastic loop produces the
+    same result across Python invocations and (CPU) machines. Without this,
+    tight thresholds such as ``E/N < -0.4`` for SK can flake on some seeds."""
+    qqa.fix_seed(0)
+
 
 # ---------------------------------------------------------------------------
 # Combinatorial (graph-based) problems

@@ -37,8 +37,91 @@ def _have_plotly() -> bool:
     try:
         importlib.import_module("plotly.graph_objects")
         return True
-    except Exception:
+    except ImportError:
+        # Plotly / one of its sub-deps missing. Other ImportError-derived
+        # errors (e.g. incompatible numpy) also land here; anything else
+        # (AttributeError, version clashes surfacing as RuntimeError, ...)
+        # bubbles up so users see the real traceback.
         return False
+
+
+# ---------------------------------------------------------------------------
+# Shared Plotly theme
+# ---------------------------------------------------------------------------
+#
+# A single source of truth for every plotly chart shipped by ``qqa``.  This
+# keeps standalone notebook output looking polished, and the Streamlit app's
+# ``_retheme()`` helper layers ``plotly_layout()`` on top so the dashboard
+# matches its own colour palette.
+_PLOTLY_PALETTE: tuple[str, ...] = (
+    "#0f766e",  # deep teal
+    "#be5a3c",  # warm terracotta
+    "#1e3a8a",  # navy
+    "#b45309",  # amber
+    "#6d28d9",  # violet
+    "#047857",  # forest
+)
+_PLOTLY_GRID = "#e5e7eb"
+_PLOTLY_BORDER = "#cbd5e1"
+_PLOTLY_TEXT = "#0f172a"
+_PLOTLY_MUTED = "#64748b"
+
+
+def _plotly_theme(**overrides: Any) -> dict:
+    """Return a base ``layout`` dict shared by every plotly figure."""
+    base: dict[str, Any] = {
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        "font": {
+            "family": "Inter, ui-sans-serif, system-ui, -apple-system, "
+            "'Segoe UI', Helvetica, Arial, sans-serif",
+            "size": 13,
+            "color": _PLOTLY_TEXT,
+        },
+        "margin": {"l": 56, "r": 28, "t": 64, "b": 50},
+        "title": {"x": 0.5, "xanchor": "center", "font": {"size": 16, "color": _PLOTLY_TEXT}},
+        "xaxis": {
+            "gridcolor": _PLOTLY_GRID,
+            "linecolor": _PLOTLY_BORDER,
+            "zerolinecolor": _PLOTLY_GRID,
+            "ticks": "outside",
+            "ticklen": 4,
+            "tickcolor": _PLOTLY_BORDER,
+        },
+        "yaxis": {
+            "gridcolor": _PLOTLY_GRID,
+            "linecolor": _PLOTLY_BORDER,
+            "zerolinecolor": _PLOTLY_GRID,
+            "ticks": "outside",
+            "ticklen": 4,
+            "tickcolor": _PLOTLY_BORDER,
+        },
+        "legend": {
+            "bgcolor": "rgba(255,255,255,0.0)",
+            "bordercolor": _PLOTLY_BORDER,
+            "borderwidth": 0.5,
+        },
+        "colorway": list(_PLOTLY_PALETTE),
+        "hoverlabel": {
+            "bgcolor": "white",
+            "bordercolor": _PLOTLY_BORDER,
+            "font": {"size": 12, "color": _PLOTLY_TEXT},
+        },
+        "height": 420,
+    }
+    for k, v in overrides.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            base[k] = {**base[k], **v}
+        else:
+            base[k] = v
+    return base
+
+
+def _hex_to_rgba(hex_str: str, alpha: float) -> str:
+    """Tiny inline ``hex -> rgba(...)`` so we don't pull in the GUI helper."""
+    h = hex_str.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha:.3f})"
 
 
 def _resolve_backend(backend: str) -> str:
@@ -125,69 +208,77 @@ def _plot_history_plotly(h: dict, title: str, show: bool):
     from plotly.subplots import make_subplots
 
     epochs = np.arange(len(h["loss_mean"]))
-    fig = make_subplots(rows=1, cols=3, subplot_titles=("Loss", "Penalty", "Diversity"))
-
-    mean_l = np.asarray(h["loss_mean"])
-    std_l = np.asarray(h["loss_std"])
-    fig.add_trace(
-        go.Scatter(
-            x=np.concatenate([epochs, epochs[::-1]]),
-            y=np.concatenate([mean_l + std_l, (mean_l - std_l)[::-1]]),
-            fill="toself",
-            fillcolor="rgba(100, 149, 237, 0.25)",
-            line={"color": "rgba(0,0,0,0)"},
-            name="Loss ±1σ",
-            showlegend=False,
-            hoverinfo="skip",
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=epochs, y=mean_l, mode="lines", name="Mean Loss", line={"color": "darkblue"}),
-        row=1,
-        col=1,
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=("Loss", "Penalty", "Diversity"),
+        horizontal_spacing=0.085,
     )
 
-    mean_p = np.asarray(h["penalty_mean"])
-    std_p = np.asarray(h["penalty_std"])
-    fig.add_trace(
-        go.Scatter(
-            x=np.concatenate([epochs, epochs[::-1]]),
-            y=np.concatenate([mean_p + std_p, (mean_p - std_p)[::-1]]),
-            fill="toself",
-            fillcolor="rgba(250, 128, 114, 0.25)",
-            line={"color": "rgba(0,0,0,0)"},
-            name="Penalty ±1σ",
-            showlegend=False,
-            hoverinfo="skip",
-        ),
-        row=1,
-        col=2,
+    palette = _PLOTLY_PALETTE
+    series = (
+        ("loss_mean", "loss_std", "Mean loss", palette[2], 1),
+        ("penalty_mean", "penalty_std", "Mean penalty", palette[1], 2),
     )
-    fig.add_trace(
-        go.Scatter(
-            x=epochs, y=mean_p, mode="lines", name="Mean Penalty", line={"color": "firebrick"}
-        ),
-        row=1,
-        col=2,
-    )
+    for mean_key, std_key, name, colour, col in series:
+        mean = np.asarray(h[mean_key])
+        std = np.asarray(h[std_key])
+        fig.add_trace(
+            go.Scatter(
+                x=np.concatenate([epochs, epochs[::-1]]),
+                y=np.concatenate([mean + std, (mean - std)[::-1]]),
+                fill="toself",
+                fillcolor=_hex_to_rgba(colour, 0.18),
+                line={"color": "rgba(0,0,0,0)"},
+                name=f"{name} ±1σ",
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=epochs,
+                y=mean,
+                mode="lines",
+                name=name,
+                line={"color": colour, "width": 2},
+                hovertemplate="epoch=%{x}<br>%{y:.4f}<extra></extra>",
+            ),
+            row=1,
+            col=col,
+        )
 
     div = np.asarray(h["diversity"])
     fig.add_trace(
-        go.Scatter(x=epochs, y=div, mode="lines", name="Diversity", line={"color": "green"}),
+        go.Scatter(
+            x=epochs,
+            y=div,
+            mode="lines",
+            name="Diversity",
+            line={"color": palette[5], "width": 2},
+            fill="tozeroy",
+            fillcolor=_hex_to_rgba(palette[5], 0.14),
+            hovertemplate="epoch=%{x}<br>diversity=%{y:.4f}<extra></extra>",
+        ),
         row=1,
         col=3,
     )
 
     fig.update_layout(
-        title={"text": title, "x": 0.5, "font": {"size": 18}},
-        template="plotly_white",
-        height=420,
-        width=1200,
-        showlegend=False,
+        **_plotly_theme(
+            title={"text": title},
+            height=440,
+            showlegend=False,
+            margin={"l": 56, "r": 28, "t": 70, "b": 56},
+        )
     )
-    fig.update_xaxes(title_text="Epoch")
+    fig.update_xaxes(title_text="Epoch", gridcolor=_PLOTLY_GRID, linecolor=_PLOTLY_BORDER)
+    fig.update_yaxes(gridcolor=_PLOTLY_GRID, linecolor=_PLOTLY_BORDER)
+    # Ensure subplot titles inherit the theme font.
+    for ann in fig.layout.annotations:
+        ann.font = {"size": 13, "color": _PLOTLY_MUTED}
     if show:
         fig.show()
     return fig
@@ -232,13 +323,26 @@ def plot_best_trajectory(
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=epochs, y=best, mode="lines", name="Best objective"))
+    fig.add_trace(
+        go.Scatter(
+            x=epochs,
+            y=best,
+            mode="lines",
+            name="Best objective",
+            line={"color": _PLOTLY_PALETTE[0], "width": 2.4},
+            fill="tozeroy",
+            fillcolor=_hex_to_rgba(_PLOTLY_PALETTE[0], 0.10),
+            hovertemplate="epoch=%{x}<br>best=%{y:.4f}<extra></extra>",
+        )
+    )
     fig.update_layout(
-        title={"text": title, "x": 0.5},
-        xaxis_title="Epoch",
-        yaxis_title="Best objective",
-        template="plotly_white",
-        height=420,
+        **_plotly_theme(
+            title={"text": title},
+            xaxis_title="Epoch",
+            yaxis_title="Best objective",
+            height=420,
+            showlegend=False,
+        )
     )
     if show:
         fig.show()
@@ -278,13 +382,25 @@ def plot_schedule(
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=epochs, y=bg, mode="lines", line={"color": "purple"}))
+    fig.add_trace(
+        go.Scatter(
+            x=epochs,
+            y=bg,
+            mode="lines",
+            line={"color": _PLOTLY_PALETTE[4], "width": 2.4},
+            fill="tozeroy",
+            fillcolor=_hex_to_rgba(_PLOTLY_PALETTE[4], 0.12),
+            hovertemplate="epoch=%{x}<br>bg=%{y:.3f}<extra></extra>",
+        )
+    )
     fig.update_layout(
-        title={"text": title, "x": 0.5},
-        xaxis_title="Epoch",
-        yaxis_title="bg",
-        template="plotly_white",
-        height=400,
+        **_plotly_theme(
+            title={"text": title},
+            xaxis_title="Epoch",
+            yaxis_title="bg",
+            height=400,
+            showlegend=False,
+        )
     )
     if show:
         fig.show()
@@ -339,14 +455,24 @@ def plot_run_comparison(
     import plotly.graph_objects as go
 
     fig = go.Figure()
-    for lab, best in series:
-        fig.add_trace(go.Scatter(x=np.arange(len(best)), y=best, mode="lines", name=lab))
+    for i, (lab, best) in enumerate(series):
+        fig.add_trace(
+            go.Scatter(
+                x=np.arange(len(best)),
+                y=best,
+                mode="lines",
+                name=lab,
+                line={"color": _PLOTLY_PALETTE[i % len(_PLOTLY_PALETTE)], "width": 2},
+                hovertemplate=f"{lab}<br>epoch=%{{x}}<br>best=%{{y:.4f}}<extra></extra>",
+            )
+        )
     fig.update_layout(
-        title={"text": title, "x": 0.5},
-        xaxis_title="Epoch",
-        yaxis_title="Best objective",
-        template="plotly_white",
-        height=460,
+        **_plotly_theme(
+            title={"text": title},
+            xaxis_title="Epoch",
+            yaxis_title="Best objective",
+            height=460,
+        )
     )
     if show:
         fig.show()
@@ -384,15 +510,37 @@ def plot_parallel_coordinates(
     if objective not in data:
         raise KeyError(f"objective column {objective!r} not found in sweep_df.")
 
+    def _numeric(values):
+        """Encode a column as float, mapping non-numeric (categorical /
+        string) entries to integer codes so Plotly's Parcoords can render
+        them. Returns ``(numeric_array, optional_tickvals, optional_ticktext)``.
+        """
+        arr = np.asarray(values, dtype=object)
+        try:
+            return np.asarray(values, dtype=float), None, None
+        except (TypeError, ValueError):
+            uniques = list(dict.fromkeys(arr.tolist()))
+            code = {u: i for i, u in enumerate(uniques)}
+            return (
+                np.asarray([code[u] for u in arr], dtype=float),
+                np.arange(len(uniques), dtype=float),
+                [str(u) for u in uniques],
+            )
+
     backend = _resolve_backend(backend)
     if backend == "plotly":
         import plotly.graph_objects as go
 
-        obj_vals = np.asarray(data[objective], dtype=float)
+        obj_numeric, _, _ = _numeric(data[objective])
         dims = []
         for k, v in data.items():
-            arr = np.asarray(v, dtype=float)
-            dims.append({"label": k, "values": arr})
+            arr, tickvals, ticktext = _numeric(v)
+            d: dict = {"label": k, "values": arr}
+            if tickvals is not None:
+                d["tickvals"] = tickvals
+                d["ticktext"] = ticktext
+            dims.append(d)
+        obj_vals = obj_numeric
         fig = go.Figure(
             data=go.Parcoords(
                 line={"color": obj_vals, "colorscale": "Viridis", "showscale": True},
@@ -400,9 +548,10 @@ def plot_parallel_coordinates(
             )
         )
         fig.update_layout(
-            title={"text": title, "x": 0.5},
-            template="plotly_white",
-            height=500,
+            **_plotly_theme(
+                title={"text": title},
+                height=500,
+            )
         )
         if show:
             fig.show()
@@ -411,12 +560,16 @@ def plot_parallel_coordinates(
     import matplotlib.pyplot as plt
 
     keys = [k for k in data if k != objective]
-    obj_vals = np.asarray(data[objective], dtype=float)
+    obj_vals, _, _ = _numeric(data[objective])
     fig, axs = plt.subplots(1, len(keys), figsize=(3.5 * max(1, len(keys)), 4.5), facecolor="white")
     if len(keys) == 1:
         axs = [axs]
     for ax, k in zip(axs, keys, strict=True):
-        ax.scatter(np.asarray(data[k], dtype=float), obj_vals, c=obj_vals, cmap="viridis")
+        xvals, tickvals, ticktext = _numeric(data[k])
+        ax.scatter(xvals, obj_vals, c=obj_vals, cmap="viridis")
+        if tickvals is not None:
+            ax.set_xticks(tickvals)
+            ax.set_xticklabels(ticktext)
         ax.set_xlabel(k)
         ax.set_ylabel(objective)
         ax.grid(ls="--", alpha=0.5)
@@ -449,10 +602,16 @@ def plot_solution_heatmap(
         sol = sol.detach().cpu().numpy()
     sol = np.asarray(sol)
     if sol.ndim == 2:
-        # For a single-instance problem best_sol is (sol_size, N): pick the
-        # first (most diverse) row for display.
+        # Two valid 2-D shapes reach here:
+        #   * batched-instance problems: ``(num_instance, max_node)`` — keep
+        #     the whole matrix so each row is one instance's solution.
+        #   * single-instance categorical problems: ``(N, K)`` — collapse to
+        #     the chosen category per variable via argmax so the heatmap
+        #     shows a single row of class indices.
         if problem is not None and getattr(problem, "num_instance", None) is not None:
             arr = sol
+        elif problem is not None and getattr(problem, "num_category", None) is not None:
+            arr = np.argmax(sol, axis=1)[None, :].astype(float)
         else:
             arr = sol[0][None, :]
     elif sol.ndim == 1:
@@ -494,9 +653,10 @@ def plot_solution_heatmap(
         data = data[None, :]
     fig = go.Figure(data=go.Heatmap(z=data, colorscale="RdBu", zmin=-1, zmax=1, zmid=0))
     fig.update_layout(
-        title={"text": title, "x": 0.5},
-        template="plotly_white",
-        height=400,
+        **_plotly_theme(
+            title={"text": title},
+            height=400,
+        )
     )
     if show:
         fig.show()
