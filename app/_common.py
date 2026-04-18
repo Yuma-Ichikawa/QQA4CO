@@ -978,16 +978,36 @@ def preview_problem(problem: Any, cfg: dict) -> None:
         )
         with st.spinner("Evaluating loss on a random sample..."):
             try:
+                # Build a latent of the same shape ``qqa.anneal`` would allocate,
+                # then push it through the relaxation's ``forward`` so the value
+                # we hand to ``loss_fn`` matches what the optimiser will actually
+                # see (continuous spins in [-1, +1] / one-hot simplex / etc.).
+                # ``problem.relaxation`` is a *Relaxation instance* — calling it
+                # directly raised "'SpinRelaxation' object is not callable".
+                relax = problem.relaxation
                 if problem.variable_kind == "categorical":
-                    x = torch.randn(1, problem.num_vars, problem.num_category).softmax(dim=-1)
-                elif problem.variable_kind == "spin":
-                    x = torch.rand(1, problem.num_vars)
+                    latent = torch.rand(1, problem.num_vars, problem.num_category)
                 else:
-                    x = torch.rand(1, problem.num_vars)
-                val = problem.loss_fn(problem.relaxation(x))
+                    latent = torch.rand(1, problem.num_vars)
+                x = relax.forward(latent)
+                val = problem.loss_fn(x)
+                if not torch.is_tensor(val):
+                    raise TypeError(
+                        f"loss_fn must return a torch.Tensor, got {type(val).__name__}."
+                    )
+                if val.shape[0] != 1:
+                    raise ValueError(
+                        f"loss_fn returned shape {tuple(val.shape)} — expected a "
+                        "leading batch axis matching the input (B=1 here)."
+                    )
+                # Also evaluate the discrete projection so users see the kind of
+                # number QQA tracks as ``best_obj``.
+                with torch.no_grad():
+                    val_disc = problem.loss_fn(relax.project(latent))
                 st.success(
-                    f"loss_fn returns tensor shape {tuple(val.shape)}; "
-                    f"sample value = {val.item():.4f}"
+                    f"loss_fn output shape {tuple(val.shape)} ✓ — relaxed sample "
+                    f"= {float(val.flatten()[0]):.4f}, discrete sample "
+                    f"= {float(val_disc.flatten()[0]):.4f}."
                 )
             except Exception as e:  # pragma: no cover - surfaced in UI
                 st.error(f"loss_fn raised: {e}")
