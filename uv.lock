@@ -3238,7 +3238,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.11" },
     { name = "streamlit", specifier = ">=1.30" },
     { name = "streamlit", marker = "extra == 'gui'", specifier = ">=1.30" },
-    { name = "torch", specifier = ">=2.1" },
+    { name = "torch", specifier = ">=2.2" },
     { name = "tqdm", specifier = ">=4.66" },
 ]
 provides-extras = ["plotly", "gui", "docs", "notebook", "dev", "all"]

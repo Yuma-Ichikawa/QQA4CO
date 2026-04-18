@@ -25,7 +25,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
-from qqa.problems.base import COProblem
+from qqa.problems.base import COProblem, normalize_graph
 from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
 
 __all__ = [
@@ -202,6 +202,7 @@ class VertexCover(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        graph = normalize_graph(graph)
         self.graph = graph
         self.num_nodes = graph.number_of_nodes()
         self.device = device
@@ -274,6 +275,7 @@ class GraphBisection(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        graph = normalize_graph(graph)
         self.graph = graph
         self.num_nodes = graph.number_of_nodes()
         self.device = device

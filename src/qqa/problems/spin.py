@@ -202,13 +202,19 @@ class EdwardsAnderson(SpinProblem):
         cls,
         path: str | Path,
         N: int,
+        *,
+        L: int | None = None,
+        dim: int = 3,
+        periodic: bool = True,
         device: str | torch.device = "cpu",
     ) -> EdwardsAnderson:
         """Load an EA instance from a text file of ``i j J_ij`` rows.
 
         Compatible with the ``couplings_L{L}_R1_seed{seed}.txt`` format
         produced by related projects: rows of ``i j J_ij`` with 0-based
-        indices. No metadata is assumed; ``N`` must be provided.
+        indices. No metadata is assumed; ``N`` must be provided. Pass ``L``
+        explicitly when ``N != L**dim`` (the cubic-root fallback below only
+        yields a correct ``L`` for cubic lattices).
         """
         obj = cls.__new__(cls)
         super(EdwardsAnderson, obj).__init__()
@@ -216,9 +222,12 @@ class EdwardsAnderson(SpinProblem):
         obj.device = device
         obj.sigma = float("nan")
         obj.seed = -1
-        obj.L = int(round(N ** (1 / 3)))
-        obj.dim = 3
-        obj.periodic = True
+        if L is not None:
+            obj.L = int(L)
+        else:
+            obj.L = int(round(N ** (1 / dim)))
+        obj.dim = int(dim)
+        obj.periodic = bool(periodic)
 
         J_mat = torch.zeros((N, N))
         data = np.loadtxt(str(path))

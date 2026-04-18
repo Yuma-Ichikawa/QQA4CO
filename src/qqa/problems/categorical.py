@@ -5,7 +5,7 @@ from __future__ import annotations
 import networkx as nx
 import torch
 
-from qqa.problems.base import COProblem
+from qqa.problems.base import COProblem, normalize_graph
 from qqa.relaxation import CategoricalRelaxation
 
 
@@ -24,6 +24,7 @@ class BalancedGraphPartition(COProblem):
         penalty: float = 5e-4,
     ):
         super().__init__()
+        nx_graph = normalize_graph(nx_graph)
         self.nx_graph = nx_graph
         self.adj = torch.tensor(
             nx.adjacency_matrix(nx_graph).toarray(), device=device, dtype=torch.float32
@@ -85,6 +86,7 @@ class Coloring(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        nx_graph = normalize_graph(nx_graph)
         self.nx_graph = nx_graph
         self.adj = torch.tensor(
             nx.adjacency_matrix(nx_graph).toarray(), device=device, dtype=torch.float32
