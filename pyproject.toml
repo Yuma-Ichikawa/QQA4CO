@@ -41,6 +41,12 @@ dependencies = [
     "scipy>=1.11",
     "matplotlib>=3.8",
     "tqdm>=4.66",
+    # The Streamlit dashboard is a first-class feature of this package and
+    # lives in app/. Keeping plotly/pandas/streamlit in core deps means the
+    # uv.lock consumed by Streamlit Community Cloud resolves them too.
+    "plotly>=5.17",
+    "pandas>=2.0",
+    "streamlit>=1.30",
 ]
 
 [project.optional-dependencies]
