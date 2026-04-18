@@ -23,6 +23,10 @@ Below is the auto-generated documentation for the public modules.
 
 ::: qqa.problems.spin
 
+::: qqa.problems.extras
+
+::: qqa.problems.user
+
 ## Relaxations
 
 ::: qqa.relaxation

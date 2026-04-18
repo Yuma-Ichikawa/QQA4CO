@@ -42,23 +42,25 @@ they drop straight into `st.plotly_chart(fig)`.
 Figures below are regenerated deterministically by
 `scripts/make_gallery.py`. The full set (eight problems × four plot kinds
 plus the annealing schedule) lives under `data/fig/gallery/` and is
-referenced from the top-level README.
+referenced from the top-level README. The MkDocs site loads the PNGs
+directly from GitHub's raw endpoint so the canonical copies stay in
+`data/` without duplication inside `docs/`.
 
 ### Schedule
 
-![Default LinearBGSchedule](../data/fig/gallery/schedule_default.png)
+![Default LinearBGSchedule](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/schedule_default.png)
 
 ### Per-problem dynamics
 
 | Problem | History | Solution | Population |
 | --- | --- | --- | --- |
-| MIS         | ![](../data/fig/gallery/history_mis.png)         | ![](../data/fig/gallery/solution_mis.png)        | ![](../data/fig/gallery/population_mis.png)        |
-| Max-Cut     | ![](../data/fig/gallery/history_maxcut.png)      | ![](../data/fig/gallery/solution_maxcut.png)     | ![](../data/fig/gallery/population_maxcut.png)     |
-| Coloring    | ![](../data/fig/gallery/history_coloring.png)    | —                                                | ![](../data/fig/gallery/population_coloring.png)   |
-| Ising 1D    | ![](../data/fig/gallery/history_ising1d.png)     | ![](../data/fig/gallery/solution_ising1d.png)    | ![](../data/fig/gallery/population_ising1d.png)    |
-| EA 3D       | ![](../data/fig/gallery/history_ea3d.png)        | ![](../data/fig/gallery/solution_ea3d.png)       | ![](../data/fig/gallery/population_ea3d.png)       |
-| SK          | ![](../data/fig/gallery/history_sk.png)          | ![](../data/fig/gallery/solution_sk.png)         | ![](../data/fig/gallery/population_sk.png)         |
-| Perceptron  | ![](../data/fig/gallery/history_perceptron.png)  | ![](../data/fig/gallery/solution_perceptron.png) | ![](../data/fig/gallery/population_perceptron.png) |
-| Hopfield    | ![](../data/fig/gallery/history_hopfield.png)    | ![](../data/fig/gallery/solution_hopfield.png)   | ![](../data/fig/gallery/population_hopfield.png)   |
+| MIS         | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_mis.png)         | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_mis.png)        | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_mis.png)        |
+| Max-Cut     | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_maxcut.png)      | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_maxcut.png)     | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_maxcut.png)     |
+| Coloring    | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_coloring.png)    | —                                                                                                          | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_coloring.png)   |
+| Ising 1D    | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_ising1d.png)     | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_ising1d.png)    | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_ising1d.png)    |
+| EA 3D       | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_ea3d.png)        | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_ea3d.png)       | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_ea3d.png)       |
+| SK          | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_sk.png)          | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_sk.png)         | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_sk.png)         |
+| Perceptron  | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_perceptron.png)  | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_perceptron.png) | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_perceptron.png) |
+| Hopfield    | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_hopfield.png)    | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_hopfield.png)   | ![](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_hopfield.png)   |
 
 Regenerate with `uv run python scripts/make_gallery.py`.
