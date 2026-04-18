@@ -62,6 +62,12 @@ docs = [
     "pymdown-extensions>=10",
 ]
 notebook = ["jupyterlab>=4", "ipykernel>=6", "nbformat>=5"]
+# Optional CRA-PI-GNN backend (PyTorch Geometric port of the NeurIPS 2024
+# CRA4CO reference implementation). Pulled in only on demand because PyG
+# brings several heavy transitive dependencies and is irrelevant to users
+# of the default ``qqa.anneal`` solver. See ``qqa.pignn`` and the
+# "Optional CRA-PI-GNN backend" section in README.md.
+pignn = ["torch-geometric>=2.6"]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
@@ -70,7 +76,7 @@ dev = [
     "requests>=2.31",
 ]
 all = [
-    "qqa[plotly,gui,docs,notebook,dev]",
+    "qqa[plotly,gui,docs,notebook,dev,pignn]",
 ]
 
 [project.scripts]

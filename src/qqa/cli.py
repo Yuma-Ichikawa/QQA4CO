@@ -100,6 +100,62 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="If given, save the AnnealResult (pickle) to this path.",
     )
+    # ------------------------------------------------------------------
+    # Optional CRA-PI-GNN backend (PyTorch Geometric). Requires installing
+    # the ``pignn`` extra: ``pip install qqa[pignn]``. Defaults to ``qqa``,
+    # so users without the extra are completely unaffected.
+    # ------------------------------------------------------------------
+    solve.add_argument(
+        "--backend",
+        choices=["qqa", "pignn"],
+        default="qqa",
+        help=(
+            "Solver backend. 'qqa' (default) uses the parallel-replica "
+            "annealing loop; 'pignn' uses the optional CRA-PI-GNN "
+            "(PyTorch Geometric) trainer — graph problems only "
+            "(mis/maxcut/maxclique/vertex_cover/graph_bisection)."
+        ),
+    )
+    solve.add_argument(
+        "--pignn-init-reg-param",
+        type=float,
+        default=-20.0,
+        help="CRA initial gamma (only used when --backend pignn).",
+    )
+    solve.add_argument(
+        "--pignn-annealing-rate",
+        type=float,
+        default=1e-3,
+        help="CRA gamma increment per epoch (only used when --backend pignn).",
+    )
+    solve.add_argument(
+        "--pignn-tol",
+        type=float,
+        default=1e-4,
+        help="Early-stopping tolerance (only used when --backend pignn).",
+    )
+    solve.add_argument(
+        "--pignn-patience",
+        type=int,
+        default=1000,
+        help="Early-stopping patience in epochs (only used when --backend pignn).",
+    )
+    solve.add_argument(
+        "--pignn-hidden",
+        type=int,
+        default=None,
+        help=(
+            "Hidden width of the GCN (only used when --backend pignn). Defaults to floor(sqrt(N))."
+        ),
+    )
+    solve.add_argument(
+        "--pignn-no-annealing",
+        action="store_true",
+        help=(
+            "When set with --backend pignn, runs vanilla PI-GNN "
+            "(reg_param fixed at 0) instead of CRA-PI-GNN."
+        ),
+    )
 
     bench = sub.add_parser("bench", help="Run a small benchmark on bundled data.")
     bench.add_argument("--preset", choices=["er-small", "sk-small", "ea-small"], default="er-small")
@@ -205,23 +261,66 @@ def _build_problem(args: argparse.Namespace):
     raise ValueError(f"Unknown problem kind {kind!r}.")
 
 
+_PIGNN_SUPPORTED_KINDS = {
+    "mis",
+    "maxcut",
+    "maxclique",
+    "vertex_cover",
+    "graph_bisection",
+}
+
+
 def _cmd_solve(args: argparse.Namespace) -> int:
     import qqa
 
     problem = _build_problem(args)
-    result = qqa.anneal(
-        problem,
-        sol_size=args.sol_size,
-        learning_rate=args.learning_rate,
-        temp=args.temp,
-        min_bg=args.min_bg,
-        max_bg=args.max_bg,
-        curve_rate=args.curve_rate,
-        div_param=args.div_param,
-        num_epochs=args.epochs,
-        device=args.device,
-        verbose=not args.quiet,
-    )
+
+    backend = getattr(args, "backend", "qqa")
+    if backend == "pignn":
+        kind = args.problem
+        if kind is None:
+            raise SystemExit(
+                "[qqa solve] --backend pignn requires a built-in --problem "
+                f"(one of {sorted(_PIGNN_SUPPORTED_KINDS)}); --problem-file "
+                "is not yet supported by the PyG backend."
+            )
+        if kind not in _PIGNN_SUPPORTED_KINDS:
+            raise SystemExit(
+                f"[qqa solve] --backend pignn only supports graph-based "
+                f"problems {sorted(_PIGNN_SUPPORTED_KINDS)}; got {kind!r}. "
+                "Use the default --backend qqa for the rest."
+            )
+        from qqa.pignn import train_cra_pi_gnn  # lazy: surfaces clear msg if PyG missing
+
+        result = train_cra_pi_gnn(
+            problem,
+            hidden_dim=args.pignn_hidden,
+            learning_rate=args.learning_rate if args.learning_rate != 1.0 else 1e-4,
+            annealing=not args.pignn_no_annealing,
+            init_reg_param=args.pignn_init_reg_param,
+            annealing_rate=args.pignn_annealing_rate,
+            curve_rate=args.curve_rate,
+            num_epochs=args.epochs,
+            tol=args.pignn_tol,
+            patience=args.pignn_patience,
+            device=args.device,
+            seed=args.seed,
+            verbose=not args.quiet,
+        )
+    else:
+        result = qqa.anneal(
+            problem,
+            sol_size=args.sol_size,
+            learning_rate=args.learning_rate,
+            temp=args.temp,
+            min_bg=args.min_bg,
+            max_bg=args.max_bg,
+            curve_rate=args.curve_rate,
+            div_param=args.div_param,
+            num_epochs=args.epochs,
+            device=args.device,
+            verbose=not args.quiet,
+        )
     print("")
     label = args.problem or f"file:{args.problem_file}"
     size = (
@@ -231,6 +330,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
         or args.size
     )
     print(f"problem    : {label}")
+    print(f"backend    : {backend}")
     print(f"size       : {size}")
     print(f"best_obj   : {result.best_obj}")
     if result.score:

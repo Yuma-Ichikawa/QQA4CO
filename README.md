@@ -82,6 +82,94 @@ result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)
 print(f"E_0 / N  ≈  {result.best_obj / 100:.4f}   (target ≈ -0.7632)")
 ```
 
+## Optional CRA-PI-GNN backend (PyTorch Geometric)
+
+QQA4CO ships an **optional** PyTorch Geometric port of the **CRA-PI-GNN**
+solver from Ichikawa, NeurIPS 2024 — *"Controlling Continuous Relaxation
+for Combinatorial Optimization"* ([paper](https://openreview.net/forum?id=ykACV1IhjD),
+[reference DGL implementation](https://github.com/Yuma-Ichikawa/CRA4CO)).
+This lets you compare against CRA-PI-GNN from the same codebase as QQA, on
+hardware that the original DGL stack does not yet target (e.g. NVIDIA
+Blackwell B200 / `sm_100`).
+
+Install with the `pignn` extra (pulls in `torch-geometric`):
+
+```bash
+pip install "qqa[pignn]"
+```
+
+Python API — drop-in alternative to `qqa.anneal`, returns the same `AnnealResult`:
+
+```python
+import networkx as nx
+import qqa
+from qqa.pignn import train_cra_pi_gnn
+
+qqa.fix_seed(0)
+g = nx.random_regular_graph(d=3, n=200, seed=0)
+problem = qqa.MaximumIndependentSet(g, penalty=2)
+
+result = train_cra_pi_gnn(
+    problem,
+    learning_rate=1e-3,
+    init_reg_param=-2.0,
+    annealing_rate=5e-4,
+    num_epochs=5000,
+)
+print(result.score)   # {'label': 'IS size', 'value': ..., 'feasible': True, ...}
+```
+
+CLI — same problem builders, just add `--backend pignn`:
+
+```bash
+qqa solve --problem mis --size 200 --backend pignn \
+          --learning-rate 1e-3 --pignn-init-reg-param -2 \
+          --pignn-annealing-rate 5e-4 --epochs 5000
+```
+
+Supported problems for the PyG backend: `mis`, `maxcut`, `maxclique`,
+`vertex_cover`, `graph_bisection` (anything QUBO-on-a-graph). For spin
+glasses, TSP, perceptron, etc. use the default `qqa.anneal`.
+
+### When to use which
+
+| Use case                                                       | Recommended                             |
+| -------------------------------------------------------------- | --------------------------------------- |
+| Most CO and spin-glass problems (default)                      | `qqa.anneal`                            |
+| Reproducing the NeurIPS 2024 CRA-PI-GNN paper                  | `qqa.pignn.train_cra_pi_gnn`            |
+| Spin glasses, perceptron, Hopfield, TSP, coloring              | `qqa.anneal` (PyG backend not supported) |
+| Need parallel replicas + diversity term                        | `qqa.anneal`                            |
+| Need a single deterministic GNN solver for ablation comparison | `qqa.pignn.train_cra_pi_gnn`            |
+
+### Empirical comparison (CPU, single thread)
+
+Both solvers given the same instance and seed; QQA uses default 100 parallel
+replicas, CRA-PI-GNN uses 5000 epochs of single-replica GCN training. Numbers
+from `scripts/bench_qqa_vs_pignn.py` on the bundled CPU runner:
+
+| Instance              | `qqa.anneal` (IS, runtime) | `qqa.pignn.train_cra_pi_gnn` (IS, runtime) |
+| --------------------- | -------------------------- | ------------------------------------------ |
+| MIS, N=100, d=3-reg   | **43**, **5.9 s**          | 2†, 12.7 s                                 |
+| MIS, N=300, d=3-reg   | **125**, **8.1 s**         | 126, 201 s                                 |
+| MIS, N=500, d=20-reg  | **29**, **8.2 s**          | 1†, 414 s                                  |
+
+† CRA-PI-GNN collapsed to a near-trivial solution under the README's
+"medium-graph" hyperparameters. The paper's headline numbers use a
+larger `init_reg_param` (e.g. -20) and longer schedule for `N >= 1000`;
+small / dense graphs need per-instance retuning. QQA is robust to
+hyperparameter choice across all three rows.
+
+**Takeaways**
+
+- For raw quality and wall-clock speed, **`qqa.anneal` is the recommended
+  default**. Its parallel-replica diversity makes it far less hyperparameter-
+  sensitive than CRA-PI-GNN.
+- CRA-PI-GNN is included so users can A/B against the paper from one
+  installation and one device. On its native large-graph regime
+  (`N >= 1000`, `d` low, paper defaults) it produces competitive solutions —
+  but see the original [CRA4CO repository](https://github.com/Yuma-Ichikawa/CRA4CO)
+  for the canonical DGL implementation.
+
 ## Problem catalog
 
 | Category                   | Classes                                                                          |
@@ -273,7 +361,9 @@ reference, and a migration guide from 0.2.x.
 | `scripts/demo_mis.py`             | Minimal MIS end-to-end demo                   |
 | `scripts/demo_coloring.py`        | 3-coloring end-to-end demo                    |
 | `scripts/demo_parallel.py`        | Parallel instances of MIS                     |
+| `scripts/demo_pignn_mis.py`       | MIS via the optional CRA-PI-GNN backend (PyG) |
 | `scripts/bench_er_small.py`       | Benchmark on the bundled ER-small MIS dataset |
+| `scripts/bench_qqa_vs_pignn.py`   | QQA vs. CRA-PI-GNN comparison (README table)  |
 | `scripts/make_gallery.py`         | Regenerate the figures used in the README     |
 | `scripts/verify_all_problems.py`  | Run the catalog-wide correctness sweep        |
 | `scripts/_generate_notebooks.py`  | Regenerate the shipped example notebooks      |
@@ -316,3 +406,19 @@ BSD-3-Clause — see [`LICENCE.txt`](LICENCE.txt).
   url       = {https://openreview.net/forum?id=9EfBeXaXf0}
 }
 ```
+
+If you use the optional CRA-PI-GNN backend (`qqa.pignn`), please **also**
+cite the original paper and the reference DGL implementation it was ported
+from:
+
+```bibtex
+@inproceedings{ichikawa2024controlling,
+  title     = {Controlling Continuous Relaxation for Combinatorial Optimization},
+  author    = {Ichikawa, Yuma},
+  booktitle = {The Thirty-eighth Annual Conference on Neural Information Processing Systems (NeurIPS)},
+  year      = {2024},
+  url       = {https://openreview.net/forum?id=ykACV1IhjD}
+}
+```
+
+Reference implementation: <https://github.com/Yuma-Ichikawa/CRA4CO>.
