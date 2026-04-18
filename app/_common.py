@@ -584,7 +584,7 @@ def _graph_preview(g: nx.Graph, title: str) -> None:
         yaxis={"visible": False},
         height=380,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def _coupling_preview(J: np.ndarray, title: str) -> None:
@@ -595,7 +595,7 @@ def _coupling_preview(J: np.ndarray, title: str) -> None:
         plot_bgcolor="rgba(0,0,0,0)",
         height=400,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def preview_problem(problem: Any, cfg: dict) -> None:
@@ -619,7 +619,7 @@ def preview_problem(problem: Any, cfg: dict) -> None:
             plot_bgcolor="rgba(0,0,0,0)",
             height=400,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         return
     if kind == "custom":
         import torch
