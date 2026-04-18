@@ -179,6 +179,25 @@ def apply_theme() -> None:
             background: {p["bg_sidebar"]};
             border-right: 1px solid var(--qqa-border);
         }}
+        /* Hide the auto-generated multipage heading ("streamlit app")
+           rendered above our brand block. */
+        [data-testid="stSidebarNav"]::before {{ display: none; }}
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > ul + div:has(>h1),
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h1:first-of-type,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h2:first-of-type {{
+            display: none !important;
+        }}
+        [data-testid="stSidebarNav"] a {{
+            color: var(--qqa-text) !important;
+            font-weight: 500;
+            border-radius: 6px;
+        }}
+        [data-testid="stSidebarNav"] a:hover {{
+            background: rgba(15,118,110,0.10) !important;
+            color: var(--qqa-accent) !important;
+        }}
+        [data-testid="stSidebarNav"] a span {{ color: inherit !important; }}
         h1, h2, h3, h4 {{
             font-family: 'Source Serif 4', Georgia, serif;
             color: var(--qqa-text);
@@ -345,6 +364,37 @@ def apply_theme() -> None:
             --qqa-accent2: {p["accent2"]};
         }}
         html, body, [class*="css"] {{ font-family: 'Inter', sans-serif; }}
+        /* Dark-mode text contrast. The Streamlit theme is declared ``light``
+           in config.toml so that ``textColor`` defaults to a dark tone; the
+           rules below re-colour every bit of Streamlit-managed text so the
+           dark background stays readable. Our intentionally-coloured
+           classes (.qqa-badge, .qqa-score .value, ...) are excluded. */
+        .stApp div[data-testid="stMarkdownContainer"] p,
+        .stApp div[data-testid="stMarkdownContainer"] li,
+        .stApp div[data-testid="stMarkdownContainer"] span:not([class*="qqa-"]),
+        .stApp div[data-testid="stMarkdownContainer"] strong,
+        .stApp div[data-testid="stMarkdownContainer"] em {{
+            color: #e8edf7 !important;
+        }}
+        .stApp a {{ color: #93c5fd !important; }}
+        .stApp a:hover {{ color: #bfdbfe !important; }}
+        section[data-testid="stSidebar"] p,
+        section[data-testid="stSidebar"] li,
+        section[data-testid="stSidebar"] label,
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2,
+        section[data-testid="stSidebar"] h3,
+        section[data-testid="stSidebar"] h4,
+        section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] *,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] span,
+        section[data-testid="stSidebar"] [data-testid="stRadio"] label,
+        section[data-testid="stSidebar"] [data-testid="stSelectbox"] label,
+        section[data-testid="stSidebar"] [data-testid="stNumberInput"] label,
+        section[data-testid="stSidebar"] [data-testid="stSlider"] label,
+        section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] * {{
+            color: #e8edf7 !important;
+        }}
+        section[data-testid="stSidebar"] svg {{ fill: #e8edf7 !important; }}
         .stApp {{
             background:
                 radial-gradient(900px 500px at 10% -10%, rgba(56,189,248,0.18), transparent 60%),
@@ -357,9 +407,27 @@ def apply_theme() -> None:
             backdrop-filter: blur(14px);
             border-right: 1px solid var(--qqa-border);
         }}
-        h1, h2, h3, h4 {{
+        /* Same nav-header suppression as in light theme. */
+        [data-testid="stSidebarNav"]::before {{ display: none; }}
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > ul + div:has(>h1),
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h1:first-of-type,
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h2:first-of-type {{
+            display: none !important;
+        }}
+        [data-testid="stSidebarNav"] a {{
+            color: #e8edf7 !important;
+            font-weight: 500;
+            border-radius: 6px;
+        }}
+        [data-testid="stSidebarNav"] a:hover {{
+            background: rgba(56,189,248,0.14) !important;
+            color: #bae6fd !important;
+        }}
+        [data-testid="stSidebarNav"] a span {{ color: inherit !important; }}
+        h1, h2, h3, h4, h5, h6 {{
             font-family: 'Source Serif 4', serif;
-            color: #f8fafc;
+            color: #f8fafc !important;
             letter-spacing: -0.01em;
         }}
         h1 {{
@@ -367,6 +435,16 @@ def apply_theme() -> None:
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
+        }}
+        /* Caption / muted text in dark mode stays readable but softer. */
+        .stCaption, [data-testid="stCaptionContainer"] p {{
+            color: #94a3b8 !important;
+            font-variant: small-caps;
+            letter-spacing: 0.04em;
+        }}
+        /* Radio-toggle label ("light" / "dark") on the sidebar. */
+        section[data-testid="stSidebar"] [data-testid="stRadio"] label p {{
+            color: #e8edf7 !important;
         }}
         div[data-testid="stMetric"] {{
             background: rgba(15,23,42,0.55);
@@ -470,6 +548,125 @@ def apply_theme() -> None:
         """
 
     st.markdown(css, unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------------------------
+# Sidebar brand + paper-link footer (used by every page)
+# ---------------------------------------------------------------------------
+
+# URLs surfaced in the UI. Keep in sync with [project.urls] in pyproject.toml.
+_PAPER_URL = "https://openreview.net/forum?id=9EfBeXaXf0"
+_GITHUB_URL = "https://github.com/Yuma-Ichikawa/QQA4CO"
+_DEMO_URL = "https://parallelquasiquantum4co.streamlit.app/"
+
+
+def sidebar_brand() -> None:
+    """Render the QQA brand block at the top of the sidebar.
+
+    Also hides the auto ``streamlit app`` heading injected by Streamlit's
+    built-in multipage navigator (CSS takes care of that — this function
+    just adds the branded block above the nav).
+    """
+    theme = get_theme()
+    accent = "#0f766e" if theme == "light" else "#38bdf8"
+    accent2 = "#be5a3c" if theme == "light" else "#a855f7"
+    muted = "#64748b" if theme == "light" else "#94a3b8"
+    with st.sidebar:
+        st.markdown(
+            f"""
+            <div class="qqa-brand" style="
+                padding: 0.75rem 0.4rem 0.9rem 0.4rem;
+                margin-bottom: 0.4rem;
+                border-bottom: 1px solid rgba(148,163,184,0.2);
+            ">
+              <div style="display:flex;align-items:center;gap:0.55rem;">
+                <div style="
+                    width:32px;height:32px;border-radius:8px;
+                    background:linear-gradient(135deg,{accent} 0%,{accent2} 100%);
+                    display:flex;align-items:center;justify-content:center;
+                    color:#fff;font-weight:700;font-family:'Source Serif 4',serif;
+                    box-shadow:0 2px 6px rgba(15,23,42,0.18);
+                ">Q</div>
+                <div>
+                  <div style="
+                      font-family:'Source Serif 4',Georgia,serif;
+                      font-weight:700;font-size:1.05rem;line-height:1.1;
+                  ">QQA4CO</div>
+                  <div style="font-size:0.7rem;color:{muted};letter-spacing:0.04em;">
+                    Quasi-Quantum Annealing
+                  </div>
+                </div>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def paper_link_footer() -> None:
+    """Compact link row rendered at the very bottom of the sidebar."""
+    theme = get_theme()
+    muted = "#64748b" if theme == "light" else "#94a3b8"
+    link = "#0f766e" if theme == "light" else "#93c5fd"
+    with st.sidebar:
+        st.markdown(
+            f"""
+            <div style="
+                margin-top: 1.2rem;
+                padding-top: 0.8rem;
+                border-top: 1px solid rgba(148,163,184,0.2);
+                font-size: 0.78rem;
+                color: {muted};
+            ">
+              <div style="margin-bottom:0.3rem;letter-spacing:0.04em;
+                   text-transform:uppercase;font-size:0.66rem;">
+                References
+              </div>
+              <div style="display:flex;flex-direction:column;gap:0.3rem;">
+                <a href="{_PAPER_URL}" target="_blank" style="color:{link};
+                   text-decoration:none;">📄  Paper (OpenReview)</a>
+                <a href="{_GITHUB_URL}" target="_blank" style="color:{link};
+                   text-decoration:none;">⎇  GitHub repository</a>
+                <a href="{_DEMO_URL}" target="_blank" style="color:{link};
+                   text-decoration:none;">🚀  Hosted live demo</a>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def hero_badges() -> None:
+    """Horizontal badge row for the Home hero (paper / repo / demo)."""
+    theme = get_theme()
+    accent = "#0f766e" if theme == "light" else "#38bdf8"
+    border = "#d4d0c3" if theme == "light" else "rgba(148,163,184,0.25)"
+    bg = "#ffffff" if theme == "light" else "rgba(15,23,42,0.55)"
+    st.markdown(
+        f"""
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.3rem 0 0.9rem 0;">
+          <a href="{_PAPER_URL}" target="_blank" style="
+              display:inline-flex;align-items:center;gap:0.35rem;
+              padding:0.26rem 0.7rem;border:1px solid {accent};
+              background:{bg};color:{accent};border-radius:999px;
+              text-decoration:none;font-size:0.8rem;font-weight:600;
+          ">📄 OpenReview paper</a>
+          <a href="{_GITHUB_URL}" target="_blank" style="
+              display:inline-flex;align-items:center;gap:0.35rem;
+              padding:0.26rem 0.7rem;border:1px solid {border};
+              background:{bg};color:inherit;border-radius:999px;
+              text-decoration:none;font-size:0.8rem;font-weight:600;
+          ">⎇ Source on GitHub</a>
+          <a href="{_DEMO_URL}" target="_blank" style="
+              display:inline-flex;align-items:center;gap:0.35rem;
+              padding:0.26rem 0.7rem;border:1px solid {border};
+              background:{bg};color:inherit;border-radius:999px;
+              text-decoration:none;font-size:0.8rem;font-weight:600;
+          ">🚀 Live demo</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_score_card(score: dict, raw_loss: float | None = None) -> None:

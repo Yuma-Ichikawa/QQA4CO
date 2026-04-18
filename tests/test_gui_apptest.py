@@ -137,3 +137,62 @@ def test_solve_page_end_to_end_run():
     # Success is observable as either the score card or the raw-loss caption.
     texts = " ".join([m.value for m in at.markdown if m.value])
     assert "qqa-score" in texts or "energy" in texts.lower() or "raw loss" in texts
+
+
+def test_solution_viz_smoke_across_problem_kinds(tmp_path):
+    """Every registered renderer in ``_solution_viz`` must accept a real
+    ``(problem, result, cfg)`` triple without raising.
+
+    We drive this via a tiny Streamlit script so the renderer sees a proper
+    script-run context. The script loops over one instance per problem
+    family, runs 10 epochs of QQA, and calls ``render_solution_view``.
+    AppTest's exception capture catches any failure on the way.
+    """
+    script = tmp_path / "soln_smoke.py"
+    script.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(APP.parent)!r})\n"
+        "import streamlit as st\n"
+        "from _common import build_problem\n"
+        "from _solution_viz import _RENDERERS, render_solution_view\n"
+        "import qqa\n"
+        "\n"
+        "size_by_kind = {\n"
+        "    'tsp': 6, 'qap': 5, 'nqueens': 5, 'ea': 8,\n"
+        "    'maxsat3': 8, 'knapsack': 8, 'number_partition': 8,\n"
+        "}\n"
+        "extra_by_kind = {\n"
+        "    'mis': {'graph_d': 3},\n"
+        "    'maxcut': {'graph_d': 3},\n"
+        "    'maxclique': {'graph_d': 3},\n"
+        "    'vertex_cover': {'graph_d': 3},\n"
+        "    'graph_bisection': {'graph_d': 3, 'balance_penalty': 2.0},\n"
+        "    'coloring': {'num_category': 3, 'graph_d': 3},\n"
+        "    'perceptron': {'alpha': 0.5},\n"
+        "    'hopfield': {'patterns': 2},\n"
+        "    'maxsat3': {'ratio': 3.0},\n"
+        "    'ea': {'dim': 3},\n"
+        "    'tsp': {'column_penalty': 3.0},\n"
+        "    'qap': {'column_penalty': 10.0},\n"
+        "    'number_partition': {'max_value': 50},\n"
+        "    'knapsack': {'capacity_ratio': 0.5},\n"
+        "}\n"
+        "for kind in _RENDERERS:\n"
+        "    cfg = {\n"
+        "        'kind': kind,\n"
+        "        'size': size_by_kind.get(kind, 16),\n"
+        "        'seed': 0,\n"
+        "        'device': 'cpu',\n"
+        "        'extra': extra_by_kind.get(kind, {}),\n"
+        "    }\n"
+        "    problem = build_problem(cfg)\n"
+        "    result = qqa.anneal(\n"
+        "        problem, sol_size=4, num_epochs=10,\n"
+        "        learning_rate=0.1, device='cpu', verbose=False,\n"
+        "    )\n"
+        "    st.markdown(f'### {kind}')\n"
+        "    render_solution_view(problem, result, cfg)\n"
+    )
+    at = AppTest.from_file(str(script), default_timeout=180)
+    at.run()
+    assert not at.exception, at.exception

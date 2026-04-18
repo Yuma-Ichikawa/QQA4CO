@@ -25,7 +25,10 @@ from _common import (  # noqa: E402
     DEFAULT_CUSTOM_SNIPPET,
     apply_theme,
     build_problem,
+    hero_badges,
+    paper_link_footer,
     preview_problem,
+    sidebar_brand,
     theme_toggle_in_sidebar,
 )
 
@@ -43,16 +46,18 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+sidebar_brand()
 theme_toggle_in_sidebar()
 apply_theme()
 
 st.title("Quasi-Quantum Annealing")
+hero_badges()
 st.markdown(
     '<div class="qqa-card">'
     "A unified gradient-based solver for combinatorial optimisation and "
-    "spin-glass models. Pick a problem from the catalog, plug in your own "
-    "loss, or tweak the relaxation and watch the parallel population "
-    "anneal in real time."
+    "spin-glass models. Pick a problem from the catalogue, plug in your "
+    "own loss, or tweak the relaxation, then click <b>Solve</b> to watch "
+    "the parallel population anneal in real time."
     "</div>",
     unsafe_allow_html=True,
 )
@@ -248,3 +253,5 @@ with right:
 
 st.markdown("---")
 st.caption(f"QQA v{qqa.__version__} · PyTorch + Streamlit · gradient-based parallel annealer")
+
+paper_link_footer()

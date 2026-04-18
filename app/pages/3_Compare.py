@@ -13,7 +13,9 @@ import streamlit as st  # noqa: E402
 from _common import (  # noqa: E402
     apply_theme,
     build_problem,
+    paper_link_footer,
     plotly_layout,
+    sidebar_brand,
     theme_toggle_in_sidebar,
 )
 
@@ -28,6 +30,7 @@ def _retheme(fig):
 
 
 st.set_page_config(page_title="Compare — QQA", page_icon="⚛️", layout="wide")
+sidebar_brand()
 theme_toggle_in_sidebar()
 apply_theme()
 st.title("Compare")
@@ -102,3 +105,6 @@ if run:
     st.subheader("Run comparison")
     fig2 = viz.plot_run_comparison(results, labels=labels, backend="plotly", show=False)
     st.plotly_chart(_retheme(fig2), width="stretch")
+
+
+paper_link_footer()
