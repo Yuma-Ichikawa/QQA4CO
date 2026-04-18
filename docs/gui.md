@@ -38,11 +38,22 @@ best-objective trajectory.
 
 ## Programmatic access
 
-You can reuse the `StreamlitCallback` from the Solve page in your own
-Streamlit apps:
+`StreamlitCallback` lives inside the Solve page (it depends on
+Streamlit's runtime and session state). If you want to reuse it in your
+own Streamlit app, copy the class out of `app/pages/1_Solve.py` or
+import it from there:
 
 ```python
-from app.pages._common import StreamlitCallback  # adjust to your layout
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "solve_page", Path("app/pages/1_Solve.py")
+)
+solve_page = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(solve_page)
+cb = solve_page.StreamlitCallback(...)
 ```
 
-Or instantiate your own subclass of :class:`qqa.callbacks.Callback`.
+For non-Streamlit use cases, just subclass :class:`qqa.callbacks.Callback`
+directly — the base class is framework-agnostic.
