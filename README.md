@@ -1,151 +1,219 @@
-# ⚡ Quasi-Quantum Annealing (QQA)
+# QQA — Quasi-Quantum Annealing
 
-A **PyTorch implementation** of the [ICLR2025](https://iclr.cc/) paper:
-**[Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling](https://openreview.net/forum?id=9EfBeXaXf0)**.
+PyTorch implementation of the ICLR 2025 paper
+**[Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization](https://openreview.net/forum?id=9EfBeXaXf0)**
+by Yuma Ichikawa and Yamato Arai.
 
----
-## Abstract
-Learning-based methods have gained attention as general-purpose solvers due to their ability to automatically learn problem-specific heuristics, reducing the need for manually crafted heuristics. However, these methods often face scalability challenges. To address these issues, the improved Sampling algorithm for Combinatorial Optimization (iSCO), using discrete Langevin dynamics, has been proposed, demonstrating better performance than several learning-based solvers. This study proposes a different approach that integrates gradient-based update through continuous relaxation, combined with **Q**uasi-**Q**uantum **A**nnealing (**QQA**). QQA smoothly transitions the objective function, starting from a simple convex function, minimized at half-integral values, to the original objective function, where the relaxed variables are minimized only in the discrete space. Furthermore, we incorporate parallel run communication leveraging GPUs to enhance exploration capabilities and accelerate convergence. Numerical experiments demonstrate that our method is a competitive general-purpose solver, achieving performance comparable to iSCO and learning-based solvers across various benchmark problems. Notably, our method exhibits superior speed-quality trade-offs for large-scale instances compared to iSCO, learning-based solvers, commercial solvers, and specialized algorithms.
-
-## Demo: Annealing Process
 <p align="center">
-  <img src="data/fig/demo.gif" width="400px">
+  <img src="data/fig/demo.gif" width="400">
 </p>
 
+**QQA** relaxes a discrete problem to a continuous, differentiable objective
+and anneals towards a discrete minimum using gradient-based sampling. The
+same loop handles combinatorial problems (MIS, Max-Cut, coloring, …) and
+physics-flavoured spin problems (Ising, Edwards-Anderson, SK, binary
+perceptron, Hopfield memory).
+
+Highlights:
+
+- **Unified Python API**: one `qqa.anneal()` for every problem.
+- **Rich problem catalog** out of the box (10+ classes).
+- **Interactive visualization**: matplotlib by default, Plotly optional.
+- **CLI**: `qqa solve`, `qqa bench`, `qqa gui`, `qqa version`.
+- **Streamlit GUI**: browser dashboard with live progress and sweep tools.
+- **Docs site**: MkDocs + Material + auto API reference.
+
 ---
 
-## Installation
+## Install
 
-We recommend using **Python 3.9+**. Install the required packages via:
+### With [uv](https://github.com/astral-sh/uv) (recommended)
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/Yuma-Ichikawa/QQA4CO.git
+cd QQA4CO
+uv sync                                               # core only
+uv sync --extra plotly --extra gui --extra dev        # with extras
+uv run pytest -q                                      # sanity check
 ```
 
-### **Required Packages & Versions**
-- `torch==2.5.1`
-- `numpy==1.26.4`
-- `matplotlib==3.9.4`
-- `networkx==3.2.1`
-- `tqdm==4.67.1`
-- `scipy==1.13.1`
+### With pip
 
----
+```bash
+pip install qqa                   # core
+pip install "qqa[plotly]"         # + interactive plots
+pip install "qqa[gui]"            # + Streamlit dashboard
+pip install "qqa[all]"            # everything
+```
 
-## 🚀 Usage Guide
-
-Below is an example of how to use QQA for a **Maximum Independent Set** (MIS) problem. We define a custom problem class, generate a random regular graph, and run `qqa.batch_annealing` with specified hyperparameters. 
-
-### **Step 1: Define a Custom Problem Class**
+## Quickstart
 
 ```python
-# Example: ProblemClass (Maximum Independent Set)
-class MaximumIndependentSet(COProblem):
-    def __init__(self, nx_graph, penalty=3, device="cpu"):
-        super().__init__()
-        self.nx_graph = nx_graph
-        self.penalty = penalty
-        self.device = device
-        self.num_nodes = nx_graph.number_of_nodes()
-        self.Q_mat = self.generate_qubo_matrix()
+import networkx as nx
+import qqa
 
-    def generate_qubo_matrix(self):
-        Q = torch.full((self.num_nodes, self.num_nodes), 0.0)
-        for (u, v) in self.nx_graph.edges:
-            Q[u][v] = self.penalty
-            Q[v][u] = self.penalty
-        for u in self.nx_graph.nodes:
-            Q[u][u] = -1
-        return Q.to(self.device)
-
-    def loss_fn(self, x):
-        return torch.einsum('bi,ij,bj->b', x, self.Q_mat, x)
+qqa.fix_seed(0)
+g = nx.random_regular_graph(d=3, n=100, seed=0)
+problem = qqa.MaximumIndependentSet(g, penalty=2)
+result = qqa.anneal(problem, sol_size=100, num_epochs=1500)
+print(f"MIS size: {-int(result.best_obj)}  in {result.runtime:.2f}s")
 ```
 
-### **Step 2: Construct a Problem Instance**
+The same call style applies to spin problems:
 
 ```python
-import random
-import torch
-import numpy as np
-
-# Fix seed for reproducibility
-SEED = 0
-random.seed(SEED)
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-# Graph Parameters
-N, d, p = 50, 3, None
-nx_graph = nx.random_regular_graph(d=d, n=N, seed=SEED)
-
-# Create the MIS problem instance
-problem = MaximumIndependentSet(nx_graph, penalty=2, device=device)
+problem = qqa.SherringtonKirkpatrick(N=100, seed=0)
+result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)
+print(f"E_0 / N  ≈  {result.best_obj / 100:.4f}  (target ≈ -0.7632)")
 ```
 
-### **Step 3: Run Quasi-Quantum Annealing**
+## Problem catalog
+
+| Category          | Classes |
+| ----------------- | ------- |
+| Binary QUBO       | `MaximumIndependentSet`, `MaxClique`, `MaxCut` (+ `*Instance` batched variants) |
+| Categorical       | `Coloring`, `BalancedGraphPartition` |
+| 1D Ising          | `Ising1D` |
+| Spin glass        | `EdwardsAnderson`, `SherringtonKirkpatrick` |
+| Statistical phys. | `BinaryPerceptron`, `HopfieldMemory` |
+
+Read the full mathematical definitions in
+[`docs/problems.md`](docs/problems.md).
+
+## Command-line interface
+
+```bash
+qqa version
+qqa solve --problem sk --size 100 --sol-size 128 --epochs 1000
+qqa solve --problem mis --graph-file mygraph.gpickle --epochs 1500
+qqa bench --preset er-small --epochs 500
+qqa gui                                  # open http://localhost:8501
+```
+
+Run `qqa <command> --help` for the full option list.
+
+## Streamlit GUI
+
+```bash
+pip install "qqa[gui]"
+qqa gui
+```
+
+The dashboard has four pages:
+
+- **Home** — pick a problem, size, seed, and problem-specific parameters.
+- **Solve** — set QQA hyper-parameters and launch a run with a live
+  progress bar, live metrics, and a streaming loss/best plot powered by a
+  `StreamlitCallback`.
+- **Visualize** — tabbed view of dynamics, best trajectory, the applied
+  annealing schedule, and a solution heatmap.
+- **Compare** — run a small hyper-parameter grid and inspect the result
+  with parallel-coordinates and overlaid trajectories.
+
+## Visualization
 
 ```python
-from tqdm import tqdm
-import qqa  # Assume qqa.py (or a QQA module) is provided
+from qqa import visualization as viz
 
-# QQA Parameters
-cfg = {
-    'sol_size': 100,
-    'learning_rate': 1.0,
-    'temp': 0.001,
-    'min_bg': -3,
-    'max_bg': 0.1,
-    'curve_rate': 4,
-    'div_param': 0.2
-}
-
-best_sol, best_obj, runtime = qqa.batch_annealing(
-    problem,
-    sol_size=cfg['sol_size'],
-    learning_rate=cfg['learning_rate'],
-    temp=cfg['temp'],
-    min_bg=cfg['min_bg'],
-    max_bg=cfg['max_bg'],
-    curve_rate=cfg['curve_rate'],
-    div_param=cfg['div_param'],
-    num_epochs=int(3e3),
-    check_interval=500,
-    device=device,
-    plot_dynamics=True
-)
-
-print("Best Solution:", best_sol)
-print("Best Objective Value:", best_obj.item())
-print("Runtime (sec):", runtime)
+viz.plot_history(result)                       # loss / penalty / diversity
+viz.plot_best_trajectory(result, backend="plotly")
+viz.plot_schedule(qqa.LinearBGSchedule(-2, 0.1), num_epochs=2000)
+viz.plot_run_comparison([r1, r2, r3], labels=["lr=1", "lr=0.5", "lr=2"])
+viz.plot_parallel_coordinates(sweep_df, objective="best_obj")
+viz.plot_solution_heatmap(result, problem)
 ```
 
----
+Every function accepts `backend="matplotlib"` (default) or `backend="plotly"`.
+Plotly is optional; if it is not installed the plot silently falls back to
+matplotlib.
 
-## 📚 Citation
+## Notebooks
 
-If you use our approach in your work, please cite:
+Eight runnable notebooks live in [`examples/`](examples/):
+
+1. `01_maximum_independent_set.ipynb`
+2. `02_graph_coloring.ipynb`
+3. `03_max_cut.ipynb`
+4. `04_edwards_anderson_3d.ipynb`
+5. `05_sherrington_kirkpatrick.ipynb`
+6. `06_binary_perceptron.ipynb`
+7. `07_hopfield_memory.ipynb`
+8. `08_parallel_benchmark.ipynb`
+
+Regenerate them deterministically with
+`uv run python scripts/_generate_notebooks.py`.
+
+## Documentation
+
+```bash
+uv run mkdocs serve            # http://127.0.0.1:8000
+uv run mkdocs build --strict   # produces site/
+```
+
+The docs cover quickstart, the full problem catalog with mathematical
+definitions, GUI walk-through, visualization guide, auto-generated API
+reference, and a migration guide from 0.2.x.
+
+## Scripts
+
+| Script | Purpose |
+| ------ | ------- |
+| `scripts/demo_mis.py`        | Minimal MIS end-to-end demo |
+| `scripts/demo_coloring.py`   | 3-coloring end-to-end demo |
+| `scripts/demo_parallel.py`   | Parallel instances of MIS |
+| `scripts/bench_er_small.py`  | Benchmark on bundled ER-small MIS dataset |
+| `scripts/_generate_notebooks.py` | Regenerate the shipped example notebooks |
+
+Run any script via `uv run python scripts/<name>.py`.
+
+## Repository layout
+
+```
+QQA4CO/
+├── src/qqa/                 # importable package
+│   ├── __init__.py
+│   ├── annealing.py
+│   ├── callbacks.py
+│   ├── cli.py
+│   ├── datasets.py
+│   ├── legacy.py
+│   ├── problems/            # qubo.py / categorical.py / spin.py
+│   ├── relaxation.py
+│   ├── schedule.py
+│   ├── utils.py
+│   └── visualization.py
+├── app/                     # Streamlit dashboard
+│   ├── streamlit_app.py
+│   └── pages/
+├── docs/                    # MkDocs site sources
+├── examples/                # 8 example notebooks
+├── scripts/                 # demo / benchmark scripts
+├── tests/                   # pytest suite
+├── data/                    # bundled datasets
+├── pyproject.toml
+├── CHANGELOG.md
+├── CONTRIBUTING.md
+├── CITATION.cff
+└── README.md
+```
+
+## Contributing
+
+Issues and pull requests are welcome. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, style, and test commands.
+
+## License
+
+BSD-3-Clause — see [`LICENCE.txt`](LICENCE.txt).
+
+## Cite
 
 ```bibtex
-@inproceedings{
-ichikawa2025optimization,
-title={Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling},
-author={Yuma Ichikawa and Yamato Arai},
-booktitle={The Thirteenth International Conference on Learning Representations},
-year={2025},
-url={https://openreview.net/forum?id=9EfBeXaXf0}
+@inproceedings{ichikawa2025qqa,
+  title     = {Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization},
+  author    = {Ichikawa, Yuma and Arai, Yamato},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2025},
+  url       = {https://openreview.net/forum?id=9EfBeXaXf0}
 }
 ```
-
----
-
-## 📜 License
-This project is licensed under the **BSD 3-Clause License**. See [LICENSE](LICENSE.txt) for details.
-
----
-
-
-### 🎉 Enjoy Exploring Quasi-Quantum Annealing!  
-Feel free to raise issues or submit pull requests for further improvements. Happy Researching and Optimizing!
