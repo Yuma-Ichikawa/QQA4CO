@@ -135,7 +135,23 @@ with st.sidebar:
         if problem_kind == "hopfield":
             extra["patterns"] = st.slider("Stored patterns P", 1, 20, 3)
 
-    device = st.selectbox("Device", ("cpu", "cuda"), index=0)
+    # Only offer devices that are actually available on the host. On public
+    # deployments (Streamlit Cloud / Hugging Face Spaces) this is always
+    # ``cpu``; on a local workstation with a GPU the ``cuda`` option appears.
+    import torch  # noqa: PLC0415 - lazy import to keep startup snappy
+
+    device_options = ["cpu"]
+    if torch.cuda.is_available():
+        device_options.append("cuda")
+    device = st.selectbox(
+        "Device",
+        device_options,
+        index=0,
+        help=(
+            "The annealing loop runs inside this Streamlit process. "
+            "`cuda` appears only when a GPU is visible to PyTorch."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
