@@ -85,7 +85,16 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--num-category", type=int, default=3, help="Number of colours (coloring).")
     solve.add_argument("--sol-size", type=int, default=100)
     solve.add_argument("--epochs", type=int, default=1000)
-    solve.add_argument("--learning-rate", type=float, default=1.0)
+    solve.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help=(
+            "Learning rate. When omitted, defaults to 1.0 for the qqa "
+            "annealer (large LR works because BG normalises gradients) and "
+            "to 1e-4 for the pignn / cpra backends (matching the CRA paper)."
+        ),
+    )
     solve.add_argument("--temp", type=float, default=0.0)
     solve.add_argument("--min-bg", type=float, default=-2.0)
     solve.add_argument("--max-bg", type=float, default=0.1)
@@ -107,13 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     solve.add_argument(
         "--backend",
-        choices=["qqa", "pignn"],
+        choices=["qqa", "pignn", "cpra"],
         default="qqa",
         help=(
             "Solver backend. 'qqa' (default) uses the parallel-replica "
             "annealing loop; 'pignn' uses the optional CRA-PI-GNN "
             "(PyTorch Geometric) trainer — graph problems only "
-            "(mis/maxcut/maxclique/vertex_cover/graph_bisection)."
+            "(mis/maxcut/maxclique/vertex_cover/graph_bisection); "
+            "'cpra' uses the multi-head CPRA extension that produces "
+            "diverse solutions in one run (same graph problems)."
         ),
     )
     solve.add_argument(
@@ -152,8 +163,35 @@ def build_parser() -> argparse.ArgumentParser:
         "--pignn-no-annealing",
         action="store_true",
         help=(
-            "When set with --backend pignn, runs vanilla PI-GNN "
-            "(reg_param fixed at 0) instead of CRA-PI-GNN."
+            "When set with --backend pignn or --backend cpra, runs vanilla "
+            "PI-GNN (reg_param fixed at 0) instead of CRA-style annealing."
+        ),
+    )
+    solve.add_argument(
+        "--cpra-num-replicas",
+        type=int,
+        default=4,
+        help=("Number of parallel CPRA replicas R (only used when --backend cpra)."),
+    )
+    solve.add_argument(
+        "--cpra-vari-param",
+        type=float,
+        default=0.0,
+        help=(
+            "CPRA diversity-term coefficient (only used when --backend cpra). "
+            "Positive values reward inter-replica spread for variation "
+            "diversification on a fixed problem."
+        ),
+    )
+    solve.add_argument(
+        "--cpra-penalty-levels",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of penalty weights — one per replica — for "
+            "penalty diversification (only used when --backend cpra and "
+            "--problem in {mis, vertex_cover}). When set, length must equal "
+            "--cpra-num-replicas. Example: '1.0,1.5,2.0,2.5'."
         ),
     )
 
@@ -269,6 +307,49 @@ _PIGNN_SUPPORTED_KINDS = {
     "graph_bisection",
 }
 
+# Subset of pignn-supported kinds whose constructor accepts a ``penalty``
+# kwarg, so we can build per-replica problems for CPRA penalty diversification.
+_CPRA_PENALTY_KINDS = {"mis", "vertex_cover"}
+
+
+def _build_replica_problems(args: argparse.Namespace, base_problem) -> list | None:
+    """Return per-replica problems for CPRA penalty diversification, or None."""
+    raw = getattr(args, "cpra_penalty_levels", None)
+    if raw is None:
+        return None
+    kind = args.problem
+    if kind not in _CPRA_PENALTY_KINDS:
+        raise SystemExit(
+            f"[qqa solve] --cpra-penalty-levels currently supports "
+            f"{sorted(_CPRA_PENALTY_KINDS)}; got --problem {kind!r}."
+        )
+    try:
+        levels = [float(x) for x in raw.split(",") if x.strip()]
+    except ValueError as exc:
+        raise SystemExit(
+            f"[qqa solve] --cpra-penalty-levels must be a comma-separated list "
+            f"of floats, got {raw!r}: {exc}"
+        ) from exc
+    if len(levels) != int(args.cpra_num_replicas):
+        raise SystemExit(
+            f"[qqa solve] --cpra-penalty-levels has {len(levels)} values but "
+            f"--cpra-num-replicas is {args.cpra_num_replicas}; lengths must match."
+        )
+    import qqa
+    from qqa.pignn.graph import extract_nx_graph
+
+    try:
+        g = extract_nx_graph(base_problem)
+    except TypeError as exc:
+        raise SystemExit(f"[qqa solve] --cpra-penalty-levels: {exc}") from exc
+    replicas: list = []
+    for p in levels:
+        if kind == "mis":
+            replicas.append(qqa.MaximumIndependentSet(g, penalty=p, device=args.device))
+        elif kind == "vertex_cover":
+            replicas.append(qqa.VertexCover(g, penalty=p, device=args.device))
+    return replicas
+
 
 def _cmd_solve(args: argparse.Namespace) -> int:
     import qqa
@@ -276,42 +357,72 @@ def _cmd_solve(args: argparse.Namespace) -> int:
     problem = _build_problem(args)
 
     backend = getattr(args, "backend", "qqa")
-    if backend == "pignn":
+    if backend in {"pignn", "cpra"}:
         kind = args.problem
         if kind is None:
             raise SystemExit(
-                "[qqa solve] --backend pignn requires a built-in --problem "
+                f"[qqa solve] --backend {backend} requires a built-in --problem "
                 f"(one of {sorted(_PIGNN_SUPPORTED_KINDS)}); --problem-file "
-                "is not yet supported by the PyG backend."
+                "is not yet supported by the PyG-based backends."
             )
         if kind not in _PIGNN_SUPPORTED_KINDS:
             raise SystemExit(
-                f"[qqa solve] --backend pignn only supports graph-based "
+                f"[qqa solve] --backend {backend} only supports graph-based "
                 f"problems {sorted(_PIGNN_SUPPORTED_KINDS)}; got {kind!r}. "
                 "Use the default --backend qqa for the rest."
             )
-        from qqa.pignn import train_cra_pi_gnn  # lazy: surfaces clear msg if PyG missing
 
-        result = train_cra_pi_gnn(
-            problem,
-            hidden_dim=args.pignn_hidden,
-            learning_rate=args.learning_rate if args.learning_rate != 1.0 else 1e-4,
-            annealing=not args.pignn_no_annealing,
-            init_reg_param=args.pignn_init_reg_param,
-            annealing_rate=args.pignn_annealing_rate,
-            curve_rate=args.curve_rate,
-            num_epochs=args.epochs,
-            tol=args.pignn_tol,
-            patience=args.pignn_patience,
-            device=args.device,
-            seed=args.seed,
-            verbose=not args.quiet,
-        )
+        # Resolve learning rate with backend-aware default. ``None`` (no
+        # --learning-rate given) falls back to 1e-4 for the PyG trainers,
+        # matching the CRA / CPRA paper defaults.
+        pignn_lr = args.learning_rate if args.learning_rate is not None else 1e-4
+
+        if backend == "pignn":
+            from qqa.pignn import train_cra_pi_gnn  # lazy: surfaces clear msg if PyG missing
+
+            result = train_cra_pi_gnn(
+                problem,
+                hidden_dim=args.pignn_hidden,
+                learning_rate=pignn_lr,
+                annealing=not args.pignn_no_annealing,
+                init_reg_param=args.pignn_init_reg_param,
+                annealing_rate=args.pignn_annealing_rate,
+                curve_rate=args.curve_rate,
+                num_epochs=args.epochs,
+                tol=args.pignn_tol,
+                patience=args.pignn_patience,
+                device=args.device,
+                seed=args.seed,
+                verbose=not args.quiet,
+            )
+        else:  # backend == "cpra"
+            from qqa.pignn import train_cpra_pi_gnn
+
+            replica_problems = _build_replica_problems(args, problem)
+            result = train_cpra_pi_gnn(
+                problem,
+                num_replicas=args.cpra_num_replicas,
+                replica_problems=replica_problems,
+                vari_param=args.cpra_vari_param,
+                hidden_dim=args.pignn_hidden,
+                learning_rate=pignn_lr,
+                annealing=not args.pignn_no_annealing,
+                init_reg_param=args.pignn_init_reg_param,
+                annealing_rate=args.pignn_annealing_rate,
+                curve_rate=args.curve_rate,
+                num_epochs=args.epochs,
+                tol=args.pignn_tol,
+                patience=args.pignn_patience,
+                device=args.device,
+                seed=args.seed,
+                verbose=not args.quiet,
+            )
     else:
+        qqa_lr = args.learning_rate if args.learning_rate is not None else 1.0
         result = qqa.anneal(
             problem,
             sol_size=args.sol_size,
-            learning_rate=args.learning_rate,
+            learning_rate=qqa_lr,
             temp=args.temp,
             min_bg=args.min_bg,
             max_bg=args.max_bg,
