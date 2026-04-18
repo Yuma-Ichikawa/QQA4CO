@@ -43,17 +43,131 @@ st.caption(
     f"device: **{cfg['device']}** | seed: **{cfg['seed']}**"
 )
 
+# Hyper-parameter presets — each tuple is
+# (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
+#  div_param, update_every).
+_PRESETS = {
+    "🏃  Fast smoke": (32, 200, 1.0, 0.0, -2.0, 0.1, 2, 0.0, 10),
+    "🎯  Default": (64, 1000, 1.0, 0.0, -2.0, 0.1, 2, 0.0, 20),
+    "🔬  Thorough": (128, 3000, 0.7, 0.05, -3.0, 0.2, 4, 0.0, 50),
+}
+
+
+def _apply_preset(name: str) -> None:
+    """Write preset values into ``st.session_state`` so the widgets pick
+    them up on the next rerun."""
+    keys = (
+        "sol_size",
+        "epochs",
+        "learning_rate",
+        "temp",
+        "min_bg",
+        "max_bg",
+        "curve_rate",
+        "div_param",
+        "update_every",
+    )
+    for k, v in zip(keys, _PRESETS[name], strict=True):
+        st.session_state[k] = v
+
+
 with st.sidebar:
     st.header("2 · QQA hyper-parameters")
-    sol_size = st.slider("sol_size (parallel population)", 4, 400, 64)
-    epochs = st.slider("epochs", 100, 5000, 1000, step=100)
-    learning_rate = st.slider("learning rate", 0.05, 3.0, 1.0, 0.05)
-    temp = st.slider("Langevin temperature", 0.0, 1.0, 0.0, 0.01)
-    min_bg = st.slider("min bg", -5.0, 0.0, -2.0, 0.1)
-    max_bg = st.slider("max bg", 0.0, 2.0, 0.1, 0.1)
-    curve_rate = st.selectbox("curve rate", (2, 4, 6), index=0)
-    div_param = st.slider("div_param", 0.0, 1.0, 0.0, 0.01)
-    update_every = st.slider("UI update every (epochs)", 1, 200, 20)
+    preset_name = st.radio(
+        "Preset",
+        list(_PRESETS),
+        index=1,
+        horizontal=False,
+        help="Quickly seed every slider below. You can still tweak any value.",
+    )
+    if st.button("Apply preset", width="stretch"):
+        _apply_preset(preset_name)
+        st.rerun()
+
+    with st.expander("Population & schedule", expanded=True):
+        sol_size = st.slider(
+            "sol_size",
+            4,
+            400,
+            st.session_state.get("sol_size", 64),
+            key="sol_size",
+            help="Number of parallel replicas annealed in lockstep.",
+        )
+        epochs = st.slider(
+            "epochs",
+            100,
+            5000,
+            st.session_state.get("epochs", 1000),
+            step=100,
+            key="epochs",
+            help="Total annealing iterations.",
+        )
+        curve_rate = st.selectbox(
+            "curve rate",
+            (2, 4, 6),
+            index=(2, 4, 6).index(st.session_state.get("curve_rate", 2)),
+            key="curve_rate",
+            help="Steepness of the bias schedule (higher = more abrupt).",
+        )
+
+    with st.expander("Optimiser", expanded=False):
+        learning_rate = st.slider(
+            "learning rate",
+            0.05,
+            3.0,
+            st.session_state.get("learning_rate", 1.0),
+            0.05,
+            key="learning_rate",
+            help="Adam step size for the relaxed variables.",
+        )
+        temp = st.slider(
+            "Langevin temperature",
+            0.0,
+            1.0,
+            st.session_state.get("temp", 0.0),
+            0.01,
+            key="temp",
+            help="Magnitude of the stochastic noise injected each step (0 = deterministic).",
+        )
+
+    with st.expander("Cooling / diversity", expanded=False):
+        min_bg = st.slider(
+            "min bg",
+            -5.0,
+            0.0,
+            st.session_state.get("min_bg", -2.0),
+            0.1,
+            key="min_bg",
+            help="Initial bias-gain (smooth, exploratory).",
+        )
+        max_bg = st.slider(
+            "max bg",
+            0.0,
+            2.0,
+            st.session_state.get("max_bg", 0.1),
+            0.1,
+            key="max_bg",
+            help="Final bias-gain (sharp, near-discrete).",
+        )
+        div_param = st.slider(
+            "div_param",
+            0.0,
+            1.0,
+            st.session_state.get("div_param", 0.0),
+            0.01,
+            key="div_param",
+            help="Repulsion strength between replicas (0 = independent runs).",
+        )
+
+    with st.expander("Display", expanded=False):
+        update_every = st.slider(
+            "UI update every (epochs)",
+            1,
+            200,
+            st.session_state.get("update_every", 20),
+            key="update_every",
+            help="Lower = smoother animation but slower wall-clock; higher = faster.",
+        )
 
 
 class StreamlitCallback(Callback):
@@ -154,7 +268,16 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.02, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.chart_holder.plotly_chart(fig, width="stretch", key="qqa_solve_dynamics")
+        # IMPORTANT: do NOT pass ``key=`` here. ``st.empty().plotly_chart`` is
+        # invoked many times within one script run (once per ``update_every``
+        # epochs); a stable key would collide with itself and trip
+        # StreamlitDuplicateElementKey. ``theme=None`` skips Streamlit's
+        # per-call theme-injection step (the figure already carries our
+        # palette via ``plotly_layout``) which makes the redraw cheaper and
+        # noticeably reduces flash on the live charts.
+        self.chart_holder.plotly_chart(
+            fig, width="stretch", theme=None, config={"displayModeBar": False}
+        )
 
         # --- Population heatmap: replicas sorted by best-so-far --------
         pop = np.stack(self.pop, axis=1)  # (sol_size, T)
@@ -200,7 +323,9 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.pop_holder.plotly_chart(pop_fig, width="stretch", key="qqa_solve_population")
+        self.pop_holder.plotly_chart(
+            pop_fig, width="stretch", theme=None, config={"displayModeBar": False}
+        )
 
         # --- Diversity curve: std across replicas vs epoch --------------
         div_fig = go.Figure()
@@ -224,7 +349,9 @@ class StreamlitCallback(Callback):
                 showlegend=False,
             )
         )
-        self.diversity_holder.plotly_chart(div_fig, width="stretch", key="qqa_solve_diversity")
+        self.diversity_holder.plotly_chart(
+            div_fig, width="stretch", theme=None, config={"displayModeBar": False}
+        )
 
 
 run = st.button("▶  Run QQA", type="primary")

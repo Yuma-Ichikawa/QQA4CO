@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import streamlit as st  # noqa: E402
 from _common import (  # noqa: E402
+    CUSTOM_EXAMPLES,
     DEFAULT_CUSTOM_SNIPPET,
     apply_theme,
     build_problem,
@@ -34,11 +35,12 @@ from _common import (  # noqa: E402
 
 import qqa  # noqa: E402
 
-# The custom-problem editor runs user-supplied Python via ``exec``. Disable
-# it on public deployments by setting ``QQA_ALLOW_CUSTOM=0`` (this is the
-# default on Streamlit Community Cloud / Hugging Face Spaces). Set it to
-# ``1`` to re-enable on a trusted machine.
-ALLOW_CUSTOM = os.getenv("QQA_ALLOW_CUSTOM", "0") == "1"
+# The custom-problem editor runs user-supplied Python via ``exec`` inside
+# the Streamlit process. We expose it from the UI by default — this is a
+# public research tool, not a multi-tenant service — but make the security
+# trade-off explicit via a banner and an opt-out env var
+# (``QQA_ALLOW_CUSTOM=0`` hides the editor on shared deployments).
+ALLOW_CUSTOM = os.getenv("QQA_ALLOW_CUSTOM", "1") == "1"
 
 st.set_page_config(
     page_title="QQA dashboard",
@@ -74,7 +76,11 @@ with st.sidebar:
         use_custom = st.toggle(
             "Use custom problem",
             value=False,
-            help="Plug in your own loss_fn directly from this UI.",
+            help=(
+                "Plug in your own loss_fn directly from this UI. The code "
+                "runs in this Streamlit process — only paste code you trust."
+            ),
+            key="use_custom",
         )
     else:
         use_custom = False
@@ -202,12 +208,35 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 if use_custom:
     st.subheader("Custom loss editor")
+    st.warning(
+        "⚠️  The snippet below is executed via Python `exec` inside this "
+        "Streamlit process. Only paste code you trust; the editor is "
+        "intentionally exposed for research use, not for hosting "
+        "untrusted user code.",
+        icon="⚠️",
+    )
     st.markdown(
         "Define a function named `loss_fn(x)` that maps a batched configuration "
         "tensor to a `(B,)` loss vector. The namespace already has `torch` and "
         "`np` (numpy) imported. Any constants (couplings, patterns, ...) you "
         "declare at module scope are captured by closure."
     )
+
+    example_keys = list(CUSTOM_EXAMPLES)
+    col_l, col_r = st.columns([2, 1])
+    with col_l:
+        example_choice = st.selectbox(
+            "Load example",
+            example_keys,
+            index=0,
+            help="Replace the editor with a fully-working snippet.",
+        )
+    with col_r:
+        st.write("")
+        if st.button("Load example", width="stretch"):
+            st.session_state["custom_source"] = CUSTOM_EXAMPLES[example_choice]
+            st.rerun()
+
     source = st.text_area(
         "Snippet",
         value=st.session_state.get("custom_source", DEFAULT_CUSTOM_SNIPPET),

@@ -20,7 +20,9 @@ from pathlib import Path
 import pytest
 
 # The Home page hides the custom-problem toggle unless this env var is set.
-os.environ.setdefault("QQA_ALLOW_CUSTOM", "1")
+# Using a plain assignment (not ``setdefault``) so that a CI / developer
+# environment with ``QQA_ALLOW_CUSTOM=0`` still runs the custom-flow test.
+os.environ["QQA_ALLOW_CUSTOM"] = "1"
 
 pytest.importorskip("streamlit", minversion="1.29.0")
 
@@ -137,6 +139,64 @@ def test_solve_page_end_to_end_run():
     # Success is observable as either the score card or the raw-loss caption.
     texts = " ".join([m.value for m in at.markdown if m.value])
     assert "qqa-score" in texts or "energy" in texts.lower() or "raw loss" in texts
+
+
+def test_solve_runs_with_default_mis():
+    """Regression for the duplicate-element-key crash on the default MIS
+    problem.
+
+    The previous "no-flash" tweak attached ``key="qqa_solve_dynamics"`` to
+    a callback-driven ``st.empty().plotly_chart`` call. Each callback tick
+    re-registered the same key inside the *same* script run and Streamlit
+    raised ``StreamlitDuplicateElementKey``. This test reproduces the bug
+    by driving Run on the **default** MIS configuration with a small
+    epoch budget; if the duplicate-key crash returns it shows up here as
+    ``at.exception``.
+    """
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
+    # Mirror the Home page's default seeded session state.
+    at.session_state["problem_config"] = {
+        "kind": "mis",
+        "size": 32,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {"graph_d": 3},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    _set_slider(at, "sol_size", 8)
+    _set_slider(at, "epochs", 100)
+    _set_slider(at, "UI update every", 10)
+    at.run()
+    assert not at.exception, at.exception
+
+    runs = [b for b in at.button if "Run" in b.label]
+    assert runs, "Run QQA button missing"
+    runs[0].click()
+    at.run()
+    assert not at.exception, at.exception
+
+
+def test_custom_problem_available_by_default(monkeypatch):
+    """Custom-problem editor must be reachable from the UI without
+    requiring the ``QQA_ALLOW_CUSTOM`` env var (regression for the
+    deployment usability gap). The toggle and the snippet text area must
+    both render once Custom mode is enabled."""
+    monkeypatch.delenv("QQA_ALLOW_CUSTOM", raising=False)
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    assert not at.exception
+    toggles = [t for t in at.sidebar.toggle if "custom" in t.label.lower()]
+    assert toggles, "Custom-problem toggle should be available by default"
+    toggles[0].set_value(True)
+    at.run()
+    assert not at.exception
+    # The dropdown of curated examples should be on the page.
+    select_labels = [s.label for s in at.selectbox]
+    assert any("Load example" in lab for lab in select_labels), (
+        "Curated example dropdown should be present in Custom mode"
+    )
 
 
 def test_solution_viz_smoke_across_problem_kinds(tmp_path):
