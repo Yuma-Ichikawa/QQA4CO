@@ -42,6 +42,85 @@ def loss_fn(s):
     return -0.5 * torch.einsum("bi,ij,bj->b", s, J, s)
 '''
 
+# Curated example library shown in the Custom-problem editor's "Load
+# example" dropdown. Each entry is a self-contained snippet that defines
+# ``loss_fn(x)`` for one variable kind.
+CUSTOM_EXAMPLES: dict[str, str] = {
+    "Spin glass (default SK)": DEFAULT_CUSTOM_SNIPPET,
+    "Number partitioning (spin)": '''import torch
+
+N = 32
+g = torch.Generator().manual_seed(0)
+a = torch.randint(1, 100, (N,), generator=g).float()
+
+
+def loss_fn(s):
+    """Minimise the squared imbalance Σ a_i s_i with s ∈ {-1,+1}^N."""
+    return (s @ a) ** 2
+''',
+    "Weighted MaxCut (binary)": '''import torch
+
+N = 32
+g = torch.Generator().manual_seed(0)
+W = torch.rand(N, N, generator=g)
+W = (W + W.T) / 2
+W.fill_diagonal_(0.0)
+
+
+def loss_fn(x):
+    """Maximise Σ_{i<j} W_ij (x_i + x_j - 2 x_i x_j) — a weighted MaxCut.
+
+    The annealer minimises, so we negate.
+    """
+    cut = torch.einsum("ij,bi,bj->b", W, x, 1 - x)
+    return -cut
+''',
+    "Ferromagnetic Ising chain": '''import torch
+
+N = 64
+J = 1.0
+h = 0.0
+
+
+def loss_fn(s):
+    """1-D ferromagnet: -J Σ s_i s_{i+1} - h Σ s_i, s ∈ {-1,+1}."""
+    return -J * (s[:, :-1] * s[:, 1:]).sum(dim=1) - h * s.sum(dim=1)
+''',
+    "Custom QUBO from a matrix": '''import torch
+
+# Replace Q with your own (N×N) matrix. The energy is x^T Q x.
+N = 24
+g = torch.Generator().manual_seed(7)
+Q = torch.randn(N, N, generator=g)
+Q = (Q + Q.T) / 2
+
+
+def loss_fn(x):
+    """Generic QUBO loss for binary x ∈ {0,1}^N."""
+    return torch.einsum("ij,bi,bj->b", Q, x, x)
+''',
+    "Random 3-SAT clause loss (binary)": """import torch
+
+N = 30
+M = 90  # clauses
+g = torch.Generator().manual_seed(0)
+lit = torch.randint(0, 2 * N, (M, 3), generator=g)  # variable-with-sign codes
+sign = (lit % 2 == 0).float() * 2.0 - 1.0  # +1 if positive literal, -1 if negated
+var = lit // 2
+
+
+def loss_fn(x):
+    # Map x ∈ {0,1} to ±1 literal evaluations.
+    spins = 2 * x - 1.0  # (B, N)
+    chosen = spins[:, var]  # (B, M, 3)
+    eval_lit = chosen * sign  # +1 if literal satisfied
+    # Clause unsatisfied iff every literal is -1, i.e. product == -1
+    # easier: clause "value" = max over literals; we approximate with mean.
+    sat = ((eval_lit + 1) / 2).max(dim=-1).values  # (B, M)
+    return (1.0 - sat).sum(dim=-1)
+""",
+}
+
 
 # ---------------------------------------------------------------------------
 # Theme helpers
@@ -134,14 +213,16 @@ def plotly_layout(theme: str | None = None, **overrides) -> dict:
         "font": {"family": "Inter, -apple-system, sans-serif", "size": 13, "color": p["text"]},
         "title_font": {
             "family": "'Source Serif 4', Georgia, serif",
-            "size": 17,
+            "size": 16,
             "color": p["text"],
         },
         "colorway": p["palette"],
         "xaxis": {"gridcolor": p["grid"], "linecolor": p["border"], "zerolinecolor": p["grid"]},
         "yaxis": {"gridcolor": p["grid"], "linecolor": p["border"], "zerolinecolor": p["grid"]},
         "legend": {"bgcolor": "rgba(0,0,0,0)", "bordercolor": p["border"], "borderwidth": 0.5},
-        "margin": {"l": 50, "r": 20, "t": 48, "b": 46},
+        # Top margin keeps the title clear of Plotly's modebar (which lives
+        # in the top-right corner). Was 48, and even modest titles collided.
+        "margin": {"l": 56, "r": 28, "t": 64, "b": 50},
     }
     base.update(overrides)
     return base
