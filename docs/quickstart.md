@@ -14,8 +14,14 @@ reuse the resolved lockfile.
 ## With pip
 
 ```bash
-pip install qqa[plotly,gui]
+pip install qqa                          # core (CPU torch + numpy/networkx)
+pip install "qqa[plotly]"                # + interactive Plotly figures
+pip install "qqa[gui]"                   # + Streamlit dashboard
+pip install "qqa[all]"                   # everything (docs, dev, notebook, gui, plotly)
 ```
+
+Quote the extras list — bare brackets are a glob pattern in zsh and
+Bash with `noglob` disabled.
 
 ## Solve a first problem
 

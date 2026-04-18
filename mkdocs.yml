@@ -2,7 +2,7 @@ site_name: QQA Documentation
 site_description: Quasi-Quantum Annealing for combinatorial and spin-glass optimization.
 repo_url: https://github.com/Yuma-Ichikawa/QQA4CO
 edit_uri: blob/main/docs/
-strict: false
+strict: true
 
 theme:
   name: material
