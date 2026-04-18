@@ -326,21 +326,11 @@ def apply_theme() -> None:
             background: {p["bg_sidebar"]};
             border-right: 1px solid var(--qqa-border);
         }}
-        /* Hide the auto-generated multipage heading ("streamlit app")
-           rendered above our brand block, AND hide the entry-page
-           navigation link itself (the brand logo above is the home
-           anchor; an extra "streamlit app" link is just noise). */
-        [data-testid="stSidebarNav"]::before {{ display: none; }}
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > ul + div:has(>h1),
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h1:first-of-type,
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h2:first-of-type {{
-            display: none !important;
-        }}
-        /* Drop the first <li> in the nav list — that is the entry page
-           link Streamlit derives from the file name (here: "streamlit
-           app"). The brand block + the page list under it is enough. */
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] ul li:first-child {{
+        /* Hide Streamlit's entire auto-generated multipage navigator.
+           We render our own labelled nav (Problem → Solve → Visualize
+           → Compare) inside ``sidebar_brand()`` so the workflow order
+           reads naturally and the entry page has a sensible label. */
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {{
             display: none !important;
         }}
         [data-testid="stSidebarNav"] a {{
@@ -562,9 +552,8 @@ def apply_theme() -> None:
             backdrop-filter: blur(14px);
             border-right: 1px solid var(--qqa-border);
         }}
-        /* Same nav-header suppression as in light theme. */
-        [data-testid="stSidebarNav"]::before {{ display: none; }}
-        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] ul li:first-child {{
+        /* Same auto-nav suppression as in light theme. */
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {{
             display: none !important;
         }}
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
@@ -759,16 +748,34 @@ def sidebar_brand() -> None:
             """,
             unsafe_allow_html=True,
         )
-        # The auto-generated entry-page link in Streamlit's multipage
-        # navigator gets its label from the file basename ("streamlit
-        # app"), which is jargony and confused users into thinking the
-        # page wasn't clickable. We hide that auto link in CSS and
-        # instead emit our own properly labelled link here so the user
-        # always has a discoverable way back to the problem-selection
-        # page.
+        # We hide Streamlit's auto-generated multipage navigator with
+        # CSS (see ``apply_theme``) and replace it with a manual
+        # ``page_link`` block here. Two reasons:
+        #   1. The auto navigator labels the entry page by file basename
+        #      ("streamlit app"), which is jargony.
+        #   2. The auto navigator places itself *above* the brand
+        #      block, so the entry-page link sits below the
+        #      sub-pages — confusing because the entry page is
+        #      conceptually the *first* step (problem selection).
+        # The manual block lives directly under the brand and lists
+        # pages in the natural left-to-right workflow order:
+        # **Problem → Solve → Visualize → Compare**.
         if hasattr(st, "page_link"):
             with contextlib.suppress(Exception):
+                st.markdown(
+                    "<div class='qqa-nav' "
+                    "style='margin-top:0.25rem;margin-bottom:0.5rem;'></div>",
+                    unsafe_allow_html=True,
+                )
                 st.page_link("streamlit_app.py", label="Problem", icon="🧩")
+                st.page_link("pages/1_Solve.py", label="Solve", icon="▶️")
+                st.page_link("pages/2_Visualize.py", label="Visualize", icon="📊")
+                st.page_link("pages/3_Compare.py", label="Compare", icon="🔬")
+                st.markdown(
+                    "<div style='border-bottom:1px solid rgba(148,163,184,0.2);"
+                    "margin:0.55rem 0 0.4rem 0;'></div>",
+                    unsafe_allow_html=True,
+                )
 
 
 def empty_state_card(
