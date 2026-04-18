@@ -35,7 +35,18 @@ apply_theme()
 st.title("Solve")
 
 if "problem_config" not in st.session_state:
-    st.warning("Define a problem on the Home page first.")
+    from _common import empty_state_card  # noqa: PLC0415
+
+    empty_state_card(
+        title="No problem selected",
+        body=(
+            "Pick a built-in problem (or paste your own) on the "
+            "<b>Home</b> page first. The annealer reads its "
+            "configuration from there."
+        ),
+        cta_label="Open Home",
+        cta_page="streamlit_app.py",
+    )
     st.stop()
 cfg = st.session_state["problem_config"]
 st.caption(

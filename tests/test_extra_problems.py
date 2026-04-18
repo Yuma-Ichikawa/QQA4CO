@@ -297,6 +297,133 @@ def test_ea_preview_helper_uses_sparse_view_for_big_lattices(monkeypatch):
     assert isinstance(fig.data[0], _go.Scatter)
 
 
+# ---------------------------------------------------------------------------
+# Constructor-dispatch hardening (build_problem ↔ session-state robustness)
+# ---------------------------------------------------------------------------
+
+
+def _ensure_app_on_path() -> None:
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "app"))
+
+
+def test_build_problem_drops_unknown_extra_kwargs(monkeypatch):
+    """Stale ``st.session_state['problem_config']['extra']`` keys must not
+    crash the page after a problem class evolves. The dispatcher filters
+    the kwargs against the constructor signature on the way in."""
+    _ensure_app_on_path()
+    import _common as common
+
+    monkeypatch.setattr(common.st, "caption", lambda *a, **k: None)
+
+    cfg = {
+        "kind": "tsp",
+        "size": 4,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {
+            "col_penalty": 4.0,
+            "mystery_kwarg": 999,  # ← unknown, must be dropped
+            "another_stale_one": "x",
+        },
+    }
+    p = common.build_problem(cfg)
+    assert isinstance(p, qqa.TSP)
+    assert p.col_penalty == 4.0
+
+
+def test_tsp_back_compat_column_penalty_alias():
+    """The legacy ``column_penalty`` kwarg sets *both* row and col
+    penalties (old categorical-style behaviour) and emits a deprecation
+    warning so callers can migrate."""
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        p = qqa.TSP(N=4, seed=0, column_penalty=7.5)
+    assert p.row_penalty == 7.5
+    assert p.col_penalty == 7.5
+    assert any(issubclass(w.category, DeprecationWarning) for w in caught), (
+        "Expected a DeprecationWarning for legacy column_penalty kwarg"
+    )
+
+
+def test_tsp_penalty_weights_dict_overrides_scalars():
+    """A structured ``penalty_weights`` dict is the future-proof way to
+    declare an arbitrary number of penalty terms; when supplied it
+    overrides the explicit scalar kwargs."""
+    p = qqa.TSP(
+        N=4,
+        seed=0,
+        row_penalty=99.0,
+        col_penalty=99.0,
+        penalty_weights={"row": 1.5, "col": 9.0},
+    )
+    assert p.row_penalty == 1.5
+    assert p.col_penalty == 9.0
+    assert p.penalty_weights == {"row": 1.5, "col": 9.0}
+
+
+def test_qap_penalty_weights_dict_overrides_scalar():
+    """Same structured-dict story for QAP — extending to additional
+    QAP penalties later only needs more keys, not a signature change."""
+    p = qqa.QAP(N=4, seed=0, column_penalty=99.0, penalty_weights={"column": 6.5})
+    assert p.column_penalty == 6.5
+
+
+def test_build_problem_modern_kwargs_win_over_legacy_alias(monkeypatch):
+    """If both legacy and modern keys are present (e.g. saved config
+    written by both old and new versions of the UI), the modern
+    explicit keys must win — otherwise renaming a kwarg in the schema
+    silently regresses the slider's effect on the next page reload."""
+    _ensure_app_on_path()
+    import _common as common
+
+    monkeypatch.setattr(common.st, "caption", lambda *a, **k: None)
+
+    cfg = {
+        "kind": "tsp",
+        "size": 4,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {
+            "column_penalty": 2.0,  # legacy (would set both to 2.0)
+            "row_penalty": 3.0,  # ← must win
+            "col_penalty": 4.5,  # ← must win
+        },
+    }
+    p = common.build_problem(cfg)
+    assert p.row_penalty == 3.0
+    assert p.col_penalty == 4.5
+
+
+# ---------------------------------------------------------------------------
+# 3-D EA cone visualisation
+# ---------------------------------------------------------------------------
+
+
+def test_render_ea_3d_uses_cone_traces():
+    """The 3-D Edwards–Anderson visualisation is the headline view for
+    3-D Ising; pin that the figure contains at least one ``go.Cone``
+    trace and a bond-line trace, so the renderer doesn't silently fall
+    back to flat scatter markers."""
+    _ensure_app_on_path()
+    import _solution_viz as viz
+    import numpy as _np
+    import plotly.graph_objects as _go
+
+    rng = _np.random.RandomState(0)
+    s = rng.choice([-1, 1], size=4**3)
+    fig = viz._ea_3d_cone_figure(s, 4, title="3D EA test")
+    types = [type(t).__name__ for t in fig.data]
+    assert any(isinstance(t, _go.Cone) for t in fig.data), f"Expected a Cone trace, got: {types}"
+    assert any(isinstance(t, _go.Scatter3d) for t in fig.data), (
+        f"Expected a Scatter3d bond trace, got: {types}"
+    )
+
+
 def test_anneal_cuda_requested_but_unavailable_raises():
     """Skip on hosts with CUDA; otherwise expect an informative RuntimeError."""
     if torch.cuda.is_available():

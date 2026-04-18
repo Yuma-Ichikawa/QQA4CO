@@ -6,6 +6,7 @@ Solve / Visualize / Compare pages stay declarative.
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 import networkx as nx
@@ -326,12 +327,20 @@ def apply_theme() -> None:
             border-right: 1px solid var(--qqa-border);
         }}
         /* Hide the auto-generated multipage heading ("streamlit app")
-           rendered above our brand block. */
+           rendered above our brand block, AND hide the entry-page
+           navigation link itself (the brand logo above is the home
+           anchor; an extra "streamlit app" link is just noise). */
         [data-testid="stSidebarNav"]::before {{ display: none; }}
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > ul + div:has(>h1),
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h1:first-of-type,
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h2:first-of-type {{
+            display: none !important;
+        }}
+        /* Drop the first <li> in the nav list — that is the entry page
+           link Streamlit derives from the file name (here: "streamlit
+           app"). The brand block + the page list under it is enough. */
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] ul li:first-child {{
             display: none !important;
         }}
         [data-testid="stSidebarNav"] a {{
@@ -555,6 +564,9 @@ def apply_theme() -> None:
         }}
         /* Same nav-header suppression as in light theme. */
         [data-testid="stSidebarNav"]::before {{ display: none; }}
+        section[data-testid="stSidebar"] [data-testid="stSidebarNav"] ul li:first-child {{
+            display: none !important;
+        }}
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > div:first-child,
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] > ul + div:has(>h1),
         section[data-testid="stSidebar"] [data-testid="stSidebarNav"] h1:first-of-type,
@@ -749,6 +761,56 @@ def sidebar_brand() -> None:
         )
 
 
+def empty_state_card(
+    *,
+    title: str,
+    body: str,
+    cta_label: str = "Open Solve",
+    cta_page: str = "pages/1_Solve.py",
+) -> None:
+    """Branded empty-state card with a primary CTA.
+
+    Used on Visualize / Compare when no run is yet available, so the
+    user sees a deliberate path forward instead of a bare warning row.
+    Falls back gracefully to a markdown-only card if the running
+    Streamlit predates ``st.page_link``.
+    """
+    theme = get_theme()
+    p = palette()
+    accent = "#0f766e" if theme == "light" else "#38bdf8"
+    muted = "#64748b" if theme == "light" else "#94a3b8"
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid {p["border"]};
+            background:{p["bg_card"]};
+            padding:1.4rem 1.6rem;
+            border-radius:12px;
+            box-shadow:0 1px 3px rgba(15,23,42,0.05);
+        ">
+          <div style="
+              font-family:'Source Serif 4',Georgia,serif;
+              font-weight:600;font-size:1.15rem;color:{p["text"]};
+              margin-bottom:0.45rem;
+          ">{title}</div>
+          <div style="font-size:0.95rem;color:{muted};line-height:1.45;">
+            {body}
+          </div>
+          <div style="height:0.85rem;"></div>
+          <div style="
+              display:inline-block;padding:0.35rem 0.85rem;border-radius:8px;
+              border:1px solid {accent};color:{accent};font-weight:500;
+              font-size:0.9rem;
+          ">↳ {cta_label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if hasattr(st, "page_link"):
+        with contextlib.suppress(Exception):
+            st.page_link(cta_page, label=cta_label, icon="▶")
+
+
 def paper_link_footer() -> None:
     """Compact link row rendered at the very bottom of the sidebar."""
     theme = get_theme()
@@ -872,96 +934,227 @@ def build_problem(cfg: dict) -> Any:
         )
 
     size = int(cfg["size"])
-    if kind in {"mis", "maxcut", "maxclique", "coloring"}:
-        d = extra.get("graph_d", 3)
-        if (size * d) % 2 != 0:
-            d = max(2, d - 1) if d > 2 else d + 1
-        g = nx.random_regular_graph(d=d, n=size, seed=cfg["seed"])
-        if kind == "mis":
-            return qqa.MaximumIndependentSet(g, device=device)
-        if kind == "maxcut":
-            return qqa.MaxCut(g, device=device)
-        if kind == "maxclique":
-            return qqa.MaxClique(g, device=device)
-        if kind == "coloring":
-            return qqa.Coloring(g, num_category=extra.get("num_category", 3), device=device)
+    seed = cfg["seed"]
+    if kind in {"mis", "maxcut", "maxclique", "coloring", "vertex_cover", "graph_bisection"}:
+        return _build_graph_problem(kind, size, seed, device, extra)
     if kind == "ising1d":
-        return qqa.Ising1D(N=size, device=device)
+        return _safe_call(qqa.Ising1D, N=size, device=device)
     if kind == "ea":
-        return qqa.EdwardsAnderson(
-            L=size, dim=int(extra.get("dim", 3)), seed=cfg["seed"], device=device
-        )
-    if kind == "sk":
-        return qqa.SherringtonKirkpatrick(N=size, seed=cfg["seed"], device=device)
-    if kind == "perceptron":
-        return qqa.BinaryPerceptron(
-            N=size, alpha=float(extra.get("alpha", 0.5)), seed=cfg["seed"], device=device
-        )
-    if kind == "hopfield":
-        return qqa.HopfieldMemory(
-            N=size,
-            patterns=int(extra.get("patterns", 3)),
-            seed=cfg["seed"],
+        return _safe_call(
+            qqa.EdwardsAnderson,
+            L=size,
+            dim=int(extra.get("dim", 3)),
+            seed=seed,
             device=device,
         )
-
-    # -------- new (Phase A) problems ---------------------------------------
+    if kind == "sk":
+        return _safe_call(qqa.SherringtonKirkpatrick, N=size, seed=seed, device=device)
+    if kind == "perceptron":
+        return _safe_call(
+            qqa.BinaryPerceptron,
+            N=size,
+            alpha=float(extra.get("alpha", 0.5)),
+            seed=seed,
+            device=device,
+        )
+    if kind == "hopfield":
+        return _safe_call(
+            qqa.HopfieldMemory,
+            N=size,
+            patterns=int(extra.get("patterns", 3)),
+            seed=seed,
+            device=device,
+        )
     if kind == "knapsack":
-        return qqa.Knapsack(
+        return _safe_call(
+            qqa.Knapsack,
             N=size,
             capacity_ratio=float(extra.get("capacity_ratio", 0.5)),
-            seed=cfg["seed"],
+            seed=seed,
             device=device,
         )
     if kind == "number_partition":
-        return qqa.NumberPartitioning(
+        return _safe_call(
+            qqa.NumberPartitioning,
             N=size,
             max_value=int(extra.get("max_value", 100)),
-            seed=cfg["seed"],
+            seed=seed,
             device=device,
         )
+    if kind == "maxsat3":
+        return _safe_call(
+            qqa.MaxSAT3,
+            N=size,
+            ratio=float(extra.get("ratio", 3.0)),
+            seed=seed,
+            device=device,
+        )
+    if kind == "tsp":
+        # Multi-penalty problem: forward every penalty-shaped key from
+        # ``extra`` so the dashboard can declare an arbitrary number of
+        # penalty terms without touching this dispatcher.
+        return _safe_call(
+            qqa.TSP,
+            N=size,
+            seed=seed,
+            device=device,
+            **_extract_penalty_kwargs(extra, defaults={"row_penalty": 5.0, "col_penalty": 5.0}),
+        )
+    if kind == "qap":
+        return _safe_call(
+            qqa.QAP,
+            N=size,
+            seed=seed,
+            device=device,
+            **_extract_penalty_kwargs(extra, defaults={"column_penalty": 10.0}),
+        )
+    if kind == "nqueens":
+        return _safe_call(qqa.NQueens, N=size, device=device)
+
+    raise ValueError(f"Unknown problem kind {kind!r}")
+
+
+def _build_graph_problem(kind: str, size: int, seed: int, device: str, extra: dict):
+    """Random-regular-graph problems share a common preamble (degree
+    sanitisation + ``nx.random_regular_graph``), so factor it out."""
+    d = extra.get("graph_d", 3)
+    if (size * d) % 2 != 0:
+        d = max(2, d - 1) if d > 2 else d + 1
+    g = nx.random_regular_graph(d=d, n=size, seed=seed)
+    if kind == "mis":
+        return _safe_call(qqa.MaximumIndependentSet, g, device=device)
+    if kind == "maxcut":
+        return _safe_call(qqa.MaxCut, g, device=device)
+    if kind == "maxclique":
+        return _safe_call(qqa.MaxClique, g, device=device)
+    if kind == "coloring":
+        return _safe_call(qqa.Coloring, g, num_category=extra.get("num_category", 3), device=device)
     if kind == "vertex_cover":
-        d = extra.get("graph_d", 3)
-        if (size * d) % 2 != 0:
-            d = max(2, d - 1) if d > 2 else d + 1
-        g = nx.random_regular_graph(d=d, n=size, seed=cfg["seed"])
-        return qqa.VertexCover(g, device=device)
+        return _safe_call(qqa.VertexCover, g, device=device)
     if kind == "graph_bisection":
-        d = extra.get("graph_d", 3)
-        if (size * d) % 2 != 0:
-            d = max(2, d - 1) if d > 2 else d + 1
-        g = nx.random_regular_graph(d=d, n=size, seed=cfg["seed"])
-        return qqa.GraphBisection(
+        return _safe_call(
+            qqa.GraphBisection,
             g,
             balance_penalty=float(extra.get("balance_penalty", 2.0)),
             device=device,
         )
-    if kind == "maxsat3":
-        return qqa.MaxSAT3(
-            N=size,
-            ratio=float(extra.get("ratio", 3.0)),
-            seed=cfg["seed"],
-            device=device,
-        )
-    if kind == "tsp":
-        return qqa.TSP(
-            N=size,
-            row_penalty=float(extra.get("row_penalty", 5.0)),
-            col_penalty=float(extra.get("col_penalty", 5.0)),
-            seed=cfg["seed"],
-            device=device,
-        )
-    if kind == "qap":
-        return qqa.QAP(
-            N=size,
-            column_penalty=float(extra.get("column_penalty", 10.0)),
-            seed=cfg["seed"],
-            device=device,
-        )
-    if kind == "nqueens":
-        return qqa.NQueens(N=size, device=device)
+    raise ValueError(f"Unknown graph-problem kind {kind!r}")
 
-    raise ValueError(f"Unknown problem kind {kind!r}")
+
+# ---------------------------------------------------------------------------
+# Constructor dispatch helpers — keep ``build_problem`` and the saved-config
+# format decoupled from individual class signatures.
+# ---------------------------------------------------------------------------
+
+
+def _safe_call(cls, *args, **kwargs):
+    """Invoke ``cls(*args, **kwargs)`` but silently drop any keyword that
+    its ``__init__`` does not accept.
+
+    Why: the Streamlit ``problem_config`` dict is persisted across reruns
+    via ``st.session_state``. If a problem class evolves (e.g. TSP renames
+    ``column_penalty`` → ``row_penalty``/``col_penalty``) the next page
+    refresh would otherwise crash because the old key is still in
+    ``extra``. Filtering against the constructor signature on the
+    receiving end makes the call boundary forward- and backward-compatible
+    by construction.
+    """
+    import inspect  # noqa: PLC0415 - lazy: only needed here
+
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        return cls(*args, **kwargs)
+
+    accepts_var_kw = any(p.kind is p.VAR_KEYWORD for p in sig.parameters.values())
+    if accepts_var_kw:
+        return cls(*args, **kwargs)
+
+    accepted = set(sig.parameters)
+    accepted.discard("self")
+    safe = {k: v for k, v in kwargs.items() if k in accepted}
+    dropped = set(kwargs) - set(safe)
+    if dropped:
+        # Surface the drop in the UI without crashing the page. Streamlit
+        # may not be initialised in test contexts, so guard the call.
+        try:
+            import streamlit as _st  # noqa: PLC0415
+
+            _st.caption(
+                f"Note — dropped unknown {cls.__name__} kwargs from session "
+                f"state: {sorted(dropped)} (signature has changed)."
+            )
+        except Exception:
+            pass
+    return cls(*args, **safe)
+
+
+# Recognised penalty-coefficient suffixes / aliases.  Adding a new
+# penalty term to a problem only requires (a) adding a new keyword to the
+# class' ``__init__`` and (b) declaring the slider in
+# ``streamlit_app.py`` — this dispatcher does **not** need to change.
+_PENALTY_SUFFIXES: tuple[str, ...] = ("_penalty", "_weight", "_lambda")
+# Legacy keys → modern keys.  Two purposes:
+#   * keep saved configs working after a rename;
+#   * let users typing `column_penalty` (the old name) still get the
+#     intended behaviour (mapped to row + col).
+_PENALTY_ALIASES: dict[str, tuple[str, ...]] = {
+    "column_penalty": ("row_penalty", "col_penalty"),
+}
+
+
+def _extract_penalty_kwargs(extra: dict, *, defaults: dict[str, float]) -> dict[str, float]:
+    """Return a dict of penalty-shaped kwargs, merging ``defaults``,
+    explicit ``extra`` keys, dict-form ``penalty_weights``, and legacy
+    aliases. Numeric values are coerced to ``float`` so torch is happy.
+
+    Selection rules (later overrides earlier):
+        1. ``defaults`` (lowest priority)
+        2. legacy aliases in ``extra`` (e.g. ``column_penalty`` mapped to
+           both ``row_penalty`` and ``col_penalty``)
+        3. explicit penalty-suffixed keys in ``extra`` (override legacy)
+        4. ``extra['penalty_weights']`` dict (most explicit ⇒ wins)
+
+    To avoid a stale legacy key drowning a fresh modern key, the legacy
+    alias itself is **never** propagated to the output dict; only its
+    modern translations are.
+    """
+    out: dict[str, float] = dict(defaults)
+    legacy_targets: set[str] = set()
+    for modern_keys in _PENALTY_ALIASES.values():
+        legacy_targets.update(modern_keys)
+
+    # 2. legacy aliases (translate, do not propagate the legacy key itself).
+    for legacy, modern_keys in _PENALTY_ALIASES.items():
+        if legacy in extra:
+            try:
+                v = float(extra[legacy])
+            except (TypeError, ValueError):
+                continue
+            for k in modern_keys:
+                out[k] = v
+
+    # 3. explicit penalty-shaped keys override legacy translations.
+    for k, v in extra.items():
+        if k in _PENALTY_ALIASES:
+            continue  # already handled in step 2
+        if any(k.endswith(suf) for suf in _PENALTY_SUFFIXES):
+            try:
+                out[k] = float(v)
+            except (TypeError, ValueError):
+                continue
+
+    # 4. structured dict overrides every preceding source.
+    pw = extra.get("penalty_weights")
+    if isinstance(pw, dict):
+        for k, v in pw.items():
+            key = k if any(k.endswith(suf) for suf in _PENALTY_SUFFIXES) else f"{k}_penalty"
+            try:
+                out[key] = float(v)
+            except (TypeError, ValueError):
+                continue
+
+    return out
 
 
 # ---------------------------------------------------------------------------
