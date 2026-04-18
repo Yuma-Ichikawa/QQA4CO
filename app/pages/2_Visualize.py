@@ -12,6 +12,7 @@ import numpy as np  # noqa: E402
 import streamlit as st  # noqa: E402
 from _common import (  # noqa: E402
     apply_theme,
+    empty_state_card,
     palette,
     paper_link_footer,
     plotly_layout,
@@ -32,7 +33,17 @@ st.title("Visualize")
 result = st.session_state.get("last_result")
 problem = st.session_state.get("last_problem")
 if result is None:
-    st.warning("Run QQA on the Solve page first.")
+    empty_state_card(
+        title="No annealing run loaded yet",
+        body=(
+            "Define a problem on <b>Home</b>, then jump to <b>Solve</b> "
+            "and click <i>Run QQA</i>. The result will appear here for "
+            "deeper inspection — score, history, parallel-coordinates, "
+            "and per-problem solution view."
+        ),
+        cta_label="Open Solve",
+        cta_page="pages/1_Solve.py",
+    )
     st.stop()
 
 pop_tracker = st.session_state.get("last_pop_tracker")

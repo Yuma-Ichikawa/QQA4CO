@@ -443,9 +443,40 @@ class TSP(COProblem):
         seed: int | None = 0,
         row_penalty: float = 5.0,
         col_penalty: float = 5.0,
+        column_penalty: float | None = None,  # legacy alias for col_penalty
+        penalty_weights: dict[str, float] | None = None,
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        # Back-compat: pre-v0.4 the only knob was ``column_penalty`` and it
+        # implicitly enforced the row constraint via the categorical
+        # relaxation. Treat it as a single λ that drives **both** row and
+        # column quadratic penalties so callers persisting old configs
+        # don't need to be touched.
+        if column_penalty is not None:
+            import warnings  # noqa: PLC0415
+
+            warnings.warn(
+                "TSP(column_penalty=...) is deprecated; use row_penalty / "
+                "col_penalty (or penalty_weights={'row': ..., 'col': ...}).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            row_penalty = float(column_penalty)
+            col_penalty = float(column_penalty)
+
+        # Structured dict overrides explicit scalars when provided. This is
+        # the most flexible interface — adding a 3rd, 4th, ... penalty
+        # term in the future only needs a new key here, no signature
+        # change required.
+        if penalty_weights:
+            row_penalty = float(
+                penalty_weights.get("row", penalty_weights.get("row_penalty", row_penalty))
+            )
+            col_penalty = float(
+                penalty_weights.get("col", penalty_weights.get("col_penalty", col_penalty))
+            )
+
         self.N = N
         self.num_node = N  # positions (kept for backwards compat)
         self.num_category = N  # cities
@@ -453,6 +484,7 @@ class TSP(COProblem):
         self.device = device
         self.row_penalty = float(row_penalty)
         self.col_penalty = float(col_penalty)
+        self.penalty_weights = {"row": self.row_penalty, "col": self.col_penalty}
         rng = _rng(seed)
         self.coords = torch.as_tensor(rng.random((N, 2)), dtype=torch.float32, device=device)
         diff = self.coords.unsqueeze(0) - self.coords.unsqueeze(1)
@@ -553,15 +585,29 @@ class QAP(COProblem):
         N: int = 10,
         seed: int | None = 0,
         column_penalty: float = 5.0,
+        penalty_weights: dict[str, float] | None = None,
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        # Structured dict overrides the scalar — same flexibility story as
+        # TSP: extra penalty terms can be added later without changing
+        # the call signature.
+        if penalty_weights:
+            column_penalty = float(
+                penalty_weights.get(
+                    "column",
+                    penalty_weights.get(
+                        "column_penalty", penalty_weights.get("col", column_penalty)
+                    ),
+                )
+            )
         self.N = N
         self.num_node = N
         self.num_category = N
         self.num_nodes = N
         self.device = device
-        self.column_penalty = column_penalty
+        self.column_penalty = float(column_penalty)
+        self.penalty_weights = {"column": self.column_penalty}
         rng = _rng(seed)
         F = rng.integers(0, 10, size=(N, N)).astype(np.float32)
         D = rng.integers(0, 10, size=(N, N)).astype(np.float32)

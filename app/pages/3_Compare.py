@@ -36,7 +36,18 @@ apply_theme()
 st.title("Compare")
 
 if "problem_config" not in st.session_state:
-    st.warning("Define a problem on the Home page first.")
+    from _common import empty_state_card  # noqa: PLC0415
+
+    empty_state_card(
+        title="No problem selected",
+        body=(
+            "Pick or define a problem on the <b>Home</b> page first. "
+            "Compare runs a small hyper-parameter sweep across the "
+            "currently-selected problem, then ranks the results."
+        ),
+        cta_label="Open Home",
+        cta_page="streamlit_app.py",
+    )
     st.stop()
 cfg = st.session_state["problem_config"]
 

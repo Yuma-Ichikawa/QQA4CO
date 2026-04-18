@@ -202,28 +202,56 @@ with st.sidebar:
             extra["ratio"] = st.slider("Clause ratio M/N", 1.0, 6.0, 3.0, 0.1)
         if problem_kind == "tsp":
             st.caption(
-                "TSP is solved with the **penalty method**: the row and column "
-                "constraints are added to the loss as quadratic penalties. "
-                "Higher λ ⇒ more emphasis on feasibility, lower λ ⇒ shorter tours."
+                "TSP is solved with the **penalty method**: every "
+                "permutation constraint is added to the loss as a "
+                "quadratic penalty. Higher λ ⇒ more emphasis on "
+                "feasibility, lower λ ⇒ shorter tours. Untick *Sync λ_r "
+                "= λ_c* if you want asymmetric penalties (rare; useful "
+                "if your problem instance is harder along one axis)."
             )
-            extra["row_penalty"] = st.slider(
-                "Row penalty λ_r (each position holds 1 city)",
-                0.5,
-                20.0,
-                5.0,
-                0.5,
-                help="Weight on (Σ_i x[t,i] - 1)² summed over positions t.",
+            sync = st.toggle(
+                "Sync λ_r = λ_c",
+                value=True,
+                key="tsp_sync_lambda",
+                help="Tie the row and column penalty sliders together.",
             )
-            extra["col_penalty"] = st.slider(
-                "Col penalty λ_c (each city visited exactly once)",
-                0.5,
-                20.0,
-                5.0,
-                0.5,
-                help="Weight on (Σ_t x[t,i] - 1)² summed over cities i.",
-            )
+            if sync:
+                lam = st.slider(
+                    "Penalty weight λ",
+                    0.5,
+                    20.0,
+                    5.0,
+                    0.5,
+                    help="Shared weight for both (Σ_i x[t,i] − 1)² and (Σ_t x[t,i] − 1)².",
+                )
+                extra["row_penalty"] = lam
+                extra["col_penalty"] = lam
+            else:
+                extra["row_penalty"] = st.slider(
+                    "Row penalty λ_r (each position holds 1 city)",
+                    0.5,
+                    20.0,
+                    5.0,
+                    0.5,
+                    help="Weight on (Σ_i x[t,i] − 1)² summed over positions t.",
+                )
+                extra["col_penalty"] = st.slider(
+                    "Col penalty λ_c (each city visited exactly once)",
+                    0.5,
+                    20.0,
+                    5.0,
+                    0.5,
+                    help="Weight on (Σ_t x[t,i] − 1)² summed over cities i.",
+                )
         if problem_kind == "qap":
-            extra["column_penalty"] = st.slider("Column penalty λ", 1.0, 30.0, 10.0, 0.5)
+            extra["column_penalty"] = st.slider(
+                "Column penalty λ",
+                1.0,
+                30.0,
+                10.0,
+                0.5,
+                help="Weight on the assignment-uniqueness penalty.",
+            )
 
     # Only offer devices that are actually available on the host. On public
     # deployments (Streamlit Cloud / Hugging Face Spaces) this is always

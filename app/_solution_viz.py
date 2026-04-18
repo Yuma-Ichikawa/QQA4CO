@@ -1020,6 +1020,200 @@ def _ea_2d_arrow_figure(s: np.ndarray, L: int, *, title: str) -> go.Figure:
     return fig
 
 
+def _ea_3d_cone_figure(
+    s: np.ndarray,
+    L: int,
+    *,
+    J: np.ndarray | None = None,
+    title: str,
+    show_bonds: bool = True,
+    show_frustration: bool = False,
+) -> go.Figure:
+    """Render a 3D Edwards–Anderson spin field as a rotatable cone scene.
+
+    Each lattice site becomes a Plotly :class:`Cone` arrow pointing along
+    ``+z`` (spin up) or ``-z`` (spin down), coloured by sign. Bonds
+    between nearest neighbours are drawn as a single low-opacity
+    ``Scatter3d`` polyline so the cubic structure is legible without
+    cluttering the cone field.
+
+    Args:
+        s: flat ``(L**3,)`` array of ±1 spins.
+        L: lattice side.
+        J: optional ``(L**3, L**3)`` coupling matrix. If supplied and
+            ``show_frustration=True``, cones are coloured by their local
+            energy contribution ``-s_i · Σ_j J_ij s_j`` (warm = frustrated)
+            instead of by spin sign.
+        title: chart title (HTML allowed).
+    """
+    p = palette()
+    s = np.asarray(s).astype(float)
+    cube = s.reshape(L, L, L)
+    xs, ys, zs = np.meshgrid(np.arange(L), np.arange(L), np.arange(L), indexing="ij")
+    xs = xs.reshape(-1)
+    ys = ys.reshape(-1)
+    zs = zs.reshape(-1)
+    spins = cube.reshape(-1)
+    up_mask = spins > 0
+    down_mask = ~up_mask
+
+    fig = go.Figure()
+
+    if show_bonds:
+        # Build all unique nearest-neighbour bonds in a *single* trace by
+        # using ``None``-delimited polylines.  Drawing one Scatter3d per
+        # bond would create ~3·L^3 traces and obliterate the FPS.
+        seg_x: list[float | None] = []
+        seg_y: list[float | None] = []
+        seg_z: list[float | None] = []
+        for i in range(L):
+            for j in range(L):
+                for k in range(L):
+                    if i + 1 < L:
+                        seg_x.extend([i, i + 1, None])
+                        seg_y.extend([j, j, None])
+                        seg_z.extend([k, k, None])
+                    if j + 1 < L:
+                        seg_x.extend([i, i, None])
+                        seg_y.extend([j, j + 1, None])
+                        seg_z.extend([k, k, None])
+                    if k + 1 < L:
+                        seg_x.extend([i, i, None])
+                        seg_y.extend([j, j, None])
+                        seg_z.extend([k, k + 1, None])
+        fig.add_trace(
+            go.Scatter3d(
+                x=seg_x,
+                y=seg_y,
+                z=seg_z,
+                mode="lines",
+                line={"color": hex_to_rgba(p["muted"], 0.18), "width": 1.5},
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    # Spin cones — two colour-bound traces (one up, one down) so the
+    # legend explains the encoding without needing a continuous bar.
+    cone_size = 0.9  # length of each arrow in lattice units
+    cone_kwargs = {
+        "sizemode": "absolute",
+        "sizeref": cone_size,
+        "anchor": "tail",
+        "showscale": False,
+    }
+
+    if up_mask.any():
+        fig.add_trace(
+            go.Cone(
+                x=xs[up_mask],
+                y=ys[up_mask],
+                z=zs[up_mask] - cone_size / 2,
+                u=np.zeros(up_mask.sum()),
+                v=np.zeros(up_mask.sum()),
+                w=np.full(up_mask.sum(), 1.0),
+                colorscale=[[0, _SPIN_UP_COLOR], [1, _SPIN_UP_COLOR]],
+                cmin=0,
+                cmax=1,
+                hovertemplate="(%{x:.0f}, %{y:.0f}, %{z:.0f}) · ↑ +1<extra></extra>",
+                name="↑ +1",
+                showlegend=True,
+                **cone_kwargs,
+            )
+        )
+    if down_mask.any():
+        fig.add_trace(
+            go.Cone(
+                x=xs[down_mask],
+                y=ys[down_mask],
+                z=zs[down_mask] + cone_size / 2,
+                u=np.zeros(down_mask.sum()),
+                v=np.zeros(down_mask.sum()),
+                w=np.full(down_mask.sum(), -1.0),
+                colorscale=[[0, _SPIN_DOWN_COLOR], [1, _SPIN_DOWN_COLOR]],
+                cmin=0,
+                cmax=1,
+                hovertemplate="(%{x:.0f}, %{y:.0f}, %{z:.0f}) · ↓ −1<extra></extra>",
+                name="↓ −1",
+                showlegend=True,
+                **cone_kwargs,
+            )
+        )
+
+    # Optional frustration overlay: invisible scatter markers coloured
+    # by local energy. Cheaper than recolouring the cones (Plotly Cone
+    # does not let us mix colorscales per-cone) and still visible in the
+    # 3-D scene.
+    if show_frustration and J is not None:
+        local_energy = -s * (J @ s)
+        emax = float(np.abs(local_energy).max() + 1e-9)
+        fig.add_trace(
+            go.Scatter3d(
+                x=xs,
+                y=ys,
+                z=zs,
+                mode="markers",
+                marker={
+                    "size": 5,
+                    "color": local_energy,
+                    "colorscale": "RdBu",
+                    "cmin": -emax,
+                    "cmax": emax,
+                    "opacity": 0.9,
+                    "colorbar": {
+                        "title": "−s·Σ Js  (warm = frustrated)",
+                        "thickness": 12,
+                        "len": 0.6,
+                    },
+                },
+                hovertemplate=(
+                    "site (%{x:.0f}, %{y:.0f}, %{z:.0f})<br>"
+                    "local energy %{marker.color:+.3f}<extra></extra>"
+                ),
+                showlegend=False,
+            )
+        )
+
+    fig.update_layout(
+        title={"text": title, "x": 0.5},
+        height=600,
+        margin={"l": 0, "r": 0, "t": 60, "b": 0},
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        scene={
+            "xaxis": {
+                "title": "x",
+                "showbackground": False,
+                "gridcolor": hex_to_rgba(p["muted"], 0.18),
+                "zerolinecolor": hex_to_rgba(p["muted"], 0.30),
+                "showspikes": False,
+                "range": [-0.5, L - 0.5],
+            },
+            "yaxis": {
+                "title": "y",
+                "showbackground": False,
+                "gridcolor": hex_to_rgba(p["muted"], 0.18),
+                "zerolinecolor": hex_to_rgba(p["muted"], 0.30),
+                "showspikes": False,
+                "range": [-0.5, L - 0.5],
+            },
+            "zaxis": {
+                "title": "z",
+                "showbackground": False,
+                "gridcolor": hex_to_rgba(p["muted"], 0.18),
+                "zerolinecolor": hex_to_rgba(p["muted"], 0.30),
+                "showspikes": False,
+                "range": [-0.5, L - 0.5],
+            },
+            "aspectmode": "cube",
+            "camera": {"eye": {"x": 1.7, "y": 1.7, "z": 1.0}},
+            "bgcolor": "rgba(0,0,0,0)",
+        },
+        legend={"x": 0.01, "y": 0.99},
+    )
+    return fig
+
+
 def render_ea(problem, result, cfg) -> None:
     s = _as_numpy(result.best_sol).astype(float).reshape(-1)
     s = np.where(s >= 0, 1, -1)
@@ -1028,45 +1222,98 @@ def render_ea(problem, result, cfg) -> None:
     N = len(s)
     mag = float(s.mean())
     n_up = int((s > 0).sum())
+    title_chips = (
+        f"<span style='color:{_SPIN_UP_COLOR}'>↑ {n_up}</span>"
+        f" · <span style='color:{_SPIN_DOWN_COLOR}'>↓ {N - n_up}</span>"
+    )
 
     if dim == 2 and L * L == N:
         fig = _ea_2d_arrow_figure(
-            s,
-            L,
-            title=(
-                f"EA spin glass · 2D {L}×{L} · m={mag:+.3f}  "
-                f"<span style='color:{_SPIN_UP_COLOR}'>↑ {n_up}</span>"
-                f" · <span style='color:{_SPIN_DOWN_COLOR}'>↓ {N - n_up}</span>"
-            ),
+            s, L, title=f"EA spin glass · 2D {L}×{L} · m={mag:+.3f}  {title_chips}"
         )
         _render(fig, key="soln_ea_2d_arrows")
         return
 
     if dim == 3 and L**3 == N:
-        # Show every z-slice as its own arrow plot, side-by-side.  For
-        # large L (≳ 16) cap the number of slices so the page stays snappy.
-        max_slices = 6
-        z_indices = list(range(L))
-        if max_slices < L:
-            z_indices = list(np.linspace(0, L - 1, max_slices, dtype=int))
-        st.markdown(
-            f"<div style='font-size:0.9rem; color:#64748b;'>EA 3D · L={L} · "
-            f"slices z = {z_indices} · m={mag:+.3f}</div>",
-            unsafe_allow_html=True,
-        )
-        cube = s.reshape(L, L, L)
-        cols = st.columns(min(3, len(z_indices)))
-        for i, z in enumerate(z_indices):
-            slice_2d = cube[:, :, z].reshape(-1)
-            with cols[i % len(cols)]:
-                fig = _ea_2d_arrow_figure(
-                    slice_2d,
-                    L,
-                    title=f"z = {z}  ·  m_slice = {slice_2d.mean():+.3f}",
+        # 3-D cone field — the headline view. Big lattices (L > 16) are
+        # downsampled to keep the trace count under a few thousand cones
+        # which is comfortable for the WebGL renderer.
+        if L > 16:
+            stride = int(np.ceil(L / 16))
+            cube = s.reshape(L, L, L)[::stride, ::stride, ::stride]
+            L_show = cube.shape[0]
+            s_show = cube.reshape(-1)
+            sub_title = f"(downsampled stride={stride})"
+        else:
+            L_show = L
+            s_show = s
+            sub_title = ""
+
+        with st.container():
+            colA, colB = st.columns([3, 1])
+            with colB:
+                show_frustration = st.toggle(
+                    "Frustration overlay",
+                    value=False,
+                    key="ea3d_frustration",
+                    help="Colour each site by its local energy contribution "
+                    "(positive = frustrated). Requires J access.",
                 )
-                # Compact slice cards
-                fig.update_layout(height=320, margin={"l": 20, "r": 20, "t": 40, "b": 20})
-                _render(fig, key=f"soln_ea_slice_z{z}")
+                show_bonds = st.toggle(
+                    "Show bonds",
+                    value=True,
+                    key="ea3d_bonds",
+                    help="Faint nearest-neighbour bonds — turn off for a cleaner cone field.",
+                )
+
+            J_dense = None
+            if show_frustration:
+                try:
+                    J_attr = getattr(problem, "J", None)
+                    if J_attr is not None:
+                        J_dense = (
+                            J_attr.detach().cpu().numpy()
+                            if hasattr(J_attr, "detach")
+                            else np.asarray(J_attr)
+                        )
+                        if L_show != L:
+                            # Frustration overlay is meaningless on the
+                            # downsampled grid, fall back to spin colouring.
+                            J_dense = None
+                            show_frustration = False
+                except Exception:
+                    show_frustration = False
+
+            fig = _ea_3d_cone_figure(
+                s_show,
+                L_show,
+                J=J_dense,
+                title=(
+                    f"EA spin glass · 3D {L}<sup>3</sup> · m={mag:+.3f}  {title_chips}  {sub_title}"
+                ),
+                show_bonds=show_bonds,
+                show_frustration=show_frustration,
+            )
+            with colA:
+                _render(fig, key="soln_ea_3d_cones")
+
+        with st.expander("Z-slice cross-sections", expanded=False):
+            cube = s.reshape(L, L, L)
+            max_slices = 6
+            z_indices = list(range(L))
+            if max_slices < L:
+                z_indices = list(np.linspace(0, L - 1, max_slices, dtype=int))
+            cols = st.columns(min(3, len(z_indices)))
+            for i, z in enumerate(z_indices):
+                slice_2d = cube[:, :, z].reshape(-1)
+                with cols[i % len(cols)]:
+                    fig = _ea_2d_arrow_figure(
+                        slice_2d,
+                        L,
+                        title=f"z = {z}  ·  m_slice = {slice_2d.mean():+.3f}",
+                    )
+                    fig.update_layout(height=320, margin={"l": 20, "r": 20, "t": 40, "b": 20})
+                    _render(fig, key=f"soln_ea_slice_z{z}")
         return
 
     # Fallback: arrange on a single circle.

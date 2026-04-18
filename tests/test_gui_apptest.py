@@ -112,12 +112,17 @@ def test_solve_page_widgets_present():
 
 
 def test_visualize_page_handles_missing_run():
-    """Visualize page without any run should warn, not crash."""
+    """Visualize page without any run should show a branded empty-state
+    card with a CTA pointing at Solve, and must not crash."""
     at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=60)
     at.run()
     assert not at.exception
-    warnings = [w.body for w in at.warning]
-    assert any("Solve page" in w for w in warnings)
+    # The card body is rendered through st.markdown — collect the html
+    # blocks and assert the "Solve" CTA appears somewhere on the page.
+    md_blobs = [m.value for m in at.markdown]
+    assert any("Solve" in blob for blob in md_blobs), (
+        "Empty-state card should mention Solve as the next step."
+    )
 
 
 def _set_slider(at, label_fragment: str, value) -> None:
