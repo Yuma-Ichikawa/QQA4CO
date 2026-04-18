@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use QQA in your research, please cite the paper below."
+title: "QQA: Quasi-Quantum Annealing for Combinatorial Optimization"
+authors:
+  - family-names: Ichikawa
+    given-names: Yuma
+  - family-names: Arai
+    given-names: Yamato
+repository-code: "https://github.com/Yuma-Ichikawa/QQA4CO"
+license: BSD-3-Clause
+version: 0.3.0
+preferred-citation:
+  type: conference-paper
+  title: "Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization"
+  authors:
+    - family-names: Ichikawa
+      given-names: Yuma
+    - family-names: Arai
+      given-names: Yamato
+  conference:
+    name: "International Conference on Learning Representations (ICLR)"
+  year: 2025
+  url: "https://openreview.net/forum?id=9EfBeXaXf0"

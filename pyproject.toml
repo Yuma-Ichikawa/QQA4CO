@@ -1,0 +1,112 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "qqa"
+version = "0.3.0"
+description = "Quasi-Quantum Annealing (QQA): a general-purpose GPU solver for combinatorial and spin-glass optimization."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENCE.txt" }
+authors = [
+    { name = "Yuma Ichikawa" },
+    { name = "Yamato Arai" },
+]
+keywords = [
+    "optimization",
+    "combinatorial-optimization",
+    "annealing",
+    "spin-glass",
+    "ising",
+    "perceptron",
+    "hopfield",
+    "pytorch",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "torch>=2.1",
+    "numpy>=1.24",
+    "networkx>=3.1",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+plotly = ["plotly>=5.17", "pandas>=2.0"]
+gui = ["streamlit>=1.30", "plotly>=5.17", "pandas>=2.0"]
+docs = [
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.24",
+    "pymdown-extensions>=10",
+]
+notebook = ["jupyterlab>=4", "ipykernel>=6", "nbformat>=5"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "pre-commit>=3.6",
+    "nbval>=0.11",
+    "requests>=2.31",
+]
+all = [
+    "qqa[plotly,gui,docs,notebook,dev]",
+]
+
+[project.scripts]
+qqa = "qqa.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Yuma-Ichikawa/QQA4CO"
+Paper = "https://openreview.net/forum?id=9EfBeXaXf0"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qqa"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/qqa",
+    "README.md",
+    "LICENCE.txt",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "pre-commit>=3.6",
+    "nbval>=0.11",
+    "requests>=2.31",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore::DeprecationWarning:qqa.legacy",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+"examples/*" = ["E402", "F401"]
+"app/*" = ["E402"]
