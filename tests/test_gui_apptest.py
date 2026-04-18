@@ -59,6 +59,21 @@ def test_home_page_custom_problem_flow():
     assert "source" in cfg["extra"]
     # The snippet executes without raising.
 
+    # The preview panel must succeed end-to-end. Regression: previously the
+    # preview called ``problem.relaxation(x)`` which raised
+    # "'SpinRelaxation' object is not callable" and rendered as an st.error
+    # under the Preview heading. AppTest does not raise on st.error, so we
+    # have to inspect the rendered error elements explicitly.
+    error_bodies = [getattr(e, "body", "") or getattr(e, "value", "") for e in at.error]
+    assert not any("loss_fn raised" in (b or "") for b in error_bodies), (
+        f"Custom problem preview surfaced an error: {error_bodies!r}"
+    )
+    success_bodies = [getattr(s, "body", "") or getattr(s, "value", "") for s in at.success]
+    assert any("loss_fn output shape" in (b or "") for b in success_bodies), (
+        "Custom problem preview did not display the expected success banner; "
+        f"got success bodies={success_bodies!r}"
+    )
+
     # Fallback: import via the same mechanism streamlit_app uses.
     import sys
 
