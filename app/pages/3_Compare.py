@@ -9,12 +9,26 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import streamlit as st  # noqa: E402
-from _common import apply_theme, build_problem  # noqa: E402
+from _common import (  # noqa: E402
+    apply_theme,
+    build_problem,
+    plotly_layout,
+    theme_toggle_in_sidebar,
+)
 
 import qqa  # noqa: E402
 from qqa import visualization as viz  # noqa: E402
 
+
+def _retheme(fig):
+    try:
+        fig.update_layout(**plotly_layout())
+    except Exception:
+        pass
+    return fig
+
 st.set_page_config(page_title="Compare — QQA", page_icon="⚛️", layout="wide")
+theme_toggle_in_sidebar()
 apply_theme()
 st.title("Compare")
 
@@ -81,10 +95,10 @@ if run:
         df = pd.DataFrame(rows)
         fig = viz.plot_parallel_coordinates(df, objective="best_obj", backend="plotly", show=False)
         st.subheader("Parallel coordinates")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(_retheme(fig), use_container_width=True)
     except Exception as e:
         st.info(f"Parallel-coordinates unavailable: {e}")
 
     st.subheader("Run comparison")
     fig2 = viz.plot_run_comparison(results, labels=labels, backend="plotly", show=False)
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(_retheme(fig2), use_container_width=True)

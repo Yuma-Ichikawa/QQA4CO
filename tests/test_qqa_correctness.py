@@ -103,8 +103,9 @@ def test_binary_perceptron_reaches_zero_errors():
     N, alpha = 24, 0.4
     problem = qqa.BinaryPerceptron(N=N, alpha=alpha, seed=0, sharpness=8.0)
     result = qqa.anneal(problem, sol_size=128, num_epochs=800, verbose=False)
-    best_sol = result.best_sol.detach().cpu()
-    best_sol = problem.relaxation.project(best_sol)
+    # ``best_sol`` is the single winning replica of shape ``(N,)``; add a
+    # leading batch dim so ``error_count`` (which expects ``(B, N)``) works.
+    best_sol = problem.relaxation.project(result.best_sol.detach().cpu()).unsqueeze(0)
     errors = int(problem.error_count(best_sol).min().item())
     assert errors == 0, f"Perceptron left {errors} errors; expected 0."
 
@@ -114,8 +115,8 @@ def test_hopfield_recovers_stored_pattern():
     N = 32
     problem = qqa.HopfieldMemory(N=N, patterns=1, seed=0)
     result = qqa.anneal(problem, sol_size=64, num_epochs=500, verbose=False)
-    s_best = problem.relaxation.project(result.best_sol.detach().cpu())  # (B, N)
-    overlaps = problem.overlap(s_best.to(problem.J.device)).abs()  # (B, P)
+    s_best = problem.relaxation.project(result.best_sol.detach().cpu()).unsqueeze(0)
+    overlaps = problem.overlap(s_best.to(problem.J.device)).abs()
     m = overlaps.max().item()
     assert m >= 0.95, f"Max overlap {m:.3f} below stored-pattern threshold."
 

@@ -60,7 +60,11 @@ class BinaryRelaxation:
         return x
 
     def project(self, x):
-        return x.round()
+        # AdamW can push ``x`` far outside ``[0, 1]`` during early epochs, and
+        # plain ``round()`` preserves that drift (round(-5) = -5). Clamping
+        # first guarantees the discrete projection lives in ``{0, 1}`` so
+        # problem losses evaluated on it remain meaningful.
+        return x.clamp(0.0, 1.0).round()
 
     def penalty(self, x, curve_rate):
         # Sum across variable axes (keep leading batch axes intact).

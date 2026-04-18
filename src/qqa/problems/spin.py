@@ -56,6 +56,20 @@ class SpinProblem(COProblem):
     def loss_fn(self, s: torch.Tensor) -> torch.Tensor:
         return self.quadratic_energy(s)
 
+    def score_summary(self, s_disc: torch.Tensor) -> dict:
+        s = s_disc if s_disc.ndim == 2 else s_disc.unsqueeze(0)
+        with torch.no_grad():
+            e = self.loss_fn(s.float())
+        idx = int(torch.argmin(e).item())
+        e_best = float(e[idx].item())
+        return {
+            "label": "energy / spin",
+            "value": e_best / self.num_spins,
+            "unit": "",
+            "feasible": True,
+            "extra": {"total_energy": e_best, "N": self.num_spins},
+        }
+
 
 # ---------------------------------------------------------------------------
 # 1D Ising model
@@ -343,6 +357,20 @@ class BinaryPerceptron(SpinProblem):
             z = self._field(s)
             return (z < 0).sum(dim=1)
 
+    def score_summary(self, s_disc: torch.Tensor) -> dict:
+        s = s_disc if s_disc.ndim == 2 else s_disc.unsqueeze(0)
+        with torch.no_grad():
+            errs = self.error_count(s.float())
+        idx = int(torch.argmin(errs).item())
+        err = int(errs[idx].item())
+        return {
+            "label": "patterns classified",
+            "value": self.num_patterns - err,
+            "unit": f"/ {self.num_patterns}",
+            "feasible": err == 0,
+            "extra": {"alpha": self.alpha, "N": self.num_spins},
+        }
+
 
 # ---------------------------------------------------------------------------
 # Hopfield associative memory
@@ -401,3 +429,20 @@ class HopfieldMemory(SpinProblem):
         ``m^\\mu_b = (1/N) \\sum_i \\xi^\\mu_i s_{b,i}``.
         """
         return torch.einsum("pi,bi->bp", self.patterns, s) / self.num_spins
+
+    def score_summary(self, s_disc: torch.Tensor) -> dict:
+        s = s_disc if s_disc.ndim == 2 else s_disc.unsqueeze(0)
+        with torch.no_grad():
+            e = self.loss_fn(s.float())
+            ov = self.overlap(s.float()).abs().max(dim=1).values
+        idx = int(torch.argmin(e).item())
+        return {
+            "label": "max |overlap|",
+            "value": float(ov[idx].item()),
+            "unit": "",
+            "feasible": True,
+            "extra": {
+                "energy_per_spin": float(e[idx].item()) / self.num_spins,
+                "patterns_stored": self.num_patterns,
+            },
+        }

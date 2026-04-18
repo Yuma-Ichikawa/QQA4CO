@@ -4,12 +4,12 @@
 # paint (before custom CSS kicks in) is already on-brand.
 
 [theme]
-base = "dark"
-primaryColor = "#38bdf8"
-backgroundColor = "#05060a"
-secondaryBackgroundColor = "#0b1120"
-textColor = "#e2e8f0"
-font = "sans serif"
+base = "light"
+primaryColor = "#0f766e"
+backgroundColor = "#fbfaf6"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+font = "serif"
 
 [server]
 maxUploadSize = 20

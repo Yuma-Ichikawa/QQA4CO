@@ -55,6 +55,25 @@ class BalancedGraphPartition(COProblem):
             (1 - torch.sum(x, dim=1) / (self.num_node / self.num_category)) ** 2, dim=1
         )
 
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x = x_disc if x_disc.ndim == 3 else x_disc.unsqueeze(0)
+        with torch.no_grad():
+            xd = x.float()
+            cut = self.num_edge - torch.sum(
+                torch.einsum("bis,ij,bjs->bs", xd, self.adj, xd) / 2, dim=1
+            )
+            sizes = xd.sum(dim=1)  # (B, K)
+            target = self.num_node / self.num_category
+            imbalance = (sizes - target).abs().max(dim=1).values
+        idx = int(torch.argmin(cut).item())
+        return {
+            "label": "edge cut",
+            "value": int(cut[idx].item()),
+            "unit": f"/ {self.num_edge}",
+            "feasible": bool(imbalance[idx].item() <= 1),
+            "extra": {"max_imbalance": float(imbalance[idx].item())},
+        }
+
 
 class Coloring(COProblem):
     """K-coloring: counts same-colour adjacent pairs (``0`` iff proper)."""
@@ -79,3 +98,18 @@ class Coloring(COProblem):
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         return torch.sum(torch.einsum("bis,ij,bjs->bs", x, self.adj, x) / 2, dim=1)
+
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x = x_disc if x_disc.ndim == 3 else x_disc.unsqueeze(0)
+        with torch.no_grad():
+            conflicts = self.loss_fn(x.float())
+            used_colors = (x.sum(dim=1) > 0).sum(dim=1)
+        idx = int(torch.argmin(conflicts).item())
+        conf = int(conflicts[idx].item())
+        return {
+            "label": "conflicts",
+            "value": conf,
+            "unit": "",
+            "feasible": conf == 0,
+            "extra": {"colors_used": int(used_colors[idx].item()), "K": self.num_category},
+        }

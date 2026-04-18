@@ -49,6 +49,15 @@ def build_parser() -> argparse.ArgumentParser:
             "sk",
             "perceptron",
             "hopfield",
+            # New (v0.4+) problems.
+            "knapsack",
+            "number_partition",
+            "vertex_cover",
+            "graph_bisection",
+            "maxsat3",
+            "tsp",
+            "qap",
+            "nqueens",
         ],
         help="Problem family. Mutually exclusive with --problem-file.",
     )
@@ -172,6 +181,27 @@ def _build_problem(args: argparse.Namespace):
         return qqa.HopfieldMemory(
             N=args.size, patterns=args.patterns, seed=args.seed, device=device
         )
+
+    # New Phase-A problems.
+    if kind == "knapsack":
+        return qqa.Knapsack(N=args.size, seed=args.seed, device=device)
+    if kind == "number_partition":
+        return qqa.NumberPartitioning(N=args.size, seed=args.seed, device=device)
+    if kind == "vertex_cover":
+        g = nx.random_regular_graph(d=3, n=args.size, seed=args.seed)
+        return qqa.VertexCover(g, device=device)
+    if kind == "graph_bisection":
+        g = nx.random_regular_graph(d=3, n=args.size, seed=args.seed)
+        return qqa.GraphBisection(g, device=device)
+    if kind == "maxsat3":
+        return qqa.MaxSAT3(N=args.size, seed=args.seed, device=device)
+    if kind == "tsp":
+        return qqa.TSP(N=args.size, seed=args.seed, device=device)
+    if kind == "qap":
+        return qqa.QAP(N=args.size, seed=args.seed, device=device)
+    if kind == "nqueens":
+        return qqa.NQueens(N=args.size, device=device)
+
     raise ValueError(f"Unknown problem kind {kind!r}.")
 
 
@@ -203,6 +233,12 @@ def _cmd_solve(args: argparse.Namespace) -> int:
     print(f"problem    : {label}")
     print(f"size       : {size}")
     print(f"best_obj   : {result.best_obj}")
+    if result.score:
+        score = result.score
+        feas = "feasible" if score.get("feasible", True) else "INFEASIBLE"
+        unit = score.get("unit", "")
+        val = score.get("value")
+        print(f"{score.get('label', 'score'):<11}: {val} {unit} [{feas}]")
     print(f"runtime    : {result.runtime:.2f} s")
     if args.output:
         out = Path(args.output).expanduser().resolve()
