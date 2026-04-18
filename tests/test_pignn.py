@@ -134,6 +134,49 @@ def test_pignn_smoke_maxcut():
     assert result.score["value"] >= 10
 
 
+def test_pignn_smoke_vertex_cover():
+    """``VertexCover`` stores its graph on ``problem.graph`` (not ``nx_graph``).
+
+    Regression guard: the original ``extract_nx_graph`` only checked for
+    ``nx_graph`` and silently broke for VertexCover / GraphBisection even
+    though the CLI advertised them as supported. Keep this test cheap.
+    """
+    qqa.fix_seed(0)
+    g = nx.random_regular_graph(d=3, n=20, seed=0)
+    problem = qqa.VertexCover(g, penalty=4.0, device="cpu")
+    result = train_cra_pi_gnn(
+        problem,
+        learning_rate=1e-3,
+        init_reg_param=-2.0,
+        annealing_rate=5e-4,
+        num_epochs=300,
+        check_interval=10_000,
+        verbose=False,
+        seed=0,
+    )
+    assert torch.is_tensor(result.best_sol)
+    assert result.best_sol.shape == (20,)
+
+
+def test_pignn_smoke_graph_bisection():
+    """``GraphBisection`` also stores its graph on ``problem.graph``."""
+    qqa.fix_seed(0)
+    g = nx.random_regular_graph(d=3, n=20, seed=0)
+    problem = qqa.GraphBisection(g, balance_penalty=1.0, device="cpu")
+    result = train_cra_pi_gnn(
+        problem,
+        learning_rate=1e-3,
+        init_reg_param=-2.0,
+        annealing_rate=5e-4,
+        num_epochs=300,
+        check_interval=10_000,
+        verbose=False,
+        seed=0,
+    )
+    assert torch.is_tensor(result.best_sol)
+    assert result.best_sol.shape == (20,)
+
+
 def test_gcn_net_forward_shape():
     g = nx.cycle_graph(8)
     from qqa.pignn.graph import nx_to_edge_index

@@ -1,8 +1,11 @@
-# QQA — Quasi-Quantum Annealing
+# QQA4CO — Parallel Quasi-Quantum Annealing for Combinatorial Optimisation
 
-PyTorch implementation of the ICLR 2025 paper
-**[Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization](https://openreview.net/forum?id=9EfBeXaXf0)**
-by Yuma Ichikawa and Yamato Arai.
+A research-grade PyTorch toolkit organised around **Parallel Quasi-Quantum
+Annealing (PQQA)** — a gradient-based, GPU-friendly framework for
+combinatorial optimisation (CO) that unifies several recent
+unsupervised-learning solvers under a single API. One installation gives you
+the PQQA solver, an optional GNN backend that plugs in CRA-PI-GNN-style
+methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
 
 <p align="center">
   <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/v/qqa.svg?logo=pypi&logoColor=white&label=PyPI" alt="PyPI version"></a>
@@ -24,20 +27,61 @@ by Yuma Ichikawa and Yamato Arai.
   <img src="data/fig/demo.gif" width="420" alt="QQA dashboard demo">
 </p>
 
-QQA relaxes a discrete problem to a continuous, differentiable objective and
-anneals towards a discrete minimum using gradient-based sampling. A single
-loop handles classical combinatorial problems (MIS, Max-Cut, coloring, TSP,
-…) and statistical-physics spin systems (Ising, Edwards–Anderson, SK, binary
-perceptron, Hopfield).
+## What's in the box
 
-**Highlights**
+1. **The PQQA solver** (`qqa.anneal`) — a parallel, population-based annealer
+   that lifts any QUBO / Ising / categorical / permutation problem into a
+   continuous relaxation and minimises it with gradient descent + diversity
+   regularisation. CPU / CUDA / MPS, deterministic with `qqa.fix_seed`.
+2. **A 17-class problem catalogue** spanning QUBO graphs (MIS, Max-Cut,
+   MaxClique, Vertex Cover, Graph Bisection), classic CO (Knapsack,
+   NumberPartitioning, MaxSAT3), permutation problems (TSP, QAP, NQueens),
+   colouring, spin glasses (1D Ising, Edwards-Anderson 2D/3D, SK) and
+   statistical-physics models (BinaryPerceptron, HopfieldMemory). Every class
+   implements the same `loss_fn` / `score_summary` contract, so the solver,
+   CLI and dashboard are completely problem-agnostic.
+3. **An optional GNN backend** (`qqa.pignn`, install with `qqa[pignn]`) that
+   plugs **GNN-based unsupervised-learning CO solvers** into the same API.
+   PQQA, the **CRA-PI-GNN** baseline (NeurIPS 2024) and the **CPRA**
+   diverse-solution framework (TMLR 2025) all share `AnnealResult`,
+   `score_summary`, the same problem builders and the same CLI flags — A/B
+   comparing methods is one `--backend` switch away.
+4. **A polished Streamlit dashboard** (light / dark, live progress, parallel
+   population view, per-problem solution viz, hyper-parameter sweeps) and a
+   `qqa` **CLI** (`solve / bench / gui / version`) for reproducible
+   experiments. A hosted instance lives at
+   <https://parallelquasiquantum4co.streamlit.app/>.
+5. **MkDocs + Material reference docs** with auto-generated API pages, a
+   runnable `examples/` notebook gallery (Open-in-Colab badges) and a
+   `scripts/verify_all_problems.py` correctness sweep that benchmarks every
+   problem against ground truth or a strong baseline (29 / 29 instances pass
+   in the latest sweep — see [`docs/verification.md`](docs/verification.md)).
 
-- One unified API — `qqa.anneal(problem, ...)` for every problem.
-- Rich problem catalog out of the box: 17 classes across 7 categories.
-- Matplotlib and Plotly backends; Plotly is optional.
-- CLI: `qqa solve / bench / gui / version`.
-- Streamlit dashboard with live progress, sweeps, and an academic light/dark theme.
-- MkDocs + Material documentation with auto-generated API reference.
+## Reference papers
+
+QQA4CO implements and unifies the following peer-reviewed work:
+
+1. **Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling**
+   — Yuma Ichikawa.
+   *International Conference on Learning Representations (ICLR), 2025.*
+   [[OpenReview](https://openreview.net/forum?id=9EfBeXaXf0)]
+   The headline **PQQA** algorithm — parallel quasi-quantum annealing with
+   gradient-based sampling. Implemented as `qqa.anneal`.
+
+2. **Continuous Parallel Relaxation for Finding Diverse Solutions in Combinatorial Optimization Problems**
+   — Yuma Ichikawa, Hiroaki Iwashita.
+   *Transactions on Machine Learning Research (TMLR), 2025.*
+   [[OpenReview](https://openreview.net/forum?id=ix33zd5zCw)]
+   The **CPRA** framework — generates penalty- and structure-diversified
+   solutions from a single training run.
+
+3. **Controlling Continuous Relaxation for Combinatorial Optimization**
+   — Yuma Ichikawa.
+   *Neural Information Processing Systems (NeurIPS), 2024.*
+   [[OpenReview](https://openreview.net/forum?id=ykACV1IhjD)]
+   · [[NeurIPS poster](https://neurips.cc/virtual/2024/poster/92998)]
+   The **CRA-PI-GNN** GNN-based unsupervised-learning solver. Ported to
+   PyTorch Geometric and exposed under `qqa.pignn`.
 
 ---
 
@@ -370,6 +414,12 @@ reference, and a migration guide from 0.2.x.
 
 Run any script via `uv run python scripts/<name>.py`.
 
+## Notebooks
+
+| Notebook                              | Purpose                                                                                                                       |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `notebooks/cra_pignn_example.ipynb`   | Walkthrough of the optional **CRA-PI-GNN** (PyTorch Geometric) backend on all five supported graph problems (MIS, MaxCut, MaxClique, VertexCover, GraphBisection) with side-by-side `qqa.anneal` runs. Requires the `pignn` extra. |
+
 ## Repository layout
 
 ```
@@ -397,17 +447,31 @@ BSD-3-Clause — see [`LICENCE.txt`](LICENCE.txt).
 
 ## Cite
 
+If you use the **PQQA** solver (`qqa.anneal`), please cite:
+
 ```bibtex
-@inproceedings{ichikawa2025qqa,
-  title     = {Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization},
-  author    = {Ichikawa, Yuma and Arai, Yamato},
+@inproceedings{ichikawa2025pqqa,
+  title     = {Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling},
+  author    = {Ichikawa, Yuma},
   booktitle = {International Conference on Learning Representations (ICLR)},
   year      = {2025},
   url       = {https://openreview.net/forum?id=9EfBeXaXf0}
 }
 ```
 
-If you use the optional CRA-PI-GNN backend (`qqa.pignn`), please **also**
+If you use the **CPRA** diverse-solution framework, please cite:
+
+```bibtex
+@article{ichikawa2025cpra,
+  title   = {Continuous Parallel Relaxation for Finding Diverse Solutions in Combinatorial Optimization Problems},
+  author  = {Ichikawa, Yuma and Iwashita, Hiroaki},
+  journal = {Transactions on Machine Learning Research (TMLR)},
+  year    = {2025},
+  url     = {https://openreview.net/forum?id=ix33zd5zCw}
+}
+```
+
+If you use the optional **CRA-PI-GNN** backend (`qqa.pignn`), please **also**
 cite the original paper and the reference DGL implementation it was ported
 from:
 
