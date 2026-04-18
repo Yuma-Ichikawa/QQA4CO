@@ -15,6 +15,7 @@ from _common import (  # noqa: E402
     apply_theme,
     build_problem,
     get_theme,
+    hex_to_rgba,
     palette,
     plotly_layout,
     render_score_card,
@@ -94,13 +95,14 @@ class StreamlitCallback(Callback):
         self.progress_bar.progress(min(1.0, (epoch + 1) / total))
         elapsed = time.time() - self._start
         with self.metrics_holder.container():
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("epoch", f"{epoch + 1} / {total}")
-            c2.metric("best / replica", f"{self.best[-1]:.4f}")
-            c3.metric("mean / replica", f"{self.mean_loss[-1]:.4f}")
-            c4.metric("σ across replicas", f"{self.std_loss[-1]:.4f}")
-            c5.metric("bg", f"{state.bg:.3f}")
-            c6.metric("elapsed", f"{elapsed:.1f}s")
+            r1c1, r1c2, r1c3 = st.columns(3)
+            r1c1.metric("epoch", f"{epoch + 1} / {total}")
+            r1c2.metric("best", f"{self.best[-1]:.4g}")
+            r1c3.metric("mean", f"{self.mean_loss[-1]:.4g}")
+            r2c1, r2c2, r2c3 = st.columns(3)
+            r2c1.metric("σ (replicas)", f"{self.std_loss[-1]:.4g}")
+            r2c2.metric("bg", f"{state.bg:.3f}")
+            r2c3.metric("elapsed", f"{elapsed:.1f}s")
 
         p = palette()
         theme = get_theme()
@@ -114,7 +116,7 @@ class StreamlitCallback(Callback):
                 x=self.epochs + self.epochs[::-1],
                 y=np.concatenate([mean_arr + std_arr, (mean_arr - std_arr)[::-1]]).tolist(),
                 fill="toself",
-                fillcolor=p["palette"][0] + ("22" if theme == "light" else "33"),
+                fillcolor=hex_to_rgba(p["palette"][0], 0.13 if theme == "light" else 0.20),
                 line={"color": "rgba(0,0,0,0)"},
                 hoverinfo="skip",
                 showlegend=False,
@@ -205,7 +207,7 @@ class StreamlitCallback(Callback):
                 mode="lines",
                 fill="tozeroy",
                 line={"color": p["palette"][2], "width": 2},
-                fillcolor=p["palette"][2] + ("33" if theme == "light" else "55"),
+                fillcolor=hex_to_rgba(p["palette"][2], 0.20 if theme == "light" else 0.33),
                 name="loss σ",
             )
         )

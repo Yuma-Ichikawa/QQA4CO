@@ -74,7 +74,12 @@ qqa = "qqa.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/Yuma-Ichikawa/QQA4CO"
+Repository = "https://github.com/Yuma-Ichikawa/QQA4CO"
+Documentation = "https://yuma-ichikawa.github.io/QQA4CO/"
+Issues = "https://github.com/Yuma-Ichikawa/QQA4CO/issues"
+Changelog = "https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/CHANGELOG.md"
 Paper = "https://openreview.net/forum?id=9EfBeXaXf0"
+"Live Demo" = "https://parallelquasiquantum4co.streamlit.app/"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/qqa"]

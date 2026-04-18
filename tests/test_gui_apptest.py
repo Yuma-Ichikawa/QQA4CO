@@ -93,3 +93,47 @@ def test_visualize_page_handles_missing_run():
     assert not at.exception
     warnings = [w.body for w in at.warning]
     assert any("Solve page" in w for w in warnings)
+
+
+def _set_slider(at, label_fragment: str, value) -> None:
+    """Set the slider whose label contains ``label_fragment`` to ``value``."""
+    matches = [s for s in at.sidebar.slider if label_fragment in s.label]
+    assert matches, f"No slider whose label contains {label_fragment!r}"
+    matches[0].set_value(value)
+
+
+def test_solve_page_end_to_end_run():
+    """Full Solve flow: wire up a tiny problem and click Run.
+
+    Exercises the live-callback path (Plotly fillcolor validation, metric
+    tiles, population heatmap, diversity curve, and the final score card).
+    A previous regression fed Plotly an 8-hex colour ('#RRGGBBAA') and only
+    surfaced at runtime; this test pins the contract.
+    """
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=90)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 8,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    # Shrink every slider so the test runs in a few seconds.
+    _set_slider(at, "sol_size", 4)
+    _set_slider(at, "epochs", 100)
+    _set_slider(at, "UI update every", 10)
+    at.run()
+    assert not at.exception, at.exception
+
+    runs = [b for b in at.button if "Run" in b.label]
+    assert runs, "Run QQA button missing"
+    runs[0].click()
+    at.run()
+
+    assert not at.exception, at.exception
+    # Success is observable as either the score card or the raw-loss caption.
+    texts = " ".join([m.value for m in at.markdown if m.value])
+    assert "qqa-score" in texts or "energy" in texts.lower() or "raw loss" in texts
