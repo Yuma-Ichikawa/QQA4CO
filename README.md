@@ -175,15 +175,107 @@ Supported problems for the PyG backend: `mis`, `maxcut`, `maxclique`,
 `vertex_cover`, `graph_bisection` (anything QUBO-on-a-graph). For spin
 glasses, TSP, perceptron, etc. use the default `qqa.anneal`.
 
+### CPRA — diverse solutions in a single run (TMLR 2025)
+
+The same `qqa[pignn]` extra also installs **CPRA** (Continual Parallel
+Relaxation Annealing) from Ichikawa & Iwashita, *TMLR 2025* —
+*"Continuous Parallel Relaxation for Finding Diverse Solutions in
+Combinatorial Optimization Problems"*
+([paper](https://openreview.net/forum?id=ix33zd5zCw),
+[reference repo](https://github.com/Yuma-Ichikawa/CPRA4CO)). CPRA shares
+QQA4CO's GCN backbone with CRA-PI-GNN but exposes `R` parallel output
+heads, so a single training run produces `R` diverse continuous
+solutions. Two diversification regimes are supported out of the box:
+
+- **Penalty diversification** — pass one problem instance per replica
+  (e.g. MIS with different penalty weights) to sweep a hyperparameter
+  in one shot instead of training `R` separate models.
+- **Variation diversification** — leave `replica_problems=None` and set
+  `vari_param > 0` to add the inter-replica diversity term
+  `-R · Σᵢ stdᵣ(p_{i,r})`, pulling replicas apart on the same problem.
+
+Python API:
+
+```python
+import networkx as nx
+import qqa
+from qqa.pignn import train_cpra_pi_gnn
+
+qqa.fix_seed(0)
+g = nx.random_regular_graph(d=3, n=200, seed=0)
+base = qqa.MaximumIndependentSet(g, penalty=2)
+
+# Penalty diversification: 4 replicas, one per penalty level.
+penalties = [1.5, 2.0, 2.5, 3.0]
+replica_problems = [qqa.MaximumIndependentSet(g, penalty=p) for p in penalties]
+
+result = train_cpra_pi_gnn(
+    base,
+    num_replicas=len(replica_problems),
+    replica_problems=replica_problems,
+    learning_rate=1e-3,
+    init_reg_param=-2.0,
+    annealing_rate=5e-4,
+    num_epochs=5000,
+)
+
+# Inspect every replica, not only the best one.
+for record in result.score["extra"]["replicas"]:
+    r, score = record["replica"], record["score"]
+    print(f"replica {r}: |IS|={score['value']}  feasible={score['feasible']}")
+```
+
+Variation diversification on a fixed problem is the same call without
+`replica_problems` and a positive `vari_param`:
+
+```python
+result = train_cpra_pi_gnn(
+    qqa.MaxCut(g),
+    num_replicas=4,
+    vari_param=0.4,            # encourages between-replica spread
+    learning_rate=1e-3,
+    init_reg_param=-2.0,
+    annealing_rate=5e-4,
+    num_epochs=5000,
+)
+```
+
+CLI — same problem builders, add `--backend cpra`:
+
+```bash
+qqa solve --problem mis --backend cpra --size 200 \
+          --cpra-num-replicas 4 \
+          --cpra-penalty-levels 1.5,2.0,2.5,3.0 \
+          --learning-rate 1e-3 --pignn-init-reg-param -2 \
+          --pignn-annealing-rate 5e-4 --epochs 5000
+```
+
+`--cpra-penalty-levels` is currently supported for `--problem mis` and
+`--problem vertex_cover` (the QUBO classes that accept a `penalty=...`
+constructor kwarg). For variation diversification on any other graph
+problem, drop `--cpra-penalty-levels` and pass `--cpra-vari-param 0.4`
+instead. All `--pignn-*` flags above (`--pignn-init-reg-param`,
+`--pignn-annealing-rate`, `--pignn-tol`, `--pignn-patience`,
+`--pignn-hidden`, `--pignn-no-annealing`) apply unchanged to the CPRA
+backend.
+
+The returned `AnnealResult` carries the **best replica's** discrete
+solution in `best_sol` / `best_obj`; every replica's solution and score
+are stored in `result.score["extra"]["replicas"]`, and per-epoch
+per-replica objectives in `result.history["per_replica_obj"]` (shape
+`(epochs, R)`) for downstream plotting.
+
 ### When to use which
 
-| Use case                                                       | Recommended                             |
-| -------------------------------------------------------------- | --------------------------------------- |
-| Most CO and spin-glass problems (default)                      | `qqa.anneal`                            |
-| Reproducing the NeurIPS 2024 CRA-PI-GNN paper                  | `qqa.pignn.train_cra_pi_gnn`            |
-| Spin glasses, perceptron, Hopfield, TSP, coloring              | `qqa.anneal` (PyG backend not supported) |
-| Need parallel replicas + diversity term                        | `qqa.anneal`                            |
-| Need a single deterministic GNN solver for ablation comparison | `qqa.pignn.train_cra_pi_gnn`            |
+| Use case                                                              | Recommended                              |
+| --------------------------------------------------------------------- | ---------------------------------------- |
+| Most CO and spin-glass problems (default)                             | `qqa.anneal`                             |
+| Reproducing the NeurIPS 2024 CRA-PI-GNN paper                         | `qqa.pignn.train_cra_pi_gnn`             |
+| Reproducing the TMLR 2025 CPRA paper / sweep penalties in one run     | `qqa.pignn.train_cpra_pi_gnn`            |
+| Spin glasses, perceptron, Hopfield, TSP, coloring                     | `qqa.anneal` (PyG backend not supported) |
+| Need parallel replicas + diversity term (gradient-based sampler)      | `qqa.anneal`                             |
+| Need a single deterministic GNN solver for ablation comparison        | `qqa.pignn.train_cra_pi_gnn`             |
+| Need diverse GNN solutions (penalty- or variation-diversified) in one run | `qqa.pignn.train_cpra_pi_gnn`        |
 
 ### Empirical comparison (CPU, single thread)
 

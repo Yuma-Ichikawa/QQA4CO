@@ -468,9 +468,7 @@ def test_preview_problem_renders_without_fallback_message(cfg, monkeypatch):
     # MaxSAT3's main canvas is its formatted-clause markdown card; for
     # every other kind we expect at least one Plotly chart trace.
     if cfg["kind"] != "maxsat3":
-        assert captured["charts"], (
-            f"{cfg['kind']} produced zero Plotly charts — preview was empty."
-        )
+        assert captured["charts"], f"{cfg['kind']} produced zero Plotly charts — preview was empty."
     else:
         assert any("∨" in m for m in captured["markdowns"]), (
             "MaxSAT3 preview should render at least one formatted clause."

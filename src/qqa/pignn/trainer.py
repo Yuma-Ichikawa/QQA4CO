@@ -29,6 +29,7 @@ NeurIPS 2024 implementation [#cra]_, with two intentional changes:
 
 from __future__ import annotations
 
+import contextlib
 from time import time
 
 import networkx as nx
@@ -40,6 +41,38 @@ from qqa.pignn._import import require_pyg
 from qqa.pignn.graph import extract_nx_graph, nx_to_edge_index
 from qqa.pignn.model import GCNNet, default_in_feats
 from qqa.relaxation import BinaryRelaxation
+
+
+def _ensure_problem_on_device(problem, device: torch.device) -> None:
+    """Move every Tensor attribute of ``problem`` to ``device`` in-place.
+
+    Background: a QQA problem instance is created with a ``device=...``
+    kwarg that puts ``Q_mat`` (and friends) on that device once. If the
+    user later trains the PyG backend on a different device — e.g.
+    ``MaximumIndependentSet(g, device='cpu')`` followed by
+    ``train_cra_pi_gnn(problem, device='cuda')`` — every forward pass
+    raises a cryptic CUDA / CPU ``einsum`` mismatch. The CLI sidesteps
+    this because ``_build_problem`` always passes ``args.device``, but
+    Python-API users hit it routinely. Rather than failing late, we
+    silently migrate any ``torch.Tensor`` attribute exposed by the
+    problem to the requested device.
+
+    Subclasses that override ``__setattr__`` keep their custom logic
+    because we use ``setattr``; pure-data classes get straightforward
+    ``.to(device)`` migration.
+    """
+    for name in dir(problem):
+        if name.startswith("_"):
+            continue
+        try:
+            val = getattr(problem, name)
+        except Exception:  # noqa: BLE001 — properties may raise on uninit attrs
+            continue
+        if torch.is_tensor(val) and val.device != device:
+            # read-only / property-backed tensors are skipped silently;
+            # if the device truly is wrong the loss_fn will surface it.
+            with contextlib.suppress(AttributeError, TypeError):
+                setattr(problem, name, val.to(device))
 
 
 def train_cra_pi_gnn(
@@ -168,6 +201,7 @@ def train_cra_pi_gnn(
     g = extract_nx_graph(problem, override=nx_graph)
     num_nodes = g.number_of_nodes()
     edge_index = nx_to_edge_index(g, device=device)
+    _ensure_problem_on_device(problem, device)
 
     in_feats_resolved = default_in_feats(num_nodes) if in_feats is None else in_feats
     hidden_resolved = in_feats_resolved if hidden_dim is None else hidden_dim
@@ -308,3 +342,329 @@ def _print_progress(
     print(f"  Reg term         : {pen_v:.4f}")
     print(f"  reg_param (gamma): {reg_param:.4f}")
     print("=" * 69)
+
+
+def train_cpra_pi_gnn(
+    problem,
+    *,
+    num_replicas: int = 4,
+    replica_problems: list | None = None,
+    vari_param: float = 0.0,
+    nx_graph: nx.Graph | None = None,
+    in_feats: int | None = None,
+    hidden_dim: int | None = None,
+    dropout: float = 0.0,
+    learning_rate: float = 1e-4,
+    weight_decay: float = 1e-2,
+    annealing: bool = True,
+    init_reg_param: float = -20.0,
+    annealing_rate: float = 1e-3,
+    curve_rate: int = 2,
+    num_epochs: int = 100_000,
+    tol: float = 1e-4,
+    patience: int = 1000,
+    check_interval: int = 1000,
+    device: str | torch.device = "cpu",
+    seed: int | None = None,
+    verbose: bool = True,
+) -> AnnealResult:
+    """Train a **CPRA** multi-head PI-GNN solver and return an :class:`AnnealResult`.
+
+    CPRA (*Continual Parallel Relaxation Annealing*) is the multi-replica
+    extension of CRA-PI-GNN introduced by Ichikawa & Iwashita,
+    *Transactions on Machine Learning Research*, 2025
+    (`OpenReview <https://openreview.net/forum?id=ix33zd5zCw>`_).
+    A single shared GCN backbone produces ``R`` continuous solutions in
+    one forward pass, and the loss combines a per-replica QUBO term, the
+    standard CRA penalty, and an optional inter-replica diversity term.
+
+    Two diversification regimes are supported:
+
+    1. **Penalty diversification** — supply ``replica_problems`` (length
+       ``num_replicas``) where each problem instance differs in some
+       hyperparameter (e.g. ``MaximumIndependentSet(g, penalty=p_r)`` for
+       a sweep of ``p_r``). One training run yields one solution per
+       penalty level, much cheaper than independent runs.
+    2. **Variation diversification** — leave ``replica_problems=None`` so
+       every replica solves the same ``problem``, but set
+       ``vari_param > 0`` to add the diversity term
+       ``-R · Σ_i std_r(p_{i,r})`` (sign chosen so the loss
+       *decreases* when between-replica spread *grows*). Replicas then
+       converge to structurally different solutions.
+
+    Parameters
+    ----------
+    problem:
+        Base graph-based problem (used for graph extraction and as the
+        default ``score_summary`` provider when ``replica_problems`` is
+        ``None``).
+    num_replicas:
+        Number of parallel continuous solutions ``R``. Defaults to 4.
+    replica_problems:
+        Optional list of ``num_replicas`` problem instances. When
+        provided, ``replica_problems[r].loss_fn`` evaluates the cost for
+        replica ``r``. Must share the same underlying graph as
+        ``problem`` (only the QUBO ``Q_mat`` may differ — typically via
+        a different penalty weight). When ``None``, all replicas use
+        ``problem.loss_fn``.
+    vari_param:
+        Coefficient of the diversity term. ``0`` (default) is pure
+        penalty diversification; positive values reward inter-replica
+        spread (used for variation diversification on a fixed problem).
+    nx_graph, in_feats, hidden_dim, dropout, learning_rate,
+    weight_decay, annealing, init_reg_param, annealing_rate, curve_rate,
+    num_epochs, tol, patience, check_interval, device, seed, verbose:
+        Identical semantics to :func:`train_cra_pi_gnn`.
+
+    Returns
+    -------
+    qqa.AnnealResult
+        ``best_sol`` — the discrete ``(N,)`` assignment of the best
+        replica (lowest QUBO objective on its own ``loss_fn``).
+        ``best_obj`` — that replica's float objective.
+        ``history`` — per-epoch ``loss``, ``mean_cost``, ``reg_term``,
+        ``vari_term``, ``reg_param`` arrays plus a ``per_replica_obj``
+        array of shape ``(epochs, R)`` for downstream visualisation.
+        ``score['extra']['replicas']`` — list of
+        ``{replica, obj, score, sol}`` dicts so the caller can inspect
+        every diversified solution, not only the best one.
+
+    Raises
+    ------
+    ValueError
+        On invalid ``num_replicas``, ``vari_param`` sign, or a
+        ``replica_problems`` list whose length does not match
+        ``num_replicas``.
+
+    Notes
+    -----
+    The reference CPRA implementation returns the *final* iteration's
+    discretised bits rather than the best-so-far solution. This trainer
+    deliberately tracks the running best (per replica) — the QQA-side
+    convention — to avoid losing a good early-epoch solution to a
+    transient late spike.
+    """
+    require_pyg()
+
+    if int(num_replicas) < 1:
+        raise ValueError(f"num_replicas must be >= 1, got {num_replicas}.")
+    if curve_rate % 2 != 0:
+        raise ValueError(
+            f"curve_rate must be even (got {curve_rate}); odd exponents make "
+            "the penalty 1-(1-2p)^c non-convex and asymmetric."
+        )
+    if num_epochs < 0:
+        raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
+    if patience < 1:
+        raise ValueError(f"patience must be >= 1, got {patience}.")
+    if vari_param < 0.0:
+        raise ValueError(
+            f"vari_param must be >= 0 (got {vari_param}); negative values would "
+            "actively *collapse* the replicas, defeating the purpose of CPRA."
+        )
+
+    if replica_problems is not None:
+        if len(replica_problems) != int(num_replicas):
+            raise ValueError(
+                f"len(replica_problems)={len(replica_problems)} must equal "
+                f"num_replicas={num_replicas}."
+            )
+        problems_per_replica = list(replica_problems)
+    else:
+        problems_per_replica = [problem] * int(num_replicas)
+
+    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"device={device!r} requested but torch.cuda.is_available() is False. "
+            "Install a CUDA-enabled torch build, or pass device='cpu'."
+        )
+    device = torch.device(device) if isinstance(device, str) else device
+
+    if seed is not None:
+        from qqa.utils import fix_seed
+
+        fix_seed(seed)
+
+    g = extract_nx_graph(problem, override=nx_graph)
+    num_nodes = g.number_of_nodes()
+    edge_index = nx_to_edge_index(g, device=device)
+    _ensure_problem_on_device(problem, device)
+    for rp in problems_per_replica:
+        if rp is not problem:
+            _ensure_problem_on_device(rp, device)
+
+    in_feats_resolved = default_in_feats(num_nodes) if in_feats is None else in_feats
+    hidden_resolved = in_feats_resolved if hidden_dim is None else hidden_dim
+    model = GCNNet(
+        num_nodes=num_nodes,
+        in_feats=in_feats_resolved,
+        hidden_dim=hidden_resolved,
+        dropout=dropout,
+        num_replicas=int(num_replicas),
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=learning_rate,
+        weight_decay=weight_decay,
+    )
+
+    relax = BinaryRelaxation()
+    reg_param = float(init_reg_param if annealing else 0.0)
+
+    history: dict[str, list] = {
+        "loss": [],
+        "mean_cost": [],
+        "reg_term": [],
+        "vari_term": [],
+        "reg_param": [],
+        "per_replica_obj": [],
+    }
+
+    best_obj_per_replica = [float("inf")] * int(num_replicas)
+    best_bits_per_replica: list[torch.Tensor | None] = [None] * int(num_replicas)
+    prev_loss = float("inf")
+    prev_pen = float("inf")
+    stagnant_steps = 0
+
+    runtime_start = time()
+    model.train()
+    for epoch in range(num_epochs):
+        optimizer.zero_grad()
+        probs = model(edge_index)  # (N, R) when R >= 2
+        if probs.dim() == 1:
+            # GCNNet squeezes to (N,) when num_replicas == 1.
+            probs = probs.unsqueeze(-1)
+
+        # Per-replica continuous cost. Each replica r gets its own loss_fn
+        # (penalty diversification) or shares the base problem's loss_fn.
+        per_replica_costs = []
+        for r in range(int(num_replicas)):
+            p_r = probs[:, r]
+            cost_r = problems_per_replica[r].loss_fn(p_r.unsqueeze(0)).sum()
+            per_replica_costs.append(cost_r)
+        cost = torch.stack(per_replica_costs).sum()
+
+        # CRA penalty: BinaryRelaxation.penalty operates element-wise on the
+        # last dim, so passing (R, N) gives the correct per-replica term.
+        # We sum across both replicas and nodes.
+        reg_term = relax.penalty(probs.t(), curve_rate).sum()
+
+        # CPRA diversity term (only meaningful when R >= 2).
+        if int(num_replicas) >= 2 and vari_param != 0.0:
+            std_per_node = probs.std(dim=1)
+            vari_term = -float(num_replicas) * std_per_node.sum()
+        else:
+            vari_term = torch.zeros((), device=probs.device, dtype=probs.dtype)
+
+        loss = cost + reg_param * reg_term + vari_param * vari_term
+        loss.backward()
+        optimizer.step()
+
+        with torch.no_grad():
+            bits_all = (probs >= 0.5).to(probs.dtype)  # (N, R)
+            disc_objs = []
+            for r in range(int(num_replicas)):
+                bits_r = bits_all[:, r]
+                disc_obj = float(problems_per_replica[r].loss_fn(bits_r.unsqueeze(0)).item())
+                disc_objs.append(disc_obj)
+                if disc_obj < best_obj_per_replica[r]:
+                    best_obj_per_replica[r] = disc_obj
+                    best_bits_per_replica[r] = bits_r.detach().clone()
+
+        loss_v = float(loss.item())
+        mean_cost_v = float(cost.item()) / float(num_replicas)
+        pen_v = float(reg_term.item())
+        vari_v = float(vari_term.item())
+        history["loss"].append(loss_v)
+        history["mean_cost"].append(mean_cost_v)
+        history["reg_term"].append(pen_v)
+        history["vari_term"].append(vari_v)
+        history["reg_param"].append(reg_param)
+        history["per_replica_obj"].append(disc_objs)
+
+        if abs(prev_loss - loss_v) < tol and abs(prev_pen - pen_v) < tol:
+            stagnant_steps += 1
+            if stagnant_steps >= patience:
+                if verbose:
+                    print(f"[CPRA] Early stop at epoch {epoch} (stagnant for {patience} steps).")
+                break
+        else:
+            stagnant_steps = 0
+        prev_loss = loss_v
+        prev_pen = pen_v
+
+        if annealing:
+            reg_param += float(annealing_rate)
+
+        if verbose and (epoch % check_interval == 0 or epoch == num_epochs - 1):
+            best_overall = min(best_obj_per_replica)
+            _print_progress(epoch, best_overall, loss_v, mean_cost_v, pen_v, reg_param)
+
+    runtime = time() - runtime_start
+
+    # Fallback for num_epochs == 0 — same contract as train_cra_pi_gnn.
+    if all(b is None for b in best_bits_per_replica):
+        with torch.no_grad():
+            probs = model(edge_index)
+            if probs.dim() == 1:
+                probs = probs.unsqueeze(-1)
+            bits_all = (probs >= 0.5).to(probs.dtype)
+            for r in range(int(num_replicas)):
+                bits_r = bits_all[:, r]
+                best_bits_per_replica[r] = bits_r.detach().clone()
+                best_obj_per_replica[r] = float(
+                    problems_per_replica[r].loss_fn(bits_r.unsqueeze(0)).item()
+                )
+
+    # Determine the overall best replica.
+    best_replica = int(min(range(int(num_replicas)), key=lambda r: best_obj_per_replica[r]))
+    best_bits = best_bits_per_replica[best_replica]
+    best_obj = best_obj_per_replica[best_replica]
+
+    # Per-replica score summaries.
+    replica_records: list[dict] = []
+    for r in range(int(num_replicas)):
+        bits_r = best_bits_per_replica[r]
+        try:
+            score_r = problems_per_replica[r].score_summary(bits_r)
+        except Exception as exc:  # noqa: BLE001 - mirror anneal's contract
+            score_r = {
+                "label": "loss",
+                "value": float(best_obj_per_replica[r]),
+                "unit": "",
+                "feasible": False,
+                "extra": {"error": str(exc)},
+            }
+        replica_records.append(
+            {
+                "replica": r,
+                "obj": float(best_obj_per_replica[r]),
+                "score": score_r,
+                "sol": bits_r.detach().cpu(),
+            }
+        )
+
+    # Top-level score reflects the best replica, with all replicas in extra.
+    score: dict = dict(replica_records[best_replica]["score"])
+    extra = dict(score.get("extra") or {})
+    extra["best_replica"] = best_replica
+    extra["replicas"] = replica_records
+    score["extra"] = extra
+
+    if verbose:
+        print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
+        print(f"  BEST REPLICA : {best_replica}")
+        print(f"  BEST LOSS    : {best_obj}")
+        print(f"  ALL OBJS     : {[f'{o:.4f}' for o in best_obj_per_replica]}")
+        print(f"  RUN TIME     : {runtime:.2f} s")
+        print("=" * 69)
+
+    return AnnealResult(
+        best_sol=best_bits,
+        best_obj=best_obj,
+        runtime=runtime,
+        history={k: np.asarray(v, dtype=float) for k, v in history.items()},
+        callbacks=[],
+        score=score,
+    )

@@ -44,13 +44,24 @@ class GCNNet(nn.Module):
     dropout:
         Dropout probability applied after the first GCN layer. Defaults
         to 0 — the original paper used 0 for the headline MIS results.
+    num_replicas:
+        Number of independent output channels. Defaults to ``1``,
+        which preserves the single-head CRA-PI-GNN behaviour and keeps
+        the forward output shape ``(N,)``. With ``num_replicas >= 2``
+        the network becomes the **CPRA** multi-head backbone of
+        Ichikawa & Iwashita (TMLR 2025) — a single shared embedding +
+        GCN backbone produces ``R`` parallel continuous solutions in
+        one forward pass and the output shape is ``(N, R)``.
 
     Notes
     -----
     The forward pass takes only ``edge_index`` because the node
     "features" are the learned embedding rows; they evolve through the
     same backward pass as the convolution weights. This is the standard
-    PI-GNN trick from Schuetz et al. (Nature MI 2022).
+    PI-GNN trick from Schuetz et al. (Nature MI 2022). For
+    ``num_replicas >= 2`` only the second convolution's output channels
+    grow — the embedding and first convolution are shared across
+    replicas, matching the CPRA shared-representation design.
     """
 
     def __init__(
@@ -59,22 +70,27 @@ class GCNNet(nn.Module):
         in_feats: int | None = None,
         hidden_dim: int | None = None,
         dropout: float = 0.0,
+        num_replicas: int = 1,
     ):
         super().__init__()
         require_pyg()
         from torch_geometric.nn import GCNConv
 
+        if int(num_replicas) < 1:
+            raise ValueError(f"num_replicas must be >= 1, got {num_replicas}")
+
         self.num_nodes = int(num_nodes)
         self.in_feats = default_in_feats(num_nodes) if in_feats is None else int(in_feats)
         self.hidden_dim = self.in_feats if hidden_dim is None else int(hidden_dim)
         self.dropout = float(dropout)
+        self.num_replicas = int(num_replicas)
 
         self.embedding = nn.Embedding(self.num_nodes, self.in_feats)
         self.conv1 = GCNConv(self.in_feats, self.hidden_dim)
-        self.conv2 = GCNConv(self.hidden_dim, 1)
+        self.conv2 = GCNConv(self.hidden_dim, self.num_replicas)
 
     def forward(self, edge_index: torch.Tensor) -> torch.Tensor:
-        """Compute soft node assignments ``p \\in (0, 1)^N``.
+        """Compute soft node assignments ``p \\in (0, 1)``.
 
         Parameters
         ----------
@@ -85,7 +101,9 @@ class GCNNet(nn.Module):
         Returns
         -------
         torch.Tensor
-            ``(N,)`` tensor of probabilities.
+            ``(N,)`` tensor of probabilities when ``num_replicas == 1``
+            (CRA-PI-GNN compatibility), or ``(N, num_replicas)`` when
+            ``num_replicas >= 2`` (CPRA layout).
         """
         x = self.embedding.weight
         x = self.conv1(x, edge_index)
@@ -93,4 +111,7 @@ class GCNNet(nn.Module):
         if self.dropout > 0.0:
             x = F.dropout(x, p=self.dropout, training=self.training)
         x = self.conv2(x, edge_index)
-        return torch.sigmoid(x).squeeze(-1)
+        x = torch.sigmoid(x)
+        if self.num_replicas == 1:
+            return x.squeeze(-1)
+        return x
