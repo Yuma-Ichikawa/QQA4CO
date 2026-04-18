@@ -17,15 +17,19 @@ from _common import (  # noqa: E402
     get_theme,
     hex_to_rgba,
     palette,
+    paper_link_footer,
     plotly_layout,
     render_score_card,
+    sidebar_brand,
     theme_toggle_in_sidebar,
 )
+from _solution_viz import render_solution_view  # noqa: E402
 
 import qqa  # noqa: E402
 from qqa.callbacks import Callback, CallbackState, PopulationTracker  # noqa: E402
 
 st.set_page_config(page_title="Solve — QQA", page_icon="⚛️", layout="wide")
+sidebar_brand()
 theme_toggle_in_sidebar()
 apply_theme()
 st.title("Solve")
@@ -150,7 +154,7 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.02, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.chart_holder.plotly_chart(fig, width="stretch")
+        self.chart_holder.plotly_chart(fig, width="stretch", key="qqa_solve_dynamics")
 
         # --- Population heatmap: replicas sorted by best-so-far --------
         pop = np.stack(self.pop, axis=1)  # (sol_size, T)
@@ -196,7 +200,7 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.pop_holder.plotly_chart(pop_fig, width="stretch")
+        self.pop_holder.plotly_chart(pop_fig, width="stretch", key="qqa_solve_population")
 
         # --- Diversity curve: std across replicas vs epoch --------------
         div_fig = go.Figure()
@@ -220,7 +224,7 @@ class StreamlitCallback(Callback):
                 showlegend=False,
             )
         )
-        self.diversity_holder.plotly_chart(div_fig, width="stretch")
+        self.diversity_holder.plotly_chart(div_fig, width="stretch", key="qqa_solve_diversity")
 
 
 run = st.button("▶  Run QQA", type="primary")
@@ -297,4 +301,16 @@ if run:
     st.session_state["last_result"] = result
     st.session_state["last_problem"] = problem
     st.session_state["last_pop_tracker"] = pop_tracker
-    st.info("Open **Visualize** for deeper inspection of this run.")
+
+    # Professional, problem-specific solution visualisation.
+    st.markdown("### Solution")
+    st.caption(
+        "Problem-aware view of the best configuration QQA found. "
+        "Structure, constraint satisfaction, and summary metrics are shown."
+    )
+    render_solution_view(problem, result, cfg)
+
+    st.info("Open **Visualize** for deeper inspection of this run (history, PCA, ridgeline).")
+
+
+paper_link_footer()

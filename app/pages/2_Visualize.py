@@ -13,14 +13,18 @@ import streamlit as st  # noqa: E402
 from _common import (  # noqa: E402
     apply_theme,
     palette,
+    paper_link_footer,
     plotly_layout,
     render_score_card,
+    sidebar_brand,
     theme_toggle_in_sidebar,
 )
+from _solution_viz import render_solution_view  # noqa: E402
 
 from qqa import visualization as viz  # noqa: E402
 
 st.set_page_config(page_title="Visualize — QQA", page_icon="⚛️", layout="wide")
+sidebar_brand()
 theme_toggle_in_sidebar()
 apply_theme()
 st.title("Visualize")
@@ -100,11 +104,19 @@ with tab_sched:
         st.plotly_chart(fig, width="stretch")
 
 with tab_sol:
-    try:
-        fig = viz.plot_solution_heatmap(result, problem=problem, backend="plotly", show=False)
-        st.plotly_chart(_retheme(fig), width="stretch")
-    except Exception as e:
-        st.info(f"No solution heatmap available: {e}")
+    cfg = st.session_state.get("problem_config", {})
+    st.markdown("#### Problem-aware view")
+    st.caption(
+        "The solution is rendered natively for the selected problem type "
+        "(TSP tour, N-Queens board, highlighted IS, colouring, ...)."
+    )
+    render_solution_view(problem, result, cfg)
+    with st.expander("Raw solution heatmap", expanded=False):
+        try:
+            fig = viz.plot_solution_heatmap(result, problem=problem, backend="plotly", show=False)
+            st.plotly_chart(_retheme(fig), width="stretch")
+        except Exception as e:
+            st.info(f"No solution heatmap available: {e}")
 
 with tab_pop:
     if pop_tracker is None or not pop_tracker.loss:
@@ -230,3 +242,6 @@ with tab_fate:
             "Top-ranked replicas are drawn in the primary accent, lower-ranked "
             "ones fade toward the secondary accent."
         )
+
+
+paper_link_footer()
