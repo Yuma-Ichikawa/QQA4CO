@@ -11,19 +11,21 @@
 # only consumed by pip-based deploy targets (Streamlit Community Cloud,
 # Hugging Face Spaces, Render, etc.).
 
+# CPU-only PyTorch wheel (avoids the 900MB CUDA build that would blow
+# through the 1GB Streamlit Community Cloud image budget).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.4.1+cpu
+torch>=2.2,<2.8
 
-numpy>=1.24
+numpy>=1.24,<3
 networkx>=3.1
 scipy>=1.11
 matplotlib>=3.8
 tqdm>=4.66
 
-# Interactive plots + GUI
+# Interactive plots + GUI (REQUIRED by app/_common.py at import time).
 plotly>=5.17
 pandas>=2.0
 streamlit>=1.30
 
-# Install this repository (reads pyproject.toml)
+# Install this repository so ``import qqa`` works inside the app.
 .

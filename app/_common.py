@@ -10,10 +10,19 @@ from typing import Any
 
 import networkx as nx
 import numpy as np
-import plotly.graph_objects as go
 import streamlit as st
 
 import qqa
+
+try:
+    import plotly.graph_objects as go
+except ModuleNotFoundError as exc:  # pragma: no cover - surface a friendlier error
+    st.error(
+        "The `plotly` package is required for the dashboard. "
+        "Add it to `requirements.txt` (or run `pip install plotly`)."
+    )
+    st.stop()
+    raise SystemExit from exc
 
 # Default snippet shown in the Custom-problem editor. It implements a simple
 # Sherrington–Kirkpatrick-style spin glass that the user can adapt freely.
