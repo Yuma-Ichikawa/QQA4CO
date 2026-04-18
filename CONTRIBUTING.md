@@ -20,6 +20,16 @@ This installs:
 - Optional: Plotly (interactive viz), Streamlit (GUI), MkDocs (docs)
 - Dev tools: pytest, ruff, pre-commit, nbval
 
+If you intend to work on the optional CRA-PI-GNN backend (`qqa.pignn`),
+also include the `pignn` extra:
+
+```bash
+uv sync --extra plotly --extra gui --extra docs --extra dev --extra pignn
+```
+
+The `pignn` extra pulls in `torch-geometric`. CI does **not** install it
+by default — `tests/test_pignn.py` skips cleanly when PyG is missing.
+
 ## Running tests
 
 ```bash
