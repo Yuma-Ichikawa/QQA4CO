@@ -222,7 +222,34 @@ def apply_theme() -> None:
             box-shadow: 0 3px 10px rgba(15,118,110,0.18);
         }}
         .stButton > button:active {{ transform: translateY(0); }}
-        .stSlider [data-baseweb="slider"] > div {{ background: var(--qqa-accent) !important; }}
+        /* ---- BaseWeb slider (light) ----------------------------------- */
+        /* Empty track: subtle accent tint so the filled part stands out */
+        .stSlider [data-baseweb="slider"] [role="slider"] ~ div,
+        .stSlider [data-baseweb="slider"] > div > div > div:first-child {{
+            background: rgba(15,118,110,0.18) !important;
+        }}
+        /* Filled portion of the track (left of thumb) */
+        .stSlider [data-baseweb="slider"] > div > div > div:first-child > div {{
+            background: var(--qqa-accent) !important;
+        }}
+        /* Thumb: white puck with accent ring so it's always visible */
+        .stSlider [data-baseweb="slider"] [role="slider"] {{
+            background: #ffffff !important;
+            border: 2px solid var(--qqa-accent) !important;
+            box-shadow: 0 1px 3px rgba(15,23,42,0.18) !important;
+        }}
+        /* Current-value bubble above the thumb */
+        .stSlider [data-baseweb="slider"] [role="slider"] > div {{
+            color: var(--qqa-accent) !important;
+            background: transparent !important;
+            font-weight: 600 !important;
+        }}
+        /* Min / max tick labels at the ends of the slider */
+        .stSlider [data-testid="stTickBar"],
+        .stSlider [data-testid="stTickBar"] > div {{
+            color: var(--qqa-muted) !important;
+            background: transparent !important;
+        }}
         code, pre {{
             background: #f0ece3;
             color: #334155;
@@ -348,6 +375,28 @@ def apply_theme() -> None:
         .stButton > button:hover {{
             transform: translateY(-1px);
             box-shadow: 0 10px 28px rgba(168,85,247,0.35);
+        }}
+        /* ---- BaseWeb slider (dark) ------------------------------------ */
+        .stSlider [data-baseweb="slider"] [role="slider"] ~ div,
+        .stSlider [data-baseweb="slider"] > div > div > div:first-child {{
+            background: rgba(148,163,184,0.25) !important;
+        }}
+        .stSlider [data-baseweb="slider"] > div > div > div:first-child > div {{
+            background: linear-gradient(90deg, #38bdf8, #a855f7) !important;
+        }}
+        .stSlider [data-baseweb="slider"] [role="slider"] {{
+            background: #0b1120 !important;
+            border: 2px solid #38bdf8 !important;
+            box-shadow: 0 0 0 2px rgba(56,189,248,0.25) !important;
+        }}
+        .stSlider [data-baseweb="slider"] [role="slider"] > div {{
+            color: #e2e8f0 !important;
+            background: transparent !important;
+        }}
+        .stSlider [data-testid="stTickBar"],
+        .stSlider [data-testid="stTickBar"] > div {{
+            color: var(--qqa-muted) !important;
+            background: transparent !important;
         }}
         code, pre {{
             background: rgba(15,23,42,0.75);
