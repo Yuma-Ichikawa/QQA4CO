@@ -92,21 +92,42 @@ with st.sidebar:
     extra: dict = {}
     if use_custom:
         problem_kind = "custom"
+        # The form values are session-state-keyed so the "Load template"
+        # button on the main panel can write the right defaults here on rerun.
+        kind_options = ("spin", "binary", "categorical")
+        kind_default = st.session_state.get("custom_kind", "spin")
         extra["variable_kind"] = st.selectbox(
             "Variable kind",
-            ("spin", "binary", "categorical"),
-            index=0,
+            kind_options,
+            index=kind_options.index(kind_default) if kind_default in kind_options else 0,
+            key="custom_kind",
             help=("'spin' ∈ {-1,+1}, 'binary' ∈ {0,1}, 'categorical' one-hot over K choices."),
         )
         extra["num_vars"] = int(
-            st.number_input("Number of variables N", min_value=2, max_value=4096, value=32)
+            st.number_input(
+                "Number of variables N",
+                min_value=2,
+                max_value=4096,
+                value=int(st.session_state.get("custom_num_vars", 32)),
+                key="custom_num_vars",
+            )
         )
         if extra["variable_kind"] == "categorical":
-            extra["num_category"] = int(st.number_input("K (categories)", 2, 32, 3))
-        extra["name"] = st.text_input("Problem name", value="custom")
+            extra["num_category"] = int(
+                st.number_input(
+                    "K (categories)",
+                    2,
+                    32,
+                    int(st.session_state.get("custom_num_category", 3)),
+                    key="custom_num_category",
+                )
+            )
+        extra["name"] = st.text_input(
+            "Problem name", value=st.session_state.get("custom_name", "custom"), key="custom_name"
+        )
         seed = st.number_input("Seed", min_value=0, max_value=10_000, value=0)
         size = extra["num_vars"]
-        st.markdown("Edit the snippet in the main panel →")
+        st.success("Edit & validate the snippet in the main panel →", icon="📝")
     else:
         _FAMILIES = {
             "Graph (binary QUBO)": [
@@ -208,43 +229,82 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 if use_custom:
     st.subheader("Custom loss editor")
+    with st.expander("How does this work? (3 steps)", expanded=False):
+        st.markdown(
+            """
+1. **Pick a template** from the dropdown — it auto-fills the sidebar form
+   (variable kind, N, K) and replaces the editor with a working snippet.
+2. **Edit `loss_fn(x)`** to your problem.  Anything you declare at module
+   scope (couplings, patterns, matrices, ...) is captured by closure and
+   only runs once per build.
+3. **Hit ✓ Validate** to evaluate the loss on a single random batch and
+   confirm the shape contract before running the full anneal.
+            """
+        )
+        st.code(
+            "def loss_fn(x: torch.Tensor) -> torch.Tensor:\n"
+            "    # x.shape =\n"
+            "    #   (B, N)         for variable_kind in {'spin','binary'}\n"
+            "    #   (B, N, K)      for variable_kind == 'categorical'\n"
+            "    # return a tensor of shape (B,) — the per-replica loss.\n"
+            "    ...",
+            language="python",
+        )
     st.warning(
-        "⚠️  The snippet below is executed via Python `exec` inside this "
+        "The snippet below is executed via Python `exec` inside this "
         "Streamlit process. Only paste code you trust; the editor is "
         "intentionally exposed for research use, not for hosting "
         "untrusted user code.",
         icon="⚠️",
-    )
-    st.markdown(
-        "Define a function named `loss_fn(x)` that maps a batched configuration "
-        "tensor to a `(B,)` loss vector. The namespace already has `torch` and "
-        "`np` (numpy) imported. Any constants (couplings, patterns, ...) you "
-        "declare at module scope are captured by closure."
     )
 
     example_keys = list(CUSTOM_EXAMPLES)
     col_l, col_r = st.columns([2, 1])
     with col_l:
         example_choice = st.selectbox(
-            "Load example",
+            "Template",
             example_keys,
-            index=0,
-            help="Replace the editor with a fully-working snippet.",
+            index=example_keys.index(st.session_state.get("custom_example", example_keys[0]))
+            if st.session_state.get("custom_example") in example_keys
+            else 0,
+            key="custom_example",
+            help="Replace the editor with a fully-working, ready-to-anneal snippet.",
         )
     with col_r:
         st.write("")
-        if st.button("Load example", width="stretch"):
-            st.session_state["custom_source"] = CUSTOM_EXAMPLES[example_choice]
+        if st.button("📥  Load template", width="stretch"):
+            meta = CUSTOM_EXAMPLES[example_choice]
+            st.session_state["custom_source"] = meta["source"]
+            st.session_state["custom_kind"] = meta["kind"]
+            st.session_state["custom_num_vars"] = int(meta["num_vars"])
+            if meta["kind"] == "categorical" and meta.get("num_category"):
+                st.session_state["custom_num_category"] = int(meta["num_category"])
+            st.session_state["custom_name"] = (
+                example_choice.split("·")[-1].strip().lower().replace(" ", "-")
+            )
             st.rerun()
+    st.caption(f"📌 *{CUSTOM_EXAMPLES[example_choice]['description']}*")
 
     source = st.text_area(
-        "Snippet",
+        "Snippet (`loss_fn` definition + module-level constants)",
         value=st.session_state.get("custom_source", DEFAULT_CUSTOM_SNIPPET),
-        height=320,
+        height=340,
         key="custom_source_editor",
     )
     st.session_state["custom_source"] = source
     extra["source"] = source
+
+    # The Validate button below the editor short-circuits the run.  Even
+    # without it the Preview panel re-evaluates on every rerun, but giving
+    # users an explicit "I want to test it now" affordance reduces the
+    # cognitive load of "why is the page reloading every keystroke".
+    validate = st.button(
+        "✓  Validate snippet",
+        type="primary",
+        help="Build the problem and run loss_fn on a single random batch.",
+    )
+    if validate:
+        st.session_state["_custom_validate_requested"] = True
 
 st.session_state["problem_config"] = {
     "kind": problem_kind,
@@ -274,11 +334,26 @@ with left:
 
 with right:
     st.subheader("Preview")
-    try:
-        problem = build_problem(cfg)
-        preview_problem(problem, cfg)
-    except Exception as e:
-        st.error(f"Could not build problem: {e}")
+    # For built-in problems we always preview — it's cheap.  For custom
+    # problems we wait for an explicit "Validate" click to avoid running
+    # arbitrary user code on every keystroke (the text_area triggers a
+    # rerun on every change).  After the first successful validate, we
+    # keep previewing on every rerun so it feels responsive.
+    should_preview = cfg["kind"] != "custom" or st.session_state.get(
+        "_custom_validate_requested", False
+    )
+    if should_preview:
+        try:
+            problem = build_problem(cfg)
+            preview_problem(problem, cfg)
+        except Exception as e:
+            st.error(f"Could not build problem: {e}")
+    else:
+        st.info(
+            "Click **✓ Validate snippet** below the editor to test your "
+            "`loss_fn` on a random batch before running the full anneal.",
+            icon="✏️",
+        )
 
 st.markdown("---")
 st.caption(f"QQA v{qqa.__version__} · PyTorch + Streamlit · gradient-based parallel annealer")

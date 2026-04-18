@@ -42,20 +42,20 @@ raw = result.best_obj if isinstance(result.best_obj, float) else None
 render_score_card(result.score, raw_loss=raw)
 
 (
+    tab_sol,
     tab_hist,
     tab_best,
     tab_sched,
-    tab_sol,
     tab_pop,
     tab_pca,
     tab_ridge,
     tab_fate,
 ) = st.tabs(
     [
+        "Solution",
         "Dynamics",
         "Best trajectory",
         "Schedule",
-        "Solution",
         "Parallel population",
         "PCA trajectory",
         "Ridgeline",

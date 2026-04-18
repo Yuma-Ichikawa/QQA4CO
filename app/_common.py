@@ -42,12 +42,26 @@ def loss_fn(s):
     return -0.5 * torch.einsum("bi,ij,bj->b", s, J, s)
 '''
 
-# Curated example library shown in the Custom-problem editor's "Load
-# example" dropdown. Each entry is a self-contained snippet that defines
-# ``loss_fn(x)`` for one variable kind.
-CUSTOM_EXAMPLES: dict[str, str] = {
-    "Spin glass (default SK)": DEFAULT_CUSTOM_SNIPPET,
-    "Number partitioning (spin)": '''import torch
+# Curated example library shown in the Custom-problem editor.  Each entry
+# carries the snippet *and* the metadata the sidebar form needs (variable
+# kind, default size, optional category count, one-line description).
+# Keeping the metadata next to the snippet means the UI can auto-populate
+# the form when a template is loaded — no more "I picked SK but forgot to
+# set variable_kind=spin".
+CUSTOM_EXAMPLES: dict[str, dict] = {
+    "Spin glass · Sherrington–Kirkpatrick (SK)": {
+        "kind": "spin",
+        "num_vars": 32,
+        "num_category": None,
+        "description": "Mean-field spin glass with Gaussian couplings. Classic NP-hard benchmark.",
+        "source": DEFAULT_CUSTOM_SNIPPET,
+    },
+    "Spin · Number partitioning": {
+        "kind": "spin",
+        "num_vars": 32,
+        "num_category": None,
+        "description": "Split N positive integers into two equal-sum groups (a_i s_i)^2.",
+        "source": '''import torch
 
 N = 32
 g = torch.Generator().manual_seed(0)
@@ -58,7 +72,30 @@ def loss_fn(s):
     """Minimise the squared imbalance Σ a_i s_i with s ∈ {-1,+1}^N."""
     return (s @ a) ** 2
 ''',
-    "Weighted MaxCut (binary)": '''import torch
+    },
+    "Spin · Ferromagnetic Ising chain": {
+        "kind": "spin",
+        "num_vars": 64,
+        "num_category": None,
+        "description": "1-D Ising ferromagnet — instructive sanity check, easy to solve.",
+        "source": '''import torch
+
+N = 64
+J = 1.0
+h = 0.0
+
+
+def loss_fn(s):
+    """1-D ferromagnet: -J Σ s_i s_{i+1} - h Σ s_i, s ∈ {-1,+1}."""
+    return -J * (s[:, :-1] * s[:, 1:]).sum(dim=1) - h * s.sum(dim=1)
+''',
+    },
+    "Binary · Weighted MaxCut": {
+        "kind": "binary",
+        "num_vars": 32,
+        "num_category": None,
+        "description": "Bipartition vertices to maximise Σ W_ij (x_i + x_j − 2 x_i x_j).",
+        "source": '''import torch
 
 N = 32
 g = torch.Generator().manual_seed(0)
@@ -75,18 +112,13 @@ def loss_fn(x):
     cut = torch.einsum("ij,bi,bj->b", W, x, 1 - x)
     return -cut
 ''',
-    "Ferromagnetic Ising chain": '''import torch
-
-N = 64
-J = 1.0
-h = 0.0
-
-
-def loss_fn(s):
-    """1-D ferromagnet: -J Σ s_i s_{i+1} - h Σ s_i, s ∈ {-1,+1}."""
-    return -J * (s[:, :-1] * s[:, 1:]).sum(dim=1) - h * s.sum(dim=1)
-''',
-    "Custom QUBO from a matrix": '''import torch
+    },
+    "Binary · Generic QUBO from a matrix": {
+        "kind": "binary",
+        "num_vars": 24,
+        "num_category": None,
+        "description": "Energy x^T Q x — paste your own Q for any QUBO.",
+        "source": '''import torch
 
 # Replace Q with your own (N×N) matrix. The energy is x^T Q x.
 N = 24
@@ -99,7 +131,13 @@ def loss_fn(x):
     """Generic QUBO loss for binary x ∈ {0,1}^N."""
     return torch.einsum("ij,bi,bj->b", Q, x, x)
 ''',
-    "Random 3-SAT clause loss (binary)": """import torch
+    },
+    "Binary · Random 3-SAT clause count": {
+        "kind": "binary",
+        "num_vars": 30,
+        "num_category": None,
+        "description": "Minimise unsatisfied clauses on a random 3-SAT formula (M = 90).",
+        "source": """import torch
 
 N = 30
 M = 90  # clauses
@@ -119,7 +157,34 @@ def loss_fn(x):
     sat = ((eval_lit + 1) / 2).max(dim=-1).values  # (B, M)
     return (1.0 - sat).sum(dim=-1)
 """,
+    },
+    "Categorical · Toy graph 3-colouring": {
+        "kind": "categorical",
+        "num_vars": 12,
+        "num_category": 3,
+        "description": "Minimise edge conflicts on a small ring graph with K=3 colours.",
+        "source": '''import torch
+
+N = 12
+K = 3
+# Ring graph: edges (i, i+1) and the wrap-around (N-1, 0).
+edges = torch.tensor([[i, (i + 1) % N] for i in range(N)])
+
+
+def loss_fn(x):
+    """``x`` is one-hot of shape (B, N, K). Penalise endpoints sharing a colour."""
+    # (B, |E|, K): inner product per edge per colour.
+    overlap = (x[:, edges[:, 0]] * x[:, edges[:, 1]]).sum(dim=-1)
+    return overlap.sum(dim=-1)
+''',
+    },
 }
+
+
+# Keep a flat ``label -> source_str`` map for code that only wants the
+# snippet (preview, AppTest, downstream tooling) — saves every caller from
+# digging into the metadata dict and keeps backward-compat.
+CUSTOM_EXAMPLE_SOURCES: dict[str, str] = {k: v["source"] for k, v in CUSTOM_EXAMPLES.items()}
 
 
 # ---------------------------------------------------------------------------

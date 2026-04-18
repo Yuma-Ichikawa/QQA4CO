@@ -192,7 +192,17 @@ class StreamlitCallback(Callback):
         self.update_every = max(1, int(update_every))
         self.epochs: list[int] = []
         self.mean_loss: list[float] = []
-        self.best: list[float] = []
+        # Best *relaxed* loss of the current epoch (= losses.min()).  Same
+        # units as ``mean_loss``, so they share a y-axis cleanly.  Earlier
+        # versions plotted ``state.best_obj`` (the running min of the
+        # *discrete* loss), which for problems like SK / number-partitioning
+        # / 3-SAT lives on a vastly different scale than the relaxed loss.
+        # On a shared axis the discrete value visually pinned to 0 and the
+        # line looked broken — see ``tasks/lessons.md``.
+        self.best_relaxed: list[float] = []
+        # Running min of the discrete loss — the same number ``AnnealResult``
+        # ultimately returns. Surfaced as a metric card, not a chart line.
+        self.best_disc: list[float] = []
         self.pop: list[np.ndarray] = []
         self.std_loss: list[float] = []
         self._start = time.time()
@@ -204,8 +214,9 @@ class StreamlitCallback(Callback):
         losses = state.losses.detach().cpu().numpy()
         self.mean_loss.append(float(losses.mean()))
         self.std_loss.append(float(losses.std()))
+        self.best_relaxed.append(float(losses.min()))
         bo = state.best_obj
-        self.best.append(float(np.asarray(bo).mean()) if hasattr(bo, "mean") else float(bo))
+        self.best_disc.append(float(np.asarray(bo).mean()) if hasattr(bo, "mean") else float(bo))
         self.pop.append(losses)
 
         if epoch % self.update_every != 0 and epoch != total - 1:
@@ -213,14 +224,25 @@ class StreamlitCallback(Callback):
         self.progress_bar.progress(min(1.0, (epoch + 1) / total))
         elapsed = time.time() - self._start
         with self.metrics_holder.container():
-            r1c1, r1c2, r1c3 = st.columns(3)
+            r1c1, r1c2, r1c3, r1c4 = st.columns(4)
             r1c1.metric("epoch", f"{epoch + 1} / {total}")
-            r1c2.metric("best", f"{self.best[-1]:.4g}")
-            r1c3.metric("mean", f"{self.mean_loss[-1]:.4g}")
-            r2c1, r2c2, r2c3 = st.columns(3)
+            r1c2.metric(
+                "best (discrete)",
+                f"{self.best_disc[-1]:.4g}",
+                help="Running min of loss_fn evaluated on the projected discrete sample — "
+                "this is the value AnnealResult.best_obj will report.",
+            )
+            r1c3.metric(
+                "best (relaxed, this epoch)",
+                f"{self.best_relaxed[-1]:.4g}",
+                help="min over replicas of the relaxed loss at this epoch — same scale as mean.",
+            )
+            r1c4.metric("mean", f"{self.mean_loss[-1]:.4g}")
+            r2c1, r2c2, r2c3, r2c4 = st.columns(4)
             r2c1.metric("σ (replicas)", f"{self.std_loss[-1]:.4g}")
             r2c2.metric("bg", f"{state.bg:.3f}")
             r2c3.metric("elapsed", f"{elapsed:.1f}s")
+            r2c4.metric("update_every", f"{self.update_every}")
 
         p = palette()
         theme = get_theme()
@@ -253,19 +275,49 @@ class StreamlitCallback(Callback):
         fig.add_trace(
             go.Scatter(
                 x=self.epochs,
-                y=self.best,
+                y=self.best_relaxed,
                 mode="lines",
-                name="best / replica",
-                line={"color": p["palette"][1], "width": 3, "dash": "solid"},
+                name="best of epoch (relaxed)",
+                line={"color": p["palette"][1], "width": 2.4, "dash": "solid"},
+                hovertemplate="epoch=%{x}<br>best (relaxed)=%{y:.4f}<extra></extra>",
             )
         )
+        # Annotate the running discrete best in the corner so users can see
+        # the integer-scale value alongside the relaxed curves without
+        # having to pin two wildly-different scales onto the same axis.
+        disc_text = f"best (discrete) = {self.best_disc[-1]:.4g}"
         fig.update_layout(
             **plotly_layout(
                 height=320,
                 title={"text": "Annealing dynamics (per-replica loss)"},
                 xaxis_title="Epoch",
                 yaxis_title="Loss (per replica)",
-                legend={"x": 0.01, "y": 0.02, "bgcolor": "rgba(255,255,255,0.6)"},
+                legend={
+                    "x": 0.01,
+                    "y": 0.02,
+                    "bgcolor": "rgba(255,255,255,0.6)"
+                    if theme == "light"
+                    else "rgba(15,23,42,0.6)",
+                },
+                annotations=[
+                    {
+                        "xref": "paper",
+                        "yref": "paper",
+                        "x": 0.99,
+                        "y": 0.98,
+                        "xanchor": "right",
+                        "yanchor": "top",
+                        "showarrow": False,
+                        "text": disc_text,
+                        "font": {"size": 12, "color": p["muted"]},
+                        "bgcolor": "rgba(255,255,255,0.55)"
+                        if theme == "light"
+                        else "rgba(15,23,42,0.55)",
+                        "bordercolor": p["border"],
+                        "borderwidth": 1,
+                        "borderpad": 4,
+                    }
+                ],
             )
         )
         # IMPORTANT: do NOT pass ``key=`` here. ``st.empty().plotly_chart`` is
