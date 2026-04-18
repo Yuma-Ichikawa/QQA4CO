@@ -87,7 +87,7 @@ if run:
 
     st.success("Sweep complete.")
     st.subheader("Results table")
-    st.dataframe(rows, use_container_width=True)
+    st.dataframe(rows, width='stretch')
 
     try:
         import pandas as pd
@@ -95,10 +95,10 @@ if run:
         df = pd.DataFrame(rows)
         fig = viz.plot_parallel_coordinates(df, objective="best_obj", backend="plotly", show=False)
         st.subheader("Parallel coordinates")
-        st.plotly_chart(_retheme(fig), use_container_width=True)
+        st.plotly_chart(_retheme(fig), width='stretch')
     except Exception as e:
         st.info(f"Parallel-coordinates unavailable: {e}")
 
     st.subheader("Run comparison")
     fig2 = viz.plot_run_comparison(results, labels=labels, backend="plotly", show=False)
-    st.plotly_chart(_retheme(fig2), use_container_width=True)
+    st.plotly_chart(_retheme(fig2), width='stretch')

@@ -148,7 +148,7 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.02, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.chart_holder.plotly_chart(fig, use_container_width=True)
+        self.chart_holder.plotly_chart(fig, width='stretch')
 
         # --- Population heatmap: replicas sorted by best-so-far --------
         pop = np.stack(self.pop, axis=1)  # (sol_size, T)
@@ -192,7 +192,7 @@ class StreamlitCallback(Callback):
                 legend={"x": 0.01, "y": 0.99, "bgcolor": "rgba(255,255,255,0.6)"},
             )
         )
-        self.pop_holder.plotly_chart(pop_fig, use_container_width=True)
+        self.pop_holder.plotly_chart(pop_fig, width='stretch')
 
         # --- Diversity curve: std across replicas vs epoch --------------
         div_fig = go.Figure()
@@ -216,7 +216,7 @@ class StreamlitCallback(Callback):
                 showlegend=False,
             )
         )
-        self.diversity_holder.plotly_chart(div_fig, use_container_width=True)
+        self.diversity_holder.plotly_chart(div_fig, width='stretch')
 
 
 run = st.button("▶  Run QQA", type="primary")
