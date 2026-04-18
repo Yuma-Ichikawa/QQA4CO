@@ -5,6 +5,13 @@ PyTorch implementation of the ICLR 2025 paper
 by Yuma Ichikawa and Yamato Arai.
 
 <p align="center">
+  <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/v/qqa.svg?logo=pypi&logoColor=white&label=PyPI" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/pyversions/qqa.svg?logo=python&logoColor=white" alt="Python versions"></a>
+  <a href="https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/LICENCE.txt"><img src="https://img.shields.io/pypi/l/qqa.svg" alt="License"></a>
+  <a href="https://github.com/Yuma-Ichikawa/QQA4CO/actions/workflows/ci.yml"><img src="https://github.com/Yuma-Ichikawa/QQA4CO/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
+<p align="center">
   <a href="https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/00_colab_quickstart.ipynb">
     <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open Quickstart in Colab">
   </a>
