@@ -153,27 +153,39 @@ uv run python scripts/check_streamlit_deploy.py
 
 ## Deploy to the public web (free)
 
-The dashboard can be published for free via **Streamlit Community Cloud**
-(or Hugging Face Spaces) and bridged from any domain you already own
-(Xserver / お名前ドットコム / Cloudflare / …).
+The dashboard is published for free via **Streamlit Community Cloud** at
+<https://parallelquasiquantum4co.streamlit.app/> — no custom domain, no
+paid hosting, nothing else to wire up. The same repository can also be
+dropped onto Hugging Face Spaces, Fly.io, Render, or Google Cloud Run
+unchanged.
 
-### 1. Deploy to Streamlit Community Cloud
+### 1. Streamlit Community Cloud (the live URL)
 
-The repository already ships the two files needed by Community Cloud:
+The repository already ships everything Community Cloud needs:
 
 - [`requirements.txt`](requirements.txt) — CPU-only PyTorch pin plus the
   minimal runtime. Installs this repo as the `qqa` package via the
   trailing `.`.
-- [`.streamlit/config.toml`](.streamlit/config.toml) — on-brand dark
-  theme and telemetry off.
+- [`runtime.txt`](runtime.txt) — pins the Python version for Community
+  Cloud.
+- [`.streamlit/config.toml`](.streamlit/config.toml) — light theme and
+  telemetry off.
 
-Then:
+First-time deploy:
 
 1. Go to <https://share.streamlit.io> and sign in with GitHub.
 2. **New app** → Repository `Yuma-Ichikawa/QQA4CO`, Branch `main`,
    Main file path `app/streamlit_app.py`.
 3. Click **Deploy**. Your app will be served at
    `https://<something>.streamlit.app` after a 3–5 min build.
+4. In the app's `⋮` → **Settings** → **Sharing**, set *"Who can view
+   this app?"* to **"Anyone with the link can view"**. This is the only
+   knob standing between a green deploy and a public URL — without it
+   every visitor is redirected to Streamlit SSO.
+
+Re-deploys happen automatically on every push to `main`. The runbook,
+common failure modes, and the health-check endpoint are documented in
+[`deploy/STREAMLIT_DEPLOY.md`](deploy/STREAMLIT_DEPLOY.md).
 
 The custom-problem editor is **off by default** on public deployments
 (it evaluates arbitrary Python via `exec`). Re-enable it on a trusted
@@ -183,26 +195,20 @@ machine with:
 QQA_ALLOW_CUSTOM=1 uv run qqa gui
 ```
 
-### 2. Point your own domain at the app
+### 2. Other free / cheap targets
 
-If you own a domain on a shared rental host (e.g. Xserver), drop this
-snippet into the `public_html/` of the subdomain that you want to use
-(adjust the target URL):
+If you would rather self-host, the repository is portable enough to drop
+onto any of the usual platforms without edits:
 
-```apache
-RewriteEngine On
-RewriteRule ^(.*)$ https://qqa4co.streamlit.app/$1 [R=301,L]
-```
+- **Hugging Face Spaces** (Streamlit SDK) — persistent URL, free CPU
+  tier, HTTPS by default.
+- **Fly.io / Render** — Docker-based deploys; use `app/streamlit_app.py`
+  as the entry point and `requirements.txt` as the dependency file.
+- **Google Cloud Run** — container image, pay-per-request.
 
-A ready-to-copy template with both `301` and `iframe` variants lives at
-[`deploy/xserver-htaccess.example`](deploy/xserver-htaccess.example).
-
-### Other targets
-
-The repository is portable enough to drop onto any of the usual
-platforms: Hugging Face Spaces (Streamlit SDK), Fly.io / Render
-(Docker), Google Cloud Run. The same `requirements.txt` and
-`app/streamlit_app.py` serve as the entry points.
+You do *not* need a domain registrar / shared-hosting account for any
+of these — each platform gives you a permanent HTTPS URL out of the
+box.
 
 ## Visualization
 
