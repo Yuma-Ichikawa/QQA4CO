@@ -179,12 +179,13 @@ class CategoricalRelaxation:
         )
 
     def forward(self, x):
-        # AdamW can push ``x`` negative / very close to zero, so the raw
-        # ``x / x.sum`` normalisation can blow up (NaN / Inf). Clamp to a
-        # small positive floor before dividing; the normalisation still
-        # yields a proper simplex and the discrete projection is unchanged.
-        x_pos = x.clamp(min=1e-8)
-        return x_pos / x_pos.sum(dim=2, keepdim=True)
+        # ``x / x.sum`` is the normal simplex normalisation. The only failure
+        # mode is the (rare) pathological case where the sum across categories
+        # becomes ~0 or negative, which would produce NaN/Inf and corrupt the
+        # AdamW state. Guard *only* the denominator so the typical positive
+        # case is bit-for-bit identical to the historical implementation.
+        s = x.sum(dim=2, keepdim=True)
+        return x / s.clamp(min=1e-8)
 
     def project(self, x):
         idx = torch.argmax(x, dim=2)
