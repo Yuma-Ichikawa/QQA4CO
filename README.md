@@ -5,6 +5,15 @@ PyTorch implementation of the ICLR 2025 paper
 by Yuma Ichikawa and Yamato Arai.
 
 <p align="center">
+  <a href="https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/00_colab_quickstart.ipynb">
+    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open Quickstart in Colab">
+  </a>
+  <a href="https://parallelquasiquantum4co.streamlit.app/">
+    <img src="https://static.streamlit.io/badges/streamlit_badge_black_white.svg" alt="Open in Streamlit">
+  </a>
+</p>
+
+<p align="center">
   <img src="data/fig/demo.gif" width="400">
 </p>
 
@@ -72,10 +81,17 @@ print(f"E_0 / N  ≈  {result.best_obj / 100:.4f}  (target ≈ -0.7632)")
 | Category          | Classes |
 | ----------------- | ------- |
 | Binary QUBO       | `MaximumIndependentSet`, `MaxClique`, `MaxCut` (+ `*Instance` batched variants) |
+| Binary (classic CO) | `Knapsack`, `NumberPartitioning`, `VertexCover`, `GraphBisection`, `MaxSAT3` |
 | Categorical       | `Coloring`, `BalancedGraphPartition` |
+| Categorical (permutation) | `TSP`, `QAP`, `NQueens` |
 | 1D Ising          | `Ising1D` |
 | Spin glass        | `EdwardsAnderson`, `SherringtonKirkpatrick` |
 | Statistical phys. | `BinaryPerceptron`, `HopfieldMemory` |
+
+Every problem exposes `problem.score_summary(x_disc) -> dict` so the CLI /
+GUI can display a human-readable metric (e.g. "IS size: 22", "packed
+value: 358", "tour length: 3.28") and a feasibility flag alongside the
+raw loss.
 
 Read the full mathematical definitions in
 [`docs/problems.md`](docs/problems.md).
@@ -101,14 +117,39 @@ qqa gui
 
 The dashboard has four pages:
 
-- **Home** — pick a problem, size, seed, and problem-specific parameters.
+- **Home** — pick a problem family (Graph, Classic CO, Categorical /
+  permutation, Physics), size, seed, and problem-specific parameters.
 - **Solve** — set QQA hyper-parameters and launch a run with a live
-  progress bar, live metrics, and a streaming loss/best plot powered by a
-  `StreamlitCallback`.
+  progress bar, a `mean ± σ` loss band across the parallel replicas, a
+  population heatmap sorted by best-so-far, a population-diversity curve,
+  and a headline score card (e.g. "IS size: 22  /  40").
 - **Visualize** — tabbed view of dynamics, best trajectory, the applied
-  annealing schedule, and a solution heatmap.
+  annealing schedule, a solution heatmap, parallel population, PCA
+  trajectory, ridgeline of loss distributions, and per-replica fate
+  lines.
 - **Compare** — run a small hyper-parameter grid and inspect the result
   with parallel-coordinates and overlaid trajectories.
+
+A light / dark toggle lives in the sidebar; both themes share an
+academic, Plotly-aware palette.
+
+### Live demo
+
+A hosted instance runs at
+**<https://parallelquasiquantum4co.streamlit.app/>**. The operator runbook,
+including how to switch the Streamlit Community Cloud app from *Private* to
+*Anyone with the link*, is in
+[`deploy/STREAMLIT_DEPLOY.md`](deploy/STREAMLIT_DEPLOY.md). A quick health
+check is available via:
+
+```bash
+uv run python scripts/check_streamlit_deploy.py
+```
+
+> **Note.** If the URL currently redirects to `/-/auth/app?…`, the app is
+> still set to Private on Streamlit Community Cloud. The fix is a single
+> setting in the Streamlit Cloud dashboard — see
+> [`deploy/STREAMLIT_DEPLOY.md §1`](deploy/STREAMLIT_DEPLOY.md#1-why-is-the-url-redirecting-to--auth-app).
 
 ## Deploy to the public web (free)
 
@@ -180,10 +221,140 @@ Every function accepts `backend="matplotlib"` (default) or `backend="plotly"`.
 Plotly is optional; if it is not installed the plot silently falls back to
 matplotlib.
 
+### Visualization gallery
+
+All figures below are produced by `scripts/make_gallery.py` (regenerate with
+`uv run python scripts/make_gallery.py`) and stored under
+[`data/fig/gallery/`](data/fig/gallery). Each row shows one problem family
+from the catalog; the columns are, left → right, **dynamics**
+(`plot_history`), **best trajectory** (`plot_best_trajectory`), **best
+solution heatmap** (`plot_solution_heatmap`), and **parallel-population**
+evolution (`plot_population_evolution`).
+
+#### Default annealing schedule
+
+<p align="center">
+  <img src="data/fig/gallery/schedule_default.png" width="520" alt="Default linear bg schedule from -3.0 to +0.1">
+</p>
+
+#### Maximum Independent Set (N=40, 3-regular)
+
+<p align="center">
+  <img src="data/fig/gallery/history_mis.png" width="900" alt="MIS loss/penalty/diversity dynamics">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_mis.png" width="440">
+  <img src="data/fig/gallery/solution_mis.png" width="440">
+  <img src="data/fig/gallery/population_mis.png" width="440">
+</p>
+
+#### Max-Cut (Erdős–Rényi, N=40, p=0.15)
+
+<p align="center">
+  <img src="data/fig/gallery/history_maxcut.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_maxcut.png" width="440">
+  <img src="data/fig/gallery/solution_maxcut.png" width="440">
+  <img src="data/fig/gallery/population_maxcut.png" width="440">
+</p>
+
+#### Graph coloring (N=30, 4-regular, K=3)
+
+<p align="center">
+  <img src="data/fig/gallery/history_coloring.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_coloring.png" width="440">
+  <img src="data/fig/gallery/population_coloring.png" width="440">
+</p>
+
+#### Ising 1D ferromagnet (N=32, J=1, periodic)
+
+<p align="center">
+  <img src="data/fig/gallery/history_ising1d.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_ising1d.png" width="440">
+  <img src="data/fig/gallery/solution_ising1d.png" width="440">
+  <img src="data/fig/gallery/population_ising1d.png" width="440">
+</p>
+
+#### Edwards–Anderson 3D spin glass (L=4, seed=0)
+
+<p align="center">
+  <img src="data/fig/gallery/history_ea3d.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_ea3d.png" width="440">
+  <img src="data/fig/gallery/solution_ea3d.png" width="440">
+  <img src="data/fig/gallery/population_ea3d.png" width="440">
+</p>
+
+#### Sherrington–Kirkpatrick mean-field spin glass (N=80)
+
+<p align="center">
+  <img src="data/fig/gallery/history_sk.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_sk.png" width="440">
+  <img src="data/fig/gallery/solution_sk.png" width="440">
+  <img src="data/fig/gallery/population_sk.png" width="440">
+</p>
+
+#### Binary perceptron (N=40, α=0.4)
+
+<p align="center">
+  <img src="data/fig/gallery/history_perceptron.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_perceptron.png" width="440">
+  <img src="data/fig/gallery/solution_perceptron.png" width="440">
+  <img src="data/fig/gallery/population_perceptron.png" width="440">
+</p>
+
+#### Hopfield memory (N=64, P=3)
+
+<p align="center">
+  <img src="data/fig/gallery/history_hopfield.png" width="900">
+</p>
+<p align="center">
+  <img src="data/fig/gallery/best_hopfield.png" width="440">
+  <img src="data/fig/gallery/solution_hopfield.png" width="440">
+  <img src="data/fig/gallery/population_hopfield.png" width="440">
+</p>
+
+## Verified correctness
+
+We run QQA against a ground truth or a strong baseline for every problem in
+the catalog via `scripts/verify_all_problems.py`. The most recent sweep
+(29 instances across 9 problem families) is stored in
+[`tasks/verification_report.md`](tasks/verification_report.md); headline
+numbers:
+
+| Problem | Instances | Reference | QQA |
+| --- | --- | --- | --- |
+| Maximum Independent Set | 3×(3-reg, N=50) | networkx degree-greedy | **matches or beats greedy on all seeds** |
+| MaxCut | 3×ER (N=30/40/60) | best-of-400 random partition | **+6 / +16 / +27 edges over random** |
+| MaxClique | 3×ER (N=30/40/50) | nx.approximation.max_clique | **+1 vertex on every seed** |
+| Graph coloring (K=3) | 3×(3-reg, N=40) | Welsh–Powell greedy | **0 conflicts on all seeds** |
+| Ising 1D ferromagnet | N ∈ {16, 32, 64} | exact E₀ = −N | **gap = 0 on every size** |
+| Edwards–Anderson 2D L=3 | 3 seeds | brute force (2⁹) | **matches exact ground state** |
+| Edwards–Anderson 3D L=4 | 2 seeds | — | E/N ≈ −1.61 (no exact solver) |
+| Sherrington–Kirkpatrick | N ∈ {50, 100, 200} | Parisi e₀ = −0.7632 | **≤ 3.2 % gap at N=200** |
+| Binary perceptron | α ∈ {0.3, 0.5, 0.7} | teacher reaches 0 errors | **0 errors on all α** |
+| Hopfield memory | (N, P) ∈ {(32,2),(64,3),(128,4)} | ≥ 0.95 overlap | **overlap = 1.0** |
+
+Overall: **29 / 29 checks pass (100 %)**. Re-run with
+`uv run python scripts/verify_all_problems.py`; the command regenerates the
+Markdown report in place.
+
 ## Notebooks
 
-Eight runnable notebooks live in [`examples/`](examples/):
+Nine runnable notebooks live in [`examples/`](examples/). Each notebook has
+an **Open in Colab** badge in its first cell and auto-installs `qqa` on Colab.
 
+0. `00_colab_quickstart.ipynb` — one-click tour of every problem
 1. `01_maximum_independent_set.ipynb`
 2. `02_graph_coloring.ipynb`
 3. `03_max_cut.ipynb`

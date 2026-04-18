@@ -33,6 +33,16 @@ from qqa.problems.spin import (
     SherringtonKirkpatrick,
     SpinProblem,
 )
+from qqa.problems.extras import (
+    QAP,
+    TSP,
+    GraphBisection,
+    Knapsack,
+    MaxSAT3,
+    NQueens,
+    NumberPartitioning,
+    VertexCover,
+)
 from qqa.problems.user import (
     UserProblem,
     load_problem_from_file,
@@ -56,6 +66,14 @@ __all__ = [
     "SherringtonKirkpatrick",
     "BinaryPerceptron",
     "HopfieldMemory",
+    "Knapsack",
+    "NumberPartitioning",
+    "VertexCover",
+    "GraphBisection",
+    "MaxSAT3",
+    "TSP",
+    "QAP",
+    "NQueens",
     "UserProblem",
     "user_problem_from_source",
     "load_problem_from_file",

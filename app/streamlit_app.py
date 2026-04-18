@@ -26,6 +26,7 @@ from _common import (  # noqa: E402
     apply_theme,
     build_problem,
     preview_problem,
+    theme_toggle_in_sidebar,
 )
 
 import qqa  # noqa: E402
@@ -42,13 +43,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+theme_toggle_in_sidebar()
 apply_theme()
 
 st.title("Quasi-Quantum Annealing")
 st.markdown(
     '<div class="qqa-card">'
-    "Define a combinatorial or spin-glass problem, plug in your own loss "
-    "function, tune QQA, and explore the results interactively."
+    "A unified gradient-based solver for combinatorial optimisation and "
+    "spin-glass models. Pick a problem from the catalog, plug in your own "
+    "loss, or tweak the relaxation and watch the parallel population "
+    "anneal in real time."
     "</div>",
     unsafe_allow_html=True,
 )
@@ -93,37 +97,59 @@ with st.sidebar:
         size = extra["num_vars"]
         st.markdown("Edit the snippet in the main panel →")
     else:
+        _FAMILIES = {
+            "Graph (binary QUBO)": [
+                ("mis", "Maximum Independent Set"),
+                ("maxcut", "Max-Cut"),
+                ("maxclique", "Max Clique"),
+                ("vertex_cover", "Vertex Cover"),
+                ("graph_bisection", "Graph bisection"),
+            ],
+            "Categorical / assignment": [
+                ("coloring", "Graph coloring"),
+                ("tsp", "Travelling Salesman (TSP)"),
+                ("qap", "Quadratic Assignment (QAP)"),
+                ("nqueens", "N-Queens"),
+            ],
+            "Classic CO": [
+                ("knapsack", "0/1 Knapsack"),
+                ("number_partition", "Number partitioning"),
+                ("maxsat3", "MaxSAT (random 3-SAT)"),
+            ],
+            "Physics / spin": [
+                ("ising1d", "1D Ising model"),
+                ("ea", "Edwards–Anderson spin glass"),
+                ("sk", "Sherrington–Kirkpatrick spin glass"),
+                ("perceptron", "Binary perceptron"),
+                ("hopfield", "Hopfield memory"),
+            ],
+        }
+        _ALL_OPTS = [(k, label) for group in _FAMILIES.values() for (k, label) in group]
+        _LABELS = {k: label for k, label in _ALL_OPTS}
+
+        family = st.selectbox("Problem family", list(_FAMILIES.keys()), index=0)
         problem_kind = st.selectbox(
-            "Problem family",
-            (
-                "mis",
-                "maxcut",
-                "maxclique",
-                "coloring",
-                "ising1d",
-                "ea",
-                "sk",
-                "perceptron",
-                "hopfield",
-            ),
-            index=0,
-            format_func=lambda s: {
-                "mis": "Maximum Independent Set",
-                "maxcut": "Max-Cut",
-                "maxclique": "Max Clique",
-                "coloring": "Graph coloring",
-                "ising1d": "1D Ising model",
-                "ea": "Edwards–Anderson spin glass",
-                "sk": "Sherrington–Kirkpatrick spin glass",
-                "perceptron": "Binary perceptron (teacher-student)",
-                "hopfield": "Hopfield memory",
-            }[s],
+            "Problem",
+            [k for k, _ in _FAMILIES[family]],
+            format_func=lambda s: _LABELS[s],
         )
 
-        size = st.number_input("Problem size (N or L)", min_value=4, max_value=400, value=32)
+        size_default = {"tsp": 10, "qap": 8, "nqueens": 8}.get(problem_kind, 32)
+        size_max = {"tsp": 20, "qap": 14, "nqueens": 14}.get(problem_kind, 400)
+        size_label = {
+            "tsp": "Cities N",
+            "qap": "Facilities N",
+            "nqueens": "Board size N",
+            "maxsat3": "Variables N",
+            "knapsack": "Items N",
+            "number_partition": "Values N",
+            "ea": "Lattice side L",
+        }.get(problem_kind, "Problem size (N)")
+        size = st.number_input(size_label, min_value=4, max_value=size_max, value=size_default)
         seed = st.number_input("Seed", min_value=0, max_value=10_000, value=0)
 
-        if problem_kind in {"mis", "maxcut", "maxclique"}:
+        # Per-problem auxiliary controls.
+        if problem_kind in {"mis", "maxcut", "maxclique", "vertex_cover", "graph_bisection"}:
             extra["graph_d"] = st.slider("Random-regular degree d", 2, 8, 3)
         if problem_kind == "coloring":
             extra["num_category"] = st.slider("Number of colours K", 2, 6, 3)
@@ -134,6 +160,18 @@ with st.sidebar:
             extra["alpha"] = st.slider("Loading α = M/N", 0.1, 1.5, 0.5, 0.1)
         if problem_kind == "hopfield":
             extra["patterns"] = st.slider("Stored patterns P", 1, 20, 3)
+        if problem_kind == "knapsack":
+            extra["capacity_ratio"] = st.slider("Capacity / Σwᵢ", 0.1, 0.9, 0.5, 0.05)
+        if problem_kind == "number_partition":
+            extra["max_value"] = st.slider("Max value", 10, 500, 100, step=10)
+        if problem_kind == "graph_bisection":
+            extra["balance_penalty"] = st.slider("Balance penalty", 0.5, 5.0, 2.0, 0.1)
+        if problem_kind == "maxsat3":
+            extra["ratio"] = st.slider("Clause ratio M/N", 1.0, 6.0, 3.0, 0.1)
+        if problem_kind == "tsp":
+            extra["column_penalty"] = st.slider("Column penalty λ", 1.0, 10.0, 3.0, 0.5)
+        if problem_kind == "qap":
+            extra["column_penalty"] = st.slider("Column penalty λ", 1.0, 30.0, 10.0, 0.5)
 
     # Only offer devices that are actually available on the host. On public
     # deployments (Streamlit Cloud / Hugging Face Spaces) this is always

@@ -190,11 +190,9 @@ def batch_annealing_categorical(
         callbacks=callbacks,
         verbose=True,
     )
-    # best_sol has shape (sol_size, N, K); pick best-performing entry then argmax.
+    # ``result.best_sol`` is the single winning replica with shape ``(N, K)``.
     best_sol = result.best_sol
-    losses = problem.loss_fn(best_sol)
-    idx = int(losses.argmin().item())
-    best_string = best_sol[idx].argmax(dim=-1).detach()
+    best_string = best_sol.argmax(dim=-1).detach()
     if plot_dynamics:
         from qqa.visualization import plot_history
 

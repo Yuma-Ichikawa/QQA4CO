@@ -50,6 +50,10 @@ class AnnealResult:
     runtime: float
     history: dict = field(default_factory=dict)
     callbacks: list[Callback] = field(default_factory=list)
+    score: dict = field(default_factory=dict)
+    """Human-readable problem-specific score produced by
+    :py:meth:`COProblem.score_summary` (``label``, ``value``, ``unit``,
+    ``feasible``, ``extra``). Empty for batched-instance problems."""
 
 
 def _is_instance_problem(problem) -> bool:
@@ -142,7 +146,10 @@ def anneal(
         else:
             min_val, min_idx = torch.min(loss_disc, dim=0)
             best_obj = float(min_val.item())
-            best_sol = x_disc.detach().clone()
+            # Store the single winning replica (not the whole batch) so that
+            # downstream code — ``problem.score_summary``, CLI, notebooks —
+            # sees a clean ``(N, ...)`` tensor rather than ``(B, N, ...)``.
+            best_sol = x_disc[int(min_idx.item())].detach().clone()
 
     for cb in cb_list:
         cb.on_train_begin(
@@ -196,10 +203,10 @@ def anneal(
                     )
                     best_obj = np.minimum(best_obj, vals_np)
             else:
-                min_val = loss_disc.min()
+                min_val, min_idx = torch.min(loss_disc, dim=0)
                 if min_val.item() < best_obj:
                     best_obj = float(min_val.item())
-                    best_sol = x_disc.detach().clone()
+                    best_sol = x_disc[int(min_idx.item())].detach().clone()
 
         state = CallbackState(
             epoch=epoch,
@@ -231,12 +238,24 @@ def anneal(
         cb.on_train_end(state)
 
     history = recorder.history if recorder is not None else {}
+
+    # Human-readable score. Only meaningful for single-instance problems,
+    # where ``best_sol`` is a single solution tensor.
+    score: dict = {}
+    if not is_batch:
+        try:
+            score = problem.score_summary(best_sol)
+        except Exception as exc:  # noqa: BLE001 - surface but never abort
+            score = {"label": "loss", "value": float(best_obj), "unit": "",
+                     "feasible": True, "extra": {"error": str(exc)}}
+
     return AnnealResult(
         best_sol=best_sol,
         best_obj=best_obj,
         runtime=runtime,
         history=history,
         callbacks=cb_list,
+        score=score,
     )
 
 

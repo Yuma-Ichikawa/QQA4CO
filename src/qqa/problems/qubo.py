@@ -50,6 +50,32 @@ class MaximumIndependentSet(QUBOProblem):
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
 
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
+        with torch.no_grad():
+            xd = x.float()
+            size = xd.sum(dim=-1)
+            # Count violated edges directly from the graph to avoid double-counting.
+            adj = self.Q_mat.clone()
+            adj.fill_diagonal_(0.0)
+            violations = 0.5 * torch.einsum("bi,ij,bj->b", xd, (adj > 0).float(), xd)
+        feas = violations <= 0.5
+        if feas.any():
+            s = size.clone()
+            s[~feas] = -float("inf")
+            idx = int(torch.argmax(s).item())
+            feasible = True
+        else:
+            idx = int(torch.argmax(size).item())
+            feasible = False
+        return {
+            "label": "IS size",
+            "value": int(size[idx].item()),
+            "unit": f"/ {self.num_nodes}",
+            "feasible": feasible,
+            "extra": {"violated_edges": int(violations[idx].item())},
+        }
+
 
 class MaximumIndependentSetInstance(COProblem):
     """Batched-instance MIS. All graphs padded to ``max_node`` nodes."""
@@ -111,6 +137,32 @@ class MaxClique(QUBOProblem):
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
 
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
+        with torch.no_grad():
+            xd = x.float()
+            size = xd.sum(dim=-1)
+            # Missing edges inside the chosen set (i.e. non-clique pairs).
+            non_edge = self.Q_mat.clone()
+            non_edge.fill_diagonal_(0.0)
+            violations = 0.5 * torch.einsum("bi,ij,bj->b", xd, (non_edge > 0).float(), xd)
+        feas = violations <= 0.5
+        if feas.any():
+            s = size.clone()
+            s[~feas] = -float("inf")
+            idx = int(torch.argmax(s).item())
+            feasible = True
+        else:
+            idx = int(torch.argmax(size).item())
+            feasible = False
+        return {
+            "label": "clique size",
+            "value": int(size[idx].item()),
+            "unit": f"/ {self.num_nodes}",
+            "feasible": feasible,
+            "extra": {"missing_edges": int(violations[idx].item())},
+        }
+
 
 class MaxCliqueInstance(COProblem):
     """Batched-instance Max Clique."""
@@ -167,6 +219,25 @@ class MaxCut(QUBOProblem):
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
+
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
+        with torch.no_grad():
+            xd = x.float()
+            # Cut size = sum of edge weights w_{uv} [x_u != x_v].
+            W = self.Q_mat.clone()
+            W.fill_diagonal_(0.0)
+            cut = 0.5 * torch.einsum("bi,ij,bj->b", xd, W, 1 - xd) \
+                + 0.5 * torch.einsum("bi,ij,bj->b", 1 - xd, W, xd)
+            # (two terms equal; using the average for symmetry)
+        idx = int(torch.argmax(cut).item())
+        return {
+            "label": "cut size",
+            "value": float(cut[idx].item()),
+            "unit": "",
+            "feasible": True,
+            "extra": {},
+        }
 
 
 class MaxCutInstance(COProblem):
