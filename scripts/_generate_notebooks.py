@@ -30,7 +30,8 @@ def _colab_install_cell() -> str:
     users wanting the ``main`` branch. A no-op when ``qqa`` is already
     importable (local / CI runs skip the pip invocation entirely).
     """
-    return '''\
+    return (
+        """\
 # Install QQA on Google Colab (no-op if already installed locally).
 # We prefer the released wheel on PyPI; users who want bleeding-edge
 # ``main`` can set QQA_INSTALL_FROM_GIT=1 before running this cell.
@@ -41,25 +42,46 @@ import sys
 
 if importlib.util.find_spec("qqa") is None:
     if os.environ.get("QQA_INSTALL_FROM_GIT") == "1":
-        spec = "qqa @ git+https://github.com/''' + REPO_SLUG + '''.git"
+        spec = "qqa @ git+https://github.com/"""
+        + REPO_SLUG
+        + """.git"
     else:
         spec = "qqa"
     subprocess.check_call(
         [sys.executable, "-m", "pip", "install", "--quiet", spec]
-    )'''
+    )"""
+    )
+
+
+def _det_id(nb_filename: str, idx: int) -> str:
+    """Deterministic per-cell id so the generator's output is reproducible.
+
+    nbformat ≥ 4.5 otherwise assigns random ids on every write, which
+    creates noisy churn in git diffs every time the notebooks are
+    regenerated even when no content changed.
+    """
+    import hashlib
+
+    digest = hashlib.sha1(f"{nb_filename}:{idx}".encode()).hexdigest()
+    return digest[:12]
 
 
 def make_nb(title: str, subtitle: str, cells: list[tuple[str, str]], *, nb_filename: str):
     nb = nbf.v4.new_notebook()
     badge = COLAB_BADGE_TEMPLATE.format(slug=REPO_SLUG, nb=nb_filename)
-    header = nbf.v4.new_markdown_cell(f"# {title}\n\n{badge}\n\n{subtitle}")
-    nb.cells.append(header)
-    nb.cells.append(nbf.v4.new_code_cell(_colab_install_cell()))
-    for kind, src in cells:
+    nb.cells.append(
+        nbf.v4.new_markdown_cell(
+            f"# {title}\n\n{badge}\n\n{subtitle}",
+            id=_det_id(nb_filename, 0),
+        )
+    )
+    nb.cells.append(nbf.v4.new_code_cell(_colab_install_cell(), id=_det_id(nb_filename, 1)))
+    for i, (kind, src) in enumerate(cells, start=2):
+        cell_id = _det_id(nb_filename, i)
         if kind == "md":
-            nb.cells.append(nbf.v4.new_markdown_cell(src))
+            nb.cells.append(nbf.v4.new_markdown_cell(src, id=cell_id))
         else:
-            nb.cells.append(nbf.v4.new_code_cell(src))
+            nb.cells.append(nbf.v4.new_code_cell(src, id=cell_id))
     nb.metadata = {
         "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
         "language_info": {"name": "python", "version": "3.10"},
@@ -68,7 +90,7 @@ def make_nb(title: str, subtitle: str, cells: list[tuple[str, str]], *, nb_filen
     return nb
 
 
-COMMON_IMPORTS = '''\
+COMMON_IMPORTS = """\
 import matplotlib.pyplot as plt  # noqa: F401
 import networkx as nx
 
@@ -77,7 +99,7 @@ from qqa import visualization as viz
 
 qqa.fix_seed(0)
 print("QQA version:", qqa.__version__)
-'''
+"""
 
 
 def save(path: Path, nb):
@@ -92,14 +114,14 @@ def nb01():
         ("md", "## Problem: Maximum Independent Set on a random regular graph"),
         (
             "code",
-            'g = nx.random_regular_graph(d=3, n=50, seed=0)\n'
-            'problem = qqa.MaximumIndependentSet(g, penalty=2)\n'
+            "g = nx.random_regular_graph(d=3, n=50, seed=0)\n"
+            "problem = qqa.MaximumIndependentSet(g, penalty=2)\n"
             'print(f"N = {problem.num_nodes}, |E| = {g.number_of_edges()}")',
         ),
         ("md", "## Run QQA"),
         (
             "code",
-            'result = qqa.anneal(problem, sol_size=100, num_epochs=1500, verbose=False)\n'
+            "result = qqa.anneal(problem, sol_size=100, num_epochs=1500, verbose=False)\n"
             'print(f"MIS size (lower bound): {-int(result.best_obj)}")\n'
             'print(f"runtime: {result.runtime:.2f}s")',
         ),
@@ -119,12 +141,12 @@ def nb02():
         ("code", COMMON_IMPORTS),
         (
             "code",
-            'g = nx.random_regular_graph(d=3, n=40, seed=0)\n'
-            'problem = qqa.Coloring(g, num_category=3)',
+            "g = nx.random_regular_graph(d=3, n=40, seed=0)\n"
+            "problem = qqa.Coloring(g, num_category=3)",
         ),
         (
             "code",
-            'result = qqa.anneal(problem, sol_size=100, num_epochs=2000, verbose=False)\n'
+            "result = qqa.anneal(problem, sol_size=100, num_epochs=2000, verbose=False)\n"
             'print(f"conflict count: {int(result.best_obj)}")',
         ),
         ("code", "viz.plot_best_trajectory(result, show=False);"),
@@ -142,14 +164,14 @@ def nb03():
         ("code", COMMON_IMPORTS),
         (
             "code",
-            'g = nx.erdos_renyi_graph(n=60, p=0.15, seed=0)\n'
+            "g = nx.erdos_renyi_graph(n=60, p=0.15, seed=0)\n"
             'for u, v in g.edges:\n    g[u][v]["weight"] = 1.0\n'
-            'problem = qqa.MaxCut(g)',
+            "problem = qqa.MaxCut(g)",
         ),
         (
             "code",
-            'result = qqa.anneal(problem, sol_size=100, num_epochs=1500, verbose=False)\n'
-            'cut = -float(result.best_obj) / 2\n'
+            "result = qqa.anneal(problem, sol_size=100, num_epochs=1500, verbose=False)\n"
+            "cut = -float(result.best_obj) / 2\n"
             'print(f"approx cut size: {cut:.2f}")',
         ),
         ("code", "viz.plot_history(result, show=False);"),
@@ -173,12 +195,12 @@ def nb04():
         ),
         (
             "code",
-            'problem = qqa.EdwardsAnderson(L=4, dim=3, seed=0)\n'
+            "problem = qqa.EdwardsAnderson(L=4, dim=3, seed=0)\n"
             'print(f"N = {problem.num_spins}, couplings shape = {tuple(problem.J.shape)}")',
         ),
         (
             "code",
-            'result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n'
+            "result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n"
             'print(f"E_0 / N ≈ {result.best_obj / problem.num_spins:.4f}")',
         ),
         ("code", "viz.plot_best_trajectory(result, show=False);"),
@@ -202,8 +224,8 @@ def nb05():
         ),
         (
             "code",
-            'problem = qqa.SherringtonKirkpatrick(N=100, seed=0)\n'
-            'result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n'
+            "problem = qqa.SherringtonKirkpatrick(N=100, seed=0)\n"
+            "result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n"
             'print(f"E_0 / N = {result.best_obj / 100:.4f}  (target ≈ -0.7632)")',
         ),
         ("code", "viz.plot_history(result, show=False);"),
@@ -227,14 +249,14 @@ def nb06():
         ),
         (
             "code",
-            'problem = qqa.BinaryPerceptron(N=50, alpha=0.5, seed=0, sharpness=10.0)\n'
+            "problem = qqa.BinaryPerceptron(N=50, alpha=0.5, seed=0, sharpness=10.0)\n"
             'print(f"patterns: {problem.num_patterns}")',
         ),
         (
             "code",
-            'result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n'
-            '# ``best_sol`` has shape (N,) for single-instance problems; add a batch dim\n'
-            's_best = result.best_sol.unsqueeze(0)\n'
+            "result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)\n"
+            "# ``best_sol`` has shape (N,) for single-instance problems; add a batch dim\n"
+            "s_best = result.best_sol.unsqueeze(0)\n"
             'print(f"surrogate loss: {result.best_obj:.3f}")\n'
             'print(f"exact errors : {int(problem.error_count(s_best))}")',
         ),
@@ -259,14 +281,14 @@ def nb07():
         ),
         (
             "code",
-            'problem = qqa.HopfieldMemory(N=80, patterns=3, seed=0)\n'
-            'result = qqa.anneal(problem, sol_size=128, num_epochs=1500, verbose=False)\n'
+            "problem = qqa.HopfieldMemory(N=80, patterns=3, seed=0)\n"
+            "result = qqa.anneal(problem, sol_size=128, num_epochs=1500, verbose=False)\n"
             'print(f"energy: {result.best_obj:.3f}  (target ≈ {-80 / 2:.3f} per pattern)")',
         ),
         (
             "code",
-            's_best = result.best_sol.unsqueeze(0)\n'
-            'm = problem.overlap(s_best)\n'
+            "s_best = result.best_sol.unsqueeze(0)\n"
+            "m = problem.overlap(s_best)\n"
             'print(f"overlap with stored patterns: {m[0].tolist()}")',
         ),
     ]
@@ -289,42 +311,42 @@ def nb08():
         ),
         (
             "code",
-            'import itertools\n'
-            '\n'
-            'import pandas as pd\n'
-            '\n'
-            'problem = qqa.SherringtonKirkpatrick(N=80, seed=0)\n'
-            'rows = []\n'
-            'for mb, Mb, dp in itertools.product([-3, -2, -1], [0.0, 0.1], [0.0, 0.1]):\n'
-            '    r = qqa.anneal(\n'
-            '        problem,\n'
-            '        sol_size=64,\n'
-            '        num_epochs=600,\n'
-            '        min_bg=mb,\n'
-            '        max_bg=Mb,\n'
-            '        div_param=dp,\n'
-            '        verbose=False,\n'
-            '    )\n'
-            '    rows.append(\n'
-            '        {\n'
+            "import itertools\n"
+            "\n"
+            "import pandas as pd\n"
+            "\n"
+            "problem = qqa.SherringtonKirkpatrick(N=80, seed=0)\n"
+            "rows = []\n"
+            "for mb, Mb, dp in itertools.product([-3, -2, -1], [0.0, 0.1], [0.0, 0.1]):\n"
+            "    r = qqa.anneal(\n"
+            "        problem,\n"
+            "        sol_size=64,\n"
+            "        num_epochs=600,\n"
+            "        min_bg=mb,\n"
+            "        max_bg=Mb,\n"
+            "        div_param=dp,\n"
+            "        verbose=False,\n"
+            "    )\n"
+            "    rows.append(\n"
+            "        {\n"
             '            "min_bg": mb,\n'
             '            "max_bg": Mb,\n'
             '            "div_param": dp,\n'
             '            "best_obj_per_N": float(r.best_obj) / 80,\n'
-            '        }\n'
-            '    )\n'
-            'df = pd.DataFrame(rows)\n'
-            'df',
+            "        }\n"
+            "    )\n"
+            "df = pd.DataFrame(rows)\n"
+            "df",
         ),
         (
             "code",
-            'try:\n'
+            "try:\n"
             '    fig = viz.plot_parallel_coordinates(df, objective="best_obj_per_N", show=False)\n'
-            'except Exception as e:\n'
+            "except Exception as e:\n"
             '    print("Plotly not installed; install with pip install qqa[plotly]")\n'
-            '    print(e)\n'
-            'else:\n'
-            '    fig.show()',
+            "    print(e)\n"
+            "else:\n"
+            "    fig.show()",
         ),
     ]
     return make_nb(
@@ -352,14 +374,14 @@ def nb00():
         ("md", "## Setup"),
         (
             "code",
-            'import matplotlib.pyplot as plt  # noqa: F401\n'
-            'import networkx as nx\n'
-            'import torch\n'
-            '\n'
-            'import qqa\n'
-            'from qqa import visualization as viz\n'
-            '\n'
-            'qqa.fix_seed(0)\n'
+            "import matplotlib.pyplot as plt  # noqa: F401\n"
+            "import networkx as nx\n"
+            "import torch\n"
+            "\n"
+            "import qqa\n"
+            "from qqa import visualization as viz\n"
+            "\n"
+            "qqa.fix_seed(0)\n"
             'print("QQA version:", qqa.__version__)\n'
             'device = "cuda" if torch.cuda.is_available() else "cpu"\n'
             'print("device:", device)',
@@ -367,101 +389,101 @@ def nb00():
         ("md", "## 1. Maximum Independent Set"),
         (
             "code",
-            'g = nx.random_regular_graph(d=3, n=50, seed=0)\n'
-            'problem = qqa.MaximumIndependentSet(g, penalty=2, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=64, num_epochs=1000, device=device, verbose=False)\n'
+            "g = nx.random_regular_graph(d=3, n=50, seed=0)\n"
+            "problem = qqa.MaximumIndependentSet(g, penalty=2, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=64, num_epochs=1000, device=device, verbose=False)\n"
             'print(f"MIS size >= {-int(r.best_obj)}  ({r.runtime:.2f}s)")\n'
-            'viz.plot_history(r, show=False);',
+            "viz.plot_history(r, show=False);",
         ),
         ("md", "## 2. Graph coloring (K=3)"),
         (
             "code",
-            'g = nx.random_regular_graph(d=3, n=40, seed=0)\n'
-            'problem = qqa.Coloring(g, num_category=3, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=64, num_epochs=1500, device=device, verbose=False)\n'
+            "g = nx.random_regular_graph(d=3, n=40, seed=0)\n"
+            "problem = qqa.Coloring(g, num_category=3, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=64, num_epochs=1500, device=device, verbose=False)\n"
             'print(f"conflicts: {int(round(r.best_obj))}")\n'
-            'viz.plot_best_trajectory(r, show=False);',
+            "viz.plot_best_trajectory(r, show=False);",
         ),
         ("md", "## 3. Max-Cut"),
         (
             "code",
-            'g = nx.erdos_renyi_graph(n=40, p=0.2, seed=0)\n'
-            'problem = qqa.MaxCut(g, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=64, num_epochs=1000, device=device, verbose=False)\n'
+            "g = nx.erdos_renyi_graph(n=40, p=0.2, seed=0)\n"
+            "problem = qqa.MaxCut(g, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=64, num_epochs=1000, device=device, verbose=False)\n"
             'print(f"cut value >= {-float(r.best_obj):.2f}")\n'
-            'viz.plot_history(r, show=False);',
+            "viz.plot_history(r, show=False);",
         ),
         ("md", "## 4. 1D Ising ferromagnet"),
         (
             "code",
-            'problem = qqa.Ising1D(N=32, J=1.0, periodic=True, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=64, num_epochs=600, device=device, verbose=False)\n'
+            "problem = qqa.Ising1D(N=32, J=1.0, periodic=True, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=64, num_epochs=600, device=device, verbose=False)\n"
             'print(f"E = {float(r.best_obj):.3f}  (target: -32)")\n'
-            'viz.plot_best_trajectory(r, show=False);',
+            "viz.plot_best_trajectory(r, show=False);",
         ),
         ("md", "## 5. Edwards–Anderson 3D spin glass"),
         (
             "code",
-            'problem = qqa.EdwardsAnderson(L=4, dim=3, seed=0, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n'
+            "problem = qqa.EdwardsAnderson(L=4, dim=3, seed=0, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n"
             'print(f"E / N = {float(r.best_obj) / problem.num_spins:.4f}")\n'
-            'viz.plot_history(r, show=False);',
+            "viz.plot_history(r, show=False);",
         ),
         ("md", "## 6. Sherrington–Kirkpatrick"),
         (
             "code",
-            'problem = qqa.SherringtonKirkpatrick(N=100, seed=0, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n'
+            "problem = qqa.SherringtonKirkpatrick(N=100, seed=0, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n"
             'print(f"e_0 = {float(r.best_obj) / 100:.4f}  (Parisi: -0.7632)")\n'
-            'viz.plot_best_trajectory(r, show=False);',
+            "viz.plot_best_trajectory(r, show=False);",
         ),
         ("md", "## 7. Binary perceptron"),
         (
             "code",
-            'problem = qqa.BinaryPerceptron(N=30, alpha=0.5, seed=0, sharpness=10.0, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n'
-            's_best = problem.relaxation.project(r.best_sol).unsqueeze(0)\n'
+            "problem = qqa.BinaryPerceptron(N=30, alpha=0.5, seed=0, sharpness=10.0, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=128, num_epochs=1500, device=device, verbose=False)\n"
+            "s_best = problem.relaxation.project(r.best_sol).unsqueeze(0)\n"
             'print(f"min errors = {int(problem.error_count(s_best).min())}")\n'
-            'viz.plot_best_trajectory(r, show=False);',
+            "viz.plot_best_trajectory(r, show=False);",
         ),
         ("md", "## 8. Hopfield memory"),
         (
             "code",
-            'problem = qqa.HopfieldMemory(N=64, patterns=3, seed=0, device=device)\n'
-            'r = qqa.anneal(problem, sol_size=128, num_epochs=1000, device=device, verbose=False)\n'
-            's_best = problem.relaxation.project(r.best_sol).unsqueeze(0)\n'
-            'overlap = problem.overlap(s_best).abs().max().item()\n'
+            "problem = qqa.HopfieldMemory(N=64, patterns=3, seed=0, device=device)\n"
+            "r = qqa.anneal(problem, sol_size=128, num_epochs=1000, device=device, verbose=False)\n"
+            "s_best = problem.relaxation.project(r.best_sol).unsqueeze(0)\n"
+            "overlap = problem.overlap(s_best).abs().max().item()\n"
             'print(f"max overlap with stored pattern: {overlap:.3f}")\n'
-            'viz.plot_history(r, show=False);',
+            "viz.plot_history(r, show=False);",
         ),
         ("md", "## 9. Parallel MIS (`MaximumIndependentSetInstance`)"),
         (
             "code",
-            'N, degrees = 60, [2, 3, 4, 5]\n'
-            'graphs = [nx.random_regular_graph(d=d, n=N, seed=d) for d in degrees]\n'
-            'problem = qqa.MaximumIndependentSetInstance(\n'
-            '    graphs, max_node=N, penalty=2, device=device\n'
-            ')\n'
-            'r = qqa.anneal(problem, sol_size=64, num_epochs=800, device=device, verbose=False)\n'
-            'for d, obj in zip(degrees, r.best_obj, strict=False):\n'
+            "N, degrees = 60, [2, 3, 4, 5]\n"
+            "graphs = [nx.random_regular_graph(d=d, n=N, seed=d) for d in degrees]\n"
+            "problem = qqa.MaximumIndependentSetInstance(\n"
+            "    graphs, max_node=N, penalty=2, device=device\n"
+            ")\n"
+            "r = qqa.anneal(problem, sol_size=64, num_epochs=800, device=device, verbose=False)\n"
+            "for d, obj in zip(degrees, r.best_obj, strict=False):\n"
             '    print(f"  degree={d}: MIS >= {-int(round(float(obj)))}")',
         ),
         ("md", "## Custom loss via `UserProblem`"),
         (
             "code",
-            'import torch\n'
-            '\n'
-            'N = 40\n'
-            'g = torch.Generator().manual_seed(0)\n'
-            'J = torch.randn(N, N, generator=g) / (N**0.5)\n'
-            'J = (J + J.T) / 2\n'
-            'J.fill_diagonal_(0.0)\n'
-            'problem = qqa.UserProblem(\n'
-            '    num_vars=N,\n'
+            "import torch\n"
+            "\n"
+            "N = 40\n"
+            "g = torch.Generator().manual_seed(0)\n"
+            "J = torch.randn(N, N, generator=g) / (N**0.5)\n"
+            "J = (J + J.T) / 2\n"
+            "J.fill_diagonal_(0.0)\n"
+            "problem = qqa.UserProblem(\n"
+            "    num_vars=N,\n"
             '    variable_kind="spin",\n'
             '    loss_fn=lambda s: -0.5 * torch.einsum("bi,ij,bj->b", s, J, s),\n'
-            ')\n'
-            'r = qqa.anneal(problem, sol_size=128, num_epochs=1000, verbose=False)\n'
+            ")\n"
+            "r = qqa.anneal(problem, sol_size=128, num_epochs=1000, verbose=False)\n"
             'print(f"custom spin-glass e_0 = {float(r.best_obj) / N:.4f}")',
         ),
     ]
