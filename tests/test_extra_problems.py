@@ -404,6 +404,79 @@ def test_build_problem_modern_kwargs_win_over_legacy_alias(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "cfg",
+    [
+        {"kind": "tsp", "size": 6, "seed": 0, "device": "cpu", "extra": {}},
+        {"kind": "qap", "size": 4, "seed": 0, "device": "cpu", "extra": {}},
+        {"kind": "knapsack", "size": 8, "seed": 0, "device": "cpu", "extra": {}},
+        {"kind": "number_partition", "size": 10, "seed": 0, "device": "cpu", "extra": {}},
+        {"kind": "maxsat3", "size": 8, "seed": 0, "device": "cpu", "extra": {"ratio": 3.0}},
+        {"kind": "nqueens", "size": 6, "seed": 0, "device": "cpu", "extra": {}},
+        {"kind": "hopfield", "size": 12, "seed": 0, "device": "cpu", "extra": {"patterns": 3}},
+    ],
+)
+def test_preview_problem_renders_without_fallback_message(cfg, monkeypatch):
+    """Every supported problem family must produce a real, branded
+    preview rather than the generic "no preview available" placeholder
+    of old. Captures every Streamlit element call and asserts:
+
+    * at least one chart was emitted (or, for MaxSAT3, at least one
+      formatted-clause markdown card, since its main preview is
+      typographic);
+    * none of the rendered text contains the legacy fallback message.
+    """
+    _ensure_app_on_path()
+    import _common as common
+
+    captured: dict[str, list] = {"charts": [], "markdowns": [], "captions": []}
+    monkeypatch.setattr(common.st, "plotly_chart", lambda fig, **k: captured["charts"].append(fig))
+    monkeypatch.setattr(
+        common.st,
+        "markdown",
+        lambda *a, **k: captured["markdowns"].append(a[0] if a else ""),
+    )
+    monkeypatch.setattr(
+        common.st,
+        "caption",
+        lambda *a, **k: captured["captions"].append(a[0] if a else ""),
+    )
+    monkeypatch.setattr(common.st, "info", lambda *a, **k: None)
+    monkeypatch.setattr(common.st, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(common.st, "latex", lambda *a, **k: None)
+
+    class _Col:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        common.st,
+        "columns",
+        lambda spec: [_Col() for _ in range(spec if isinstance(spec, int) else len(spec))],
+    )
+
+    p = common.build_problem(cfg)
+    common.preview_problem(p, cfg)
+
+    all_text = " ".join(captured["markdowns"]) + " ".join(captured["captions"])
+    assert "No preview available" not in all_text, (
+        f"Legacy fallback message leaked into the {cfg['kind']} preview."
+    )
+    # MaxSAT3's main canvas is its formatted-clause markdown card; for
+    # every other kind we expect at least one Plotly chart trace.
+    if cfg["kind"] != "maxsat3":
+        assert captured["charts"], (
+            f"{cfg['kind']} produced zero Plotly charts — preview was empty."
+        )
+    else:
+        assert any("∨" in m for m in captured["markdowns"]), (
+            "MaxSAT3 preview should render at least one formatted clause."
+        )
+
+
 def test_render_ea_3d_uses_cone_traces():
     """The 3-D Edwards–Anderson visualisation is the headline view for
     3-D Ising; pin that the figure contains at least one ``go.Cone``
