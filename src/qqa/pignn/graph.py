@@ -15,11 +15,16 @@ import networkx as nx
 import torch
 
 GRAPH_PROBLEM_HINT = (
-    "Supported problems expose ``problem.nx_graph`` (a networkx.Graph): "
-    "MaximumIndependentSet, MaxClique, MaxCut, VertexCover, GraphBisection. "
-    "Pass ``nx_graph=...`` explicitly if your custom problem stores the graph "
-    "under a different attribute."
+    "Supported problems expose their networkx graph as ``problem.nx_graph`` "
+    "(MaximumIndependentSet, MaxClique, MaxCut) or ``problem.graph`` "
+    "(VertexCover, GraphBisection). Pass ``nx_graph=...`` explicitly if your "
+    "custom problem stores the graph under a different attribute."
 )
+
+# Attribute names searched, in order, when extracting the underlying nx.Graph.
+# Kept narrow on purpose so we don't pick up unrelated attributes that happen
+# to be named ``g`` / ``G`` on user subclasses.
+_GRAPH_ATTRS: tuple[str, ...] = ("nx_graph", "graph")
 
 
 def extract_nx_graph(problem, override: nx.Graph | None = None) -> nx.Graph:
@@ -28,7 +33,10 @@ def extract_nx_graph(problem, override: nx.Graph | None = None) -> nx.Graph:
     Parameters
     ----------
     problem:
-        A :class:`~qqa.problems.COProblem` instance.
+        A :class:`~qqa.problems.COProblem` instance. The function checks
+        ``problem.nx_graph`` first (used by ``MaximumIndependentSet``,
+        ``MaxClique``, ``MaxCut``) and falls back to ``problem.graph``
+        (used by ``VertexCover``, ``GraphBisection``).
     override:
         If supplied, used directly (for the rare case where a custom
         problem stores its graph elsewhere). The caller is then
@@ -43,19 +51,22 @@ def extract_nx_graph(problem, override: nx.Graph | None = None) -> nx.Graph:
     Raises
     ------
     TypeError
-        If neither ``override`` nor ``problem.nx_graph`` is available.
-        The error lists the supported problem families so the user can
-        diagnose at a glance.
+        If neither ``override`` nor any of the supported attribute names
+        on ``problem`` resolve to a ``networkx.Graph``. The error lists
+        the supported problem families so the user can diagnose at a
+        glance.
     """
     if override is not None:
         return override
-    g = getattr(problem, "nx_graph", None)
-    if g is None or not isinstance(g, nx.Graph):
-        raise TypeError(
-            f"qqa.pignn requires a graph-based problem; "
-            f"{type(problem).__name__} does not expose ``nx_graph``. " + GRAPH_PROBLEM_HINT
-        )
-    return g
+    for attr in _GRAPH_ATTRS:
+        g = getattr(problem, attr, None)
+        if isinstance(g, nx.Graph):
+            return g
+    raise TypeError(
+        f"qqa.pignn requires a graph-based problem; "
+        f"{type(problem).__name__} does not expose any of {list(_GRAPH_ATTRS)}. "
+        + GRAPH_PROBLEM_HINT
+    )
 
 
 def nx_to_edge_index(graph: nx.Graph, device: str | torch.device = "cpu") -> torch.Tensor:
