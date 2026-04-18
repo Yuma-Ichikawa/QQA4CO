@@ -101,6 +101,25 @@ def palette(theme: str | None = None) -> dict:
     return _LIGHT_PALETTE if theme == "light" else _DARK_PALETTE
 
 
+def hex_to_rgba(color: str, alpha: float) -> str:
+    """Convert a ``#RRGGBB`` hex string into a Plotly-safe ``rgba(...)`` string.
+
+    Plotly's property validator rejects the 8-digit ``#RRGGBBAA`` form, so we
+    emit the functional ``rgba()`` notation instead (``alpha`` is a float in
+    ``[0, 1]``). Non-hex inputs are returned unchanged so callers can safely
+    pass already-resolved strings.
+    """
+    if not isinstance(color, str) or not color.startswith("#"):
+        return color
+    h = color.lstrip("#")
+    if len(h) == 8:  # already hex8 → drop alpha and use caller's alpha instead
+        h = h[:6]
+    if len(h) != 6:
+        return color
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha:.3f})"
+
+
 def plotly_layout(theme: str | None = None, **overrides) -> dict:
     """Plotly layout kwargs consistent with the active theme.
 
@@ -197,13 +216,16 @@ def apply_theme() -> None:
         div[data-testid="stMetric"] label {{
             color: var(--qqa-muted) !important;
             font-weight: 500;
-            font-size: 0.72rem;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.08em;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            overflow: visible;
         }}
         div[data-testid="stMetric"] [data-testid="stMetricValue"] {{
             font-family: 'Source Serif 4', Georgia, serif;
             font-weight: 700;
+            font-size: 1.35rem;
             color: var(--qqa-text) !important;
         }}
         .stButton > button {{
@@ -355,12 +377,15 @@ def apply_theme() -> None:
         }}
         div[data-testid="stMetric"] label {{
             color: var(--qqa-muted) !important;
-            font-size: 0.72rem;
-            letter-spacing: 0.08em;
+            font-size: 0.7rem;
+            letter-spacing: 0.04em;
             text-transform: uppercase;
+            white-space: nowrap;
+            overflow: visible;
         }}
         div[data-testid="stMetric"] [data-testid="stMetricValue"] {{
             font-family: 'Source Serif 4', serif;
+            font-size: 1.35rem;
             color: #f8fafc !important;
         }}
         .stButton > button {{
