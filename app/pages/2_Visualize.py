@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sys
 from pathlib import Path
 
@@ -58,22 +59,21 @@ render_score_card(result.score, raw_loss=raw)
     ]
 )
 
+
 def _retheme(fig):
     """Reskin a Plotly figure produced by ``viz`` to the current theme."""
-    try:
+    with contextlib.suppress(Exception):
         fig.update_layout(**plotly_layout())
-    except Exception:
-        pass
     return fig
 
 
 with tab_hist:
     fig = viz.plot_history(result, backend="plotly", show=False)
-    st.plotly_chart(_retheme(fig), width='stretch')
+    st.plotly_chart(_retheme(fig), width="stretch")
 
 with tab_best:
     fig = viz.plot_best_trajectory(result, backend="plotly", show=False)
-    st.plotly_chart(_retheme(fig), width='stretch')
+    st.plotly_chart(_retheme(fig), width="stretch")
 
 with tab_sched:
     if result.history and "bg" in result.history:
@@ -97,12 +97,12 @@ with tab_sched:
                 height=400,
             )
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
 
 with tab_sol:
     try:
         fig = viz.plot_solution_heatmap(result, problem=problem, backend="plotly", show=False)
-        st.plotly_chart(_retheme(fig), width='stretch')
+        st.plotly_chart(_retheme(fig), width="stretch")
     except Exception as e:
         st.info(f"No solution heatmap available: {e}")
 
@@ -111,7 +111,7 @@ with tab_pop:
         st.info("No population snapshots recorded for this run.")
     else:
         fig = viz.plot_population_evolution(pop_tracker, backend="plotly", show=False)
-        st.plotly_chart(_retheme(fig), width='stretch')
+        st.plotly_chart(_retheme(fig), width="stretch")
         st.caption(
             "Each row is one of the `sol_size` replicas (sorted by final loss). "
             "Colour encodes per-replica loss."
@@ -123,7 +123,7 @@ with tab_pca:
     else:
         try:
             fig = viz.plot_population_embedding(pop_tracker, backend="plotly", show=False)
-            st.plotly_chart(_retheme(fig), width='stretch')
+            st.plotly_chart(_retheme(fig), width="stretch")
             st.caption(
                 "2D PCA projection of the entire continuous-variable population over time. "
                 "Each faint grey line is one replica's trajectory; markers are coloured by epoch."
@@ -153,7 +153,9 @@ with tab_ridge:
             base = -k * 1.15
             fig.add_trace(
                 go.Scatter(
-                    x=centres, y=base + dens, mode="lines",
+                    x=centres,
+                    y=base + dens,
+                    mode="lines",
                     line={"color": p["palette"][k % len(p["palette"])], "width": 1.2},
                     fill="tonexty" if k > 0 else None,
                     name=f"epoch {epochs[i]}",
@@ -161,8 +163,10 @@ with tab_ridge:
                 )
             )
             fig.add_annotation(
-                x=centres.min(), y=base + 0.05,
-                text=f"ep {epochs[i]}", showarrow=False,
+                x=centres.min(),
+                y=base + 0.05,
+                text=f"ep {epochs[i]}",
+                showarrow=False,
                 font={"size": 10, "color": p["muted"]},
                 xanchor="left",
             )
@@ -173,11 +177,16 @@ with tab_ridge:
                 yaxis_title="",
                 height=max(420, 28 * len(idx)),
                 showlegend=False,
-                yaxis={"showticklabels": False, "showgrid": False, "zeroline": False,
-                       "gridcolor": palette()["grid"], "linecolor": palette()["border"]},
+                yaxis={
+                    "showticklabels": False,
+                    "showgrid": False,
+                    "zeroline": False,
+                    "gridcolor": palette()["grid"],
+                    "linecolor": palette()["border"],
+                },
             )
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
         st.caption("Stacked loss distributions. Early rows (top) → late rows (bottom).")
 
 with tab_fate:
@@ -216,7 +225,7 @@ with tab_fate:
                 height=460,
             )
         )
-        st.plotly_chart(fig, width='stretch')
+        st.plotly_chart(fig, width="stretch")
         st.caption(
             "Top-ranked replicas are drawn in the primary accent, lower-ranked "
             "ones fade toward the secondary accent."

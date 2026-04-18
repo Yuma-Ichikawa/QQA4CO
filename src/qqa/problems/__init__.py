@@ -17,6 +17,16 @@ from __future__ import annotations
 
 from qqa.problems.base import COProblem, QUBOProblem
 from qqa.problems.categorical import BalancedGraphPartition, Coloring
+from qqa.problems.extras import (
+    QAP,
+    TSP,
+    GraphBisection,
+    Knapsack,
+    MaxSAT3,
+    NQueens,
+    NumberPartitioning,
+    VertexCover,
+)
 from qqa.problems.qubo import (
     MaxClique,
     MaxCliqueInstance,
@@ -32,16 +42,6 @@ from qqa.problems.spin import (
     Ising1D,
     SherringtonKirkpatrick,
     SpinProblem,
-)
-from qqa.problems.extras import (
-    QAP,
-    TSP,
-    GraphBisection,
-    Knapsack,
-    MaxSAT3,
-    NQueens,
-    NumberPartitioning,
-    VertexCover,
 )
 from qqa.problems.user import (
     UserProblem,

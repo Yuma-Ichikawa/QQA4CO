@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import sys
 from pathlib import Path
@@ -21,11 +22,10 @@ from qqa import visualization as viz  # noqa: E402
 
 
 def _retheme(fig):
-    try:
+    with contextlib.suppress(Exception):
         fig.update_layout(**plotly_layout())
-    except Exception:
-        pass
     return fig
+
 
 st.set_page_config(page_title="Compare — QQA", page_icon="⚛️", layout="wide")
 theme_toggle_in_sidebar()
@@ -87,7 +87,7 @@ if run:
 
     st.success("Sweep complete.")
     st.subheader("Results table")
-    st.dataframe(rows, width='stretch')
+    st.dataframe(rows, width="stretch")
 
     try:
         import pandas as pd
@@ -95,10 +95,10 @@ if run:
         df = pd.DataFrame(rows)
         fig = viz.plot_parallel_coordinates(df, objective="best_obj", backend="plotly", show=False)
         st.subheader("Parallel coordinates")
-        st.plotly_chart(_retheme(fig), width='stretch')
+        st.plotly_chart(_retheme(fig), width="stretch")
     except Exception as e:
         st.info(f"Parallel-coordinates unavailable: {e}")
 
     st.subheader("Run comparison")
     fig2 = viz.plot_run_comparison(results, labels=labels, backend="plotly", show=False)
-    st.plotly_chart(_retheme(fig2), width='stretch')
+    st.plotly_chart(_retheme(fig2), width="stretch")

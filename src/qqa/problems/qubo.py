@@ -227,8 +227,9 @@ class MaxCut(QUBOProblem):
             # Cut size = sum of edge weights w_{uv} [x_u != x_v].
             W = self.Q_mat.clone()
             W.fill_diagonal_(0.0)
-            cut = 0.5 * torch.einsum("bi,ij,bj->b", xd, W, 1 - xd) \
-                + 0.5 * torch.einsum("bi,ij,bj->b", 1 - xd, W, xd)
+            cut = 0.5 * torch.einsum("bi,ij,bj->b", xd, W, 1 - xd) + 0.5 * torch.einsum(
+                "bi,ij,bj->b", 1 - xd, W, xd
+            )
             # (two terms equal; using the average for symmetry)
         idx = int(torch.argmax(cut).item())
         return {

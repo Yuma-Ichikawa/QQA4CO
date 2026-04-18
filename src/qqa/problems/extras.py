@@ -326,7 +326,10 @@ class GraphBisection(COProblem):
             "unit": "",
             "feasible": feasible,
             "extra": {
-                "partition_sizes": (int(sizes[idx].item()), self.num_nodes - int(sizes[idx].item())),
+                "partition_sizes": (
+                    int(sizes[idx].item()),
+                    self.num_nodes - int(sizes[idx].item()),
+                ),
             },
         }
 
@@ -435,9 +438,7 @@ class TSP(COProblem):
         self.device = device
         self.column_penalty = column_penalty
         rng = _rng(seed)
-        self.coords = torch.as_tensor(
-            rng.random((N, 2)), dtype=torch.float32, device=device
-        )
+        self.coords = torch.as_tensor(rng.random((N, 2)), dtype=torch.float32, device=device)
         diff = self.coords.unsqueeze(0) - self.coords.unsqueeze(1)
         self.distance = torch.sqrt((diff * diff).sum(dim=-1) + 1e-12)
         self.relaxation = CategoricalRelaxation()
@@ -460,15 +461,13 @@ class TSP(COProblem):
             seg = torch.sqrt(((coords - coords_next) ** 2).sum(dim=-1) + 1e-12)
             lens = seg.sum(dim=1)
             col_counts = torch.zeros(x_disc.shape[0], self.N, device=x_disc.device)
-            col_counts.scatter_add_(
-                1, idx, torch.ones_like(idx, dtype=torch.float32)
-            )
+            col_counts.scatter_add_(1, idx, torch.ones_like(idx, dtype=torch.float32))
             missing = ((col_counts - 1.0) ** 2).sum(dim=1)
         feas = missing < 0.5
         if feas.any():
-            l = lens.clone()
-            l[~feas] = float("inf")
-            best = int(torch.argmin(l).item())
+            lens_feasible = lens.clone()
+            lens_feasible[~feas] = float("inf")
+            best = int(torch.argmin(lens_feasible).item())
             feasible = True
         else:
             best = int(torch.argmin(missing).item())
@@ -596,12 +595,8 @@ class NQueens(COProblem):
         diag_flat = self._diag_idx.reshape(-1)
         anti_flat = self._anti_idx.reshape(-1)
         x_flat = x.reshape(B, -1)
-        diag_counts = diag_counts.scatter_add(
-            1, diag_flat.unsqueeze(0).expand(B, -1), x_flat
-        )
-        anti_counts = anti_counts.scatter_add(
-            1, anti_flat.unsqueeze(0).expand(B, -1), x_flat
-        )
+        diag_counts = diag_counts.scatter_add(1, diag_flat.unsqueeze(0).expand(B, -1), x_flat)
+        anti_counts = anti_counts.scatter_add(1, anti_flat.unsqueeze(0).expand(B, -1), x_flat)
         diag_pen = (diag_counts * (diag_counts - 1)).sum(dim=1)
         anti_pen = (anti_counts * (anti_counts - 1)).sum(dim=1)
         return col_pen + diag_pen + anti_pen
