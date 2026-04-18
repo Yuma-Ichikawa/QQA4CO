@@ -763,8 +763,7 @@ def sidebar_brand() -> None:
         if hasattr(st, "page_link"):
             with contextlib.suppress(Exception):
                 st.markdown(
-                    "<div class='qqa-nav' "
-                    "style='margin-top:0.25rem;margin-bottom:0.5rem;'></div>",
+                    "<div class='qqa-nav' style='margin-top:0.25rem;margin-bottom:0.5rem;'></div>",
                     unsafe_allow_html=True,
                 )
                 st.page_link("streamlit_app.py", label="Problem", icon="🧩")
@@ -1180,6 +1179,13 @@ def _extract_penalty_kwargs(extra: dict, *, defaults: dict[str, float]) -> dict[
 
 
 def _graph_preview(g: nx.Graph, title: str) -> None:
+    p = palette()
+    is_light = get_theme() == "light"
+    edge_color = hex_to_rgba("#475569" if is_light else "#94a3b8", 0.55)
+    node_outline = "#0a4d48" if is_light else "#0ea5e9"
+
+    # Map node IDs to a contiguous integer index so spring_layout works
+    # even on graphs with non-numeric or non-contiguous labels.
     pos = nx.spring_layout(g, seed=0)
     edge_x, edge_y = [], []
     for u, v in g.edges:
@@ -1187,28 +1193,49 @@ def _graph_preview(g: nx.Graph, title: str) -> None:
         edge_y.extend([pos[u][1], pos[v][1], None])
     node_x = [pos[n][0] for n in g.nodes]
     node_y = [pos[n][1] for n in g.nodes]
+    degrees = [g.degree(n) for n in g.nodes]
     fig = go.Figure()
     fig.add_trace(
-        go.Scatter(x=edge_x, y=edge_y, mode="lines", line={"color": "#475569", "width": 1})
+        go.Scatter(
+            x=edge_x,
+            y=edge_y,
+            mode="lines",
+            line={"color": edge_color, "width": 1},
+            hoverinfo="skip",
+        )
     )
     fig.add_trace(
         go.Scatter(
             x=node_x,
             y=node_y,
             mode="markers",
-            marker={"color": "#38bdf8", "size": 8, "line": {"color": "#0ea5e9", "width": 1}},
+            marker={
+                "color": degrees,
+                "colorscale": "Mint" if is_light else "Tealgrn",
+                "size": 11,
+                "line": {"color": node_outline, "width": 1.2},
+                "colorbar": {"title": "deg", "thickness": 10, "len": 0.6},
+            },
+            customdata=list(g.nodes),
+            hovertemplate="node %{customdata}<br>degree %{marker.color}<extra></extra>",
         )
     )
     fig.update_layout(
-        title={"text": title, "x": 0.5, "font": {"color": "#f8fafc"}},
+        title={"text": title, "x": 0.5, "xanchor": "center", "font": {"color": p["text"]}},
         showlegend=False,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": p["text"]},
         xaxis={"visible": False},
         yaxis={"visible": False},
-        height=380,
+        height=400,
+        margin={"l": 30, "r": 30, "t": 60, "b": 30},
     )
     st.plotly_chart(fig, width="stretch")
+    st.caption(
+        f"Spring layout · |V| = {g.number_of_nodes()}, "
+        f"|E| = {g.number_of_edges()} · node colour = degree"
+    )
 
 
 def _coupling_preview(J: np.ndarray, title: str) -> None:
@@ -1227,12 +1254,23 @@ def _coupling_preview(J: np.ndarray, title: str) -> None:
     # already laggy. Anything bigger ⇒ fall back to a sparse view.
     N_show = 600
     if N_show >= N:
-        fig = go.Figure(data=go.Heatmap(z=J, colorscale="RdBu", zmid=0, colorbar={"title": "J_ij"}))
+        p = palette()
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=J,
+                colorscale="RdBu",
+                zmid=0,
+                colorbar={"title": "J_ij", "thickness": 12},
+                hovertemplate="J(%{y}, %{x}) = %{z:.3f}<extra></extra>",
+            )
+        )
         fig.update_layout(
-            title={"text": title, "x": 0.5, "font": {"color": "#f8fafc"}},
+            title={"text": title, "x": 0.5, "xanchor": "center", "font": {"color": p["text"]}},
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            height=400,
+            font={"color": p["text"]},
+            height=420,
+            margin={"l": 50, "r": 30, "t": 60, "b": 40},
         )
         st.plotly_chart(fig, width="stretch")
         return
@@ -1260,15 +1298,19 @@ def _coupling_preview(J: np.ndarray, title: str) -> None:
             hovertemplate="i=%{y}, j=%{x}<br>J=%{marker.color:.3f}<extra></extra>",
         )
     )
+    p = palette()
     fig.update_layout(
         title={
             "text": f"{title} — sparse view ({rows.size} non-zero entries)",
             "x": 0.5,
-            "font": {"color": "#f8fafc"},
+            "xanchor": "center",
+            "font": {"color": p["text"]},
         },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+        font={"color": p["text"]},
         height=440,
+        margin={"l": 50, "r": 30, "t": 60, "b": 40},
         xaxis={"title": "j", "scaleanchor": "y", "scaleratio": 1, "autorange": True},
         yaxis={"title": "i", "autorange": "reversed"},
     )
@@ -1279,10 +1321,497 @@ def _coupling_preview(J: np.ndarray, title: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Per-problem preview registry
+# ---------------------------------------------------------------------------
+#
+# Every problem family supported by the dashboard now has *something* to
+# display before a run, even when there is no natural "graph" or
+# "coupling matrix" to draw. The dispatch order is:
+#
+#   1. ``nx_graph`` attribute (graph problems)
+#   2. ``J`` attribute (Ising-type problems)
+#   3. dedicated per-kind preview (TSP, QAP, Knapsack, …)
+#   4. ``custom`` problem editor preview
+#   5. concept card (formula + 1-line description) — *never* the bare
+#      "no preview available" message that used to land here.
+#
+# Each preview emits one or more ``st.plotly_chart`` calls plus a
+# caption explaining what the user is looking at.
+
+
+# Concept cards — formula + plain-language description for any problem
+# whose preview we cannot draw from instance data alone (e.g. NQueens,
+# user-typed problem with a brand-new ``kind`` string).
+_PROBLEM_CONCEPTS: dict[str, dict[str, str]] = {
+    "tsp": {
+        "name": "Travelling Salesman Problem",
+        "formula": (r"\min_{\pi \in S_N}\; \sum_{t=0}^{N-1} d\bigl(\pi(t),\pi(t+1)\bigr)"),
+        "desc": (
+            "Find the shortest closed tour that visits every city exactly "
+            "once. We solve it with the **penalty method** on an "
+            "$N\\times N$ permutation matrix $x_{t,i}$."
+        ),
+    },
+    "qap": {
+        "name": "Quadratic Assignment Problem",
+        "formula": r"\min_{\pi}\; \sum_{i,j} F_{ij}\, D_{\pi(i),\pi(j)}",
+        "desc": (
+            "Assign $N$ facilities to $N$ locations. Cost = flow $F$ "
+            "between facilities times distance $D$ between locations."
+        ),
+    },
+    "nqueens": {
+        "name": "$N$-Queens",
+        "formula": (
+            r"\text{place } N \text{ queens on an } N\!\times\!N "
+            r"\text{ board, no two attacking}"
+        ),
+        "desc": (
+            "Permutation problem: column $i$ gets exactly one queen at "
+            "row $\\pi(i)$, and no two queens share a diagonal."
+        ),
+    },
+    "knapsack": {
+        "name": "0/1 Knapsack",
+        "formula": (
+            r"\max_{x\in\{0,1\}^N}\; \sum_i v_i x_i "
+            r"\;\;\text{s.t.}\;\; \sum_i w_i x_i \le C"
+        ),
+        "desc": (
+            "Pick a subset of $N$ items maximising total value while "
+            "keeping total weight under capacity $C$."
+        ),
+    },
+    "number_partition": {
+        "name": "Number Partitioning",
+        "formula": (r"\min_{x\in\{\pm1\}^N}\; \Bigl(\sum_i a_i x_i\Bigr)^2"),
+        "desc": (
+            "Split a multiset $\\{a_1,\\dots,a_N\\}$ of positive numbers "
+            "into two subsets whose sums are as equal as possible."
+        ),
+    },
+    "maxsat3": {
+        "name": "MAX-3-SAT",
+        "formula": (r"\max_{x\in\{0,1\}^N}\; \#\{\text{satisfied 3-CNF clauses}\}"),
+        "desc": (
+            "Random 3-CNF instance with $\\alpha N$ clauses. The phase "
+            "transition sits near $\\alpha\\approx 4.27$."
+        ),
+    },
+    "hopfield": {
+        "name": "Hopfield Memory",
+        "formula": (
+            r"H(x) = -\tfrac12 \sum_{ij} J_{ij} x_i x_j,\;\;"
+            r"J_{ij} = \tfrac{1}{P}\sum_\mu \xi^\mu_i \xi^\mu_j"
+        ),
+        "desc": ("Retrieve one of $P$ stored binary patterns by minimising the Hopfield energy."),
+    },
+    "perceptron": {
+        "name": "Binary Perceptron",
+        "formula": (
+            r"\text{find } x\in\{\pm1\}^N \text{ s.t. } "
+            r"\langle x, \xi^\mu\rangle \ge 0\ \forall \mu"
+        ),
+        "desc": (
+            "Find a binary weight vector that classifies $\\alpha N$ random patterns correctly."
+        ),
+    },
+    "ising1d": {
+        "name": "1-D Ising Chain",
+        "formula": (r"H(s) = -\sum_{i} J\, s_i s_{i+1}\;\; (s_i \in \{\pm 1\})"),
+        "desc": "Periodic ferromagnetic chain — the textbook spin model.",
+    },
+    "ea": {
+        "name": "Edwards–Anderson Spin Glass",
+        "formula": (
+            r"H(s) = -\sum_{\langle i,j \rangle} J_{ij} s_i s_j,\;\;"
+            r"J_{ij}\sim\mathcal{N}(0,1)"
+        ),
+        "desc": (
+            "$d$-dimensional hyper-cubic lattice with i.i.d. Gaussian "
+            "couplings. NP-hard ground-state problem."
+        ),
+    },
+    "sk": {
+        "name": "Sherrington–Kirkpatrick Spin Glass",
+        "formula": (
+            r"H(s) = -\tfrac{1}{\sqrt{N}}\!\sum_{i<j} J_{ij} s_i s_j,\;\;"
+            r"J_{ij}\!\sim\!\mathcal N(0,1)"
+        ),
+        "desc": "Mean-field spin glass — every pair of spins interacts.",
+    },
+}
+
+
+def _concept_card(kind: str, *, problem: Any | None = None) -> None:
+    """Render a formula + description card for a problem whose instance
+    data has no natural visual representation. This is the *fallback*
+    view but it is always informative — never the bare "no preview"
+    message of old."""
+    info = _PROBLEM_CONCEPTS.get(
+        kind,
+        {
+            "name": kind.replace("_", " ").title(),
+            "formula": "",
+            "desc": "User-defined combinatorial optimisation problem.",
+        },
+    )
+    p = palette()
+    muted = "#64748b" if get_theme() == "light" else "#94a3b8"
+    accent = "#0f766e" if get_theme() == "light" else "#38bdf8"
+
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid {p["border"]};
+            background:{p["bg_card"]};
+            padding:1.2rem 1.4rem;
+            border-radius:12px;
+            box-shadow:0 1px 3px rgba(15,23,42,0.05);
+        ">
+          <div style="
+              display:flex;align-items:center;gap:0.5rem;
+              font-family:'Source Serif 4',Georgia,serif;
+              font-weight:600;font-size:1.1rem;color:{p["text"]};
+              margin-bottom:0.2rem;
+          ">
+            <span style="
+                display:inline-block;width:6px;height:18px;border-radius:3px;
+                background:{accent};
+            "></span>
+            {info["name"]}
+          </div>
+          <div style="font-size:0.85rem;color:{muted};margin-bottom:0.55rem;">
+            Concept overview · instance details below
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if info["formula"]:
+        st.latex(info["formula"])
+    st.markdown(info["desc"])
+
+
+def _figure_layout(title: str, *, height: int = 380, **extra) -> dict:
+    """Common Plotly layout dict for previews — keeps every chart on the
+    Home page typographically consistent."""
+    return {
+        "title": {"text": title, "x": 0.5, "xanchor": "center"},
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": "rgba(0,0,0,0)",
+        "height": height,
+        "margin": {"l": 50, "r": 30, "t": 60, "b": 40},
+        **extra,
+    }
+
+
+def _tsp_preview(problem: Any) -> None:
+    coords = _as_np(problem.coords)
+    distance = _as_np(problem.distance)
+    p = palette()
+    accent = "#0f766e" if get_theme() == "light" else "#38bdf8"
+    cols = st.columns([3, 2])
+    with cols[0]:
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=coords[:, 0],
+                y=coords[:, 1],
+                mode="markers+text",
+                marker={
+                    "size": 14,
+                    "color": accent,
+                    "line": {"color": p["border"], "width": 1.5},
+                },
+                text=[str(i) for i in range(len(coords))],
+                textposition="top center",
+                hovertemplate="city %{text}<br>(%{x:.2f}, %{y:.2f})<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            **_figure_layout(
+                f"City coordinates · N = {problem.N}",
+                xaxis={"title": "x", "scaleanchor": "y"},
+                yaxis={"title": "y"},
+            )
+        )
+        st.plotly_chart(fig, width="stretch")
+        st.caption(
+            "Cities are placed on the unit square; the optimiser searches for the shortest closed tour."
+        )
+    with cols[1]:
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=distance,
+                colorscale="Mint",
+                colorbar={"title": "d(i,j)", "thickness": 12},
+                hovertemplate="d(%{y}, %{x}) = %{z:.3f}<extra></extra>",
+            )
+        )
+        fig.update_layout(**_figure_layout("Distance matrix", height=380))
+        st.plotly_chart(fig, width="stretch")
+
+
+def _qap_preview(problem: Any) -> None:
+    F = _as_np(problem.F)
+    D = _as_np(problem.D)
+    cols = st.columns(2)
+    with cols[0]:
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=F,
+                colorscale="Sunsetdark",
+                colorbar={"title": "F", "thickness": 12},
+                hovertemplate="F(%{y},%{x}) = %{z:.2f}<extra></extra>",
+            )
+        )
+        fig.update_layout(**_figure_layout(f"Flow F · {F.shape[0]}×{F.shape[1]}"))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("How much material moves between facility pairs.")
+    with cols[1]:
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=D,
+                colorscale="Mint",
+                colorbar={"title": "D", "thickness": 12},
+                hovertemplate="D(%{y},%{x}) = %{z:.2f}<extra></extra>",
+            )
+        )
+        fig.update_layout(**_figure_layout(f"Distance D · {D.shape[0]}×{D.shape[1]}"))
+        st.plotly_chart(fig, width="stretch")
+        st.caption("Distance between every pair of locations.")
+
+
+def _knapsack_preview(problem: Any) -> None:
+    weights = _as_np(problem.weights)
+    values = _as_np(problem.values)
+    capacity = float(problem.capacity)
+    p = palette()
+    accent_v = "#0f766e" if get_theme() == "light" else "#38bdf8"
+    accent_w = "#be5a3c" if get_theme() == "light" else "#a855f7"
+    idx = np.argsort(-(values / np.maximum(weights, 1e-9)))  # by value-density
+    fig = go.Figure()
+    fig.add_trace(
+        go.Bar(
+            x=[f"item {i}" for i in idx],
+            y=values[idx],
+            name="value",
+            marker_color=accent_v,
+            hovertemplate="item %{x}<br>value=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=[f"item {i}" for i in idx],
+            y=weights[idx],
+            name="weight",
+            marker_color=accent_w,
+            opacity=0.85,
+            hovertemplate="item %{x}<br>weight=%{y:.2f}<extra></extra>",
+        )
+    )
+    fig.add_hline(
+        y=capacity,
+        line={"color": p["text"], "dash": "dash", "width": 1.5},
+        annotation_text=f"capacity = {capacity:.2f}",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        **_figure_layout(
+            f"Knapsack instance · N = {problem.N}, total weight = {weights.sum():.1f}, "
+            f"capacity = {capacity:.1f}",
+            barmode="group",
+            xaxis={"title": "items (sorted by value-density)"},
+            yaxis={"title": "weight / value"},
+            legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
+        )
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "Bars compare each item's weight against its value; the dashed line is the total weight budget."
+    )
+
+
+def _number_partition_preview(problem: Any) -> None:
+    values = _as_np(problem.values).astype(float)
+    target = values.sum() / 2.0
+    accent = "#0f766e" if get_theme() == "light" else "#38bdf8"
+    fig = go.Figure(
+        data=go.Bar(
+            x=[f"a_{i}" for i in range(len(values))],
+            y=values,
+            marker_color=accent,
+            hovertemplate="a_%{x} = %{y}<extra></extra>",
+        )
+    )
+    fig.add_hline(
+        y=target,
+        line={"dash": "dash", "color": "#94a3b8"},
+        annotation_text=f"target sum / 2 = {target:.1f}",
+        annotation_position="top right",
+    )
+    fig.update_layout(
+        **_figure_layout(
+            f"Number-partitioning instance · N = {len(values)}, total = {values.sum():.0f}",
+            xaxis={"title": "items"},
+            yaxis={"title": "value"},
+        )
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption("Goal: find ±1 signs whose signed sum is as close to zero as possible.")
+
+
+def _maxsat3_preview(problem: Any) -> None:
+    cv = _as_np(problem.clause_vars)
+    cs = _as_np(problem.clause_signs)
+    M = problem.num_clauses
+    N = problem.N
+    n_show = min(12, M)
+    rows = []
+    for c in range(n_show):
+        lits = []
+        for k in range(3):
+            v = int(cv[c, k])
+            sign = int(cs[c, k])
+            lits.append(f"{'¬' if sign < 0 else ''}x{v}")
+        rows.append("(" + " ∨ ".join(lits) + ")")
+    body = " ∧ ".join(rows)
+    if n_show < M:
+        body += f" ∧ … ({M - n_show} more clauses)"
+    p = palette()
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid {p["border"]};
+            background:{p["bg_card"]};
+            padding:1rem 1.2rem;border-radius:10px;
+            font-family:'JetBrains Mono', 'SF Mono', Consolas, monospace;
+            font-size:0.85rem;line-height:1.6;color:{p["text"]};
+            white-space:pre-wrap;word-break:break-word;
+        ">{body}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    # Variable-incidence histogram — a cheap structure indicator that
+    # tells the user whether the instance is balanced.
+    var_freq = np.bincount(cv.reshape(-1), minlength=N)
+    fig = go.Figure(
+        data=go.Bar(
+            x=np.arange(N),
+            y=var_freq,
+            marker_color="#0f766e" if get_theme() == "light" else "#38bdf8",
+            hovertemplate="x_%{x} appears in %{y} clauses<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        **_figure_layout(
+            f"Variable incidence · N = {N}, M = {M}, ratio α ≈ {M / N:.2f}",
+            xaxis={"title": "variable index"},
+            yaxis={"title": "appearances"},
+            height=300,
+        )
+    )
+    st.plotly_chart(fig, width="stretch")
+
+
+def _nqueens_preview(problem: Any) -> None:
+    N = int(problem.N)
+    light = "#f1f5f9" if get_theme() == "light" else "#1e293b"
+    dark = "#cbd5e1" if get_theme() == "light" else "#334155"
+    z = np.indices((N, N)).sum(axis=0) % 2
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            colorscale=[[0, light], [1, dark]],
+            showscale=False,
+            hoverinfo="skip",
+        )
+    )
+    # Decorative queens on the perimeter to hint at "place N queens".
+    fig.add_trace(
+        go.Scatter(
+            x=[-1] * N,
+            y=list(range(N)),
+            mode="text",
+            text=["♛"] * N,
+            textfont={"size": 22, "color": "#0f766e" if get_theme() == "light" else "#38bdf8"},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.update_layout(
+        **_figure_layout(
+            f"{N}×{N} chessboard — place {N} non-attacking queens",
+            height=420,
+            xaxis={"visible": False, "range": [-2, N - 0.5], "scaleanchor": "y"},
+            yaxis={"visible": False, "range": [-0.5, N - 0.5]},
+        )
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        f"Search space: {N}! permutations — even N=12 already has half a billion candidates."
+    )
+
+
+def _hopfield_preview(problem: Any) -> None:
+    patterns = _as_np(problem.patterns)
+    P, N = patterns.shape
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=patterns,
+            colorscale="RdBu",
+            zmid=0,
+            colorbar={"title": "ξ", "thickness": 12},
+            hovertemplate="pattern %{y}, spin %{x} = %{z:+.0f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        **_figure_layout(
+            f"Stored patterns · {P} patterns × {N} spins",
+            xaxis={"title": "spin index"},
+            yaxis={"title": "pattern index"},
+        )
+    )
+    st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "Hopfield retrieves one of these patterns by minimising its associative-memory energy."
+    )
+
+
+def _as_np(x) -> np.ndarray:
+    if hasattr(x, "detach"):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+_DEDICATED_PREVIEWS: dict[str, callable] = {
+    "tsp": _tsp_preview,
+    "qap": _qap_preview,
+    "knapsack": _knapsack_preview,
+    "number_partition": _number_partition_preview,
+    "maxsat3": _maxsat3_preview,
+    "nqueens": _nqueens_preview,
+    "hopfield": _hopfield_preview,
+}
+
+
 def preview_problem(problem: Any, cfg: dict) -> None:
     kind = cfg["kind"]
+    # Always lead with the concept card so the user sees *what* the
+    # problem is, not just an instance dump. The instance-specific
+    # plot follows below.
+    _concept_card(kind, problem=problem)
+
     if hasattr(problem, "nx_graph"):
         _graph_preview(problem.nx_graph, f"{kind} graph (n={problem.num_nodes})")
+        return
+    if kind in _DEDICATED_PREVIEWS:
+        try:
+            _DEDICATED_PREVIEWS[kind](problem)
+        except Exception as e:
+            st.warning(f"Could not draw the {kind} instance preview: {e}")
         return
     if hasattr(problem, "J") and problem.J is not None:
         J = problem.J.detach().cpu().numpy()
@@ -1292,13 +1821,10 @@ def preview_problem(problem: Any, cfg: dict) -> None:
         xi = problem.xi_signed.detach().cpu().numpy()
         fig = go.Figure(data=go.Heatmap(z=xi, colorscale="RdBu", zmid=0, colorbar={"title": "ξ̂"}))
         fig.update_layout(
-            title={
-                "text": f"Signed patterns ({problem.num_patterns} × {problem.num_spins})",
-                "x": 0.5,
-            },
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            height=400,
+            **_figure_layout(
+                f"Signed patterns ({problem.num_patterns} × {problem.num_spins})",
+                height=400,
+            )
         )
         st.plotly_chart(fig, width="stretch")
         return
@@ -1345,4 +1871,25 @@ def preview_problem(problem: Any, cfg: dict) -> None:
             except Exception as e:  # pragma: no cover - surfaced in UI
                 st.error(f"loss_fn raised: {e}")
         return
-    st.info("No preview available for this problem type.")
+    # Catch-all: a brand-new ``kind`` that the registry doesn't know
+    # about. The concept card was already rendered at the top of
+    # ``preview_problem``; here we just surface a polite, branded note
+    # rather than the old generic "no preview" message.
+    p = palette()
+    muted = "#64748b" if get_theme() == "light" else "#94a3b8"
+    st.markdown(
+        f"""
+        <div style="
+            border:1px dashed {p["border"]};padding:0.85rem 1rem;
+            border-radius:10px;background:{p["bg_card"]};
+            color:{muted};font-size:0.9rem;line-height:1.5;
+        ">
+          The instance-level visualisation for <code>{kind}</code> is
+          not yet available, but the concept card above describes the
+          problem and the solver still works as usual. Submit
+          <em>Run QQA</em> in <b>Solve</b> to see the post-anneal
+          solution view.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
