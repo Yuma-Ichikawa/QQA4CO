@@ -946,7 +946,8 @@ def build_problem(cfg: dict) -> Any:
     if kind == "tsp":
         return qqa.TSP(
             N=size,
-            column_penalty=float(extra.get("column_penalty", 3.0)),
+            row_penalty=float(extra.get("row_penalty", 5.0)),
+            col_penalty=float(extra.get("col_penalty", 5.0)),
             seed=cfg["seed"],
             device=device,
         )
@@ -1001,14 +1002,71 @@ def _graph_preview(g: nx.Graph, title: str) -> None:
 
 
 def _coupling_preview(J: np.ndarray, title: str) -> None:
-    fig = go.Figure(data=go.Heatmap(z=J, colorscale="RdBu", zmid=0, colorbar={"title": "J_ij"}))
+    """Show the coupling matrix without melting the browser.
+
+    Plotly's ``Heatmap`` is dense — every cell becomes a SVG rect. For
+    ``N ≳ 1000`` the trace alone is hundreds of MB; for the default EA
+    setting (``L=32, dim=3 ⇒ N=32 768``) it instantly OOMs the tab.
+    Past ``N_show=256`` we fall back to a *sparse* spy plot of the
+    non-zero couplings (still ``O(nnz)`` markers, not ``O(N²)`` rects).
+    Spin glasses on a hyper-cubic lattice have ``≈ d·N`` non-zeros, so
+    this stays well-behaved even at 32k spins.
+    """
+    N = J.shape[0]
+    # 600^2 ≈ 360k cells — Plotly handles that comfortably; 1k^2 = 1M is
+    # already laggy. Anything bigger ⇒ fall back to a sparse view.
+    N_show = 600
+    if N_show >= N:
+        fig = go.Figure(data=go.Heatmap(z=J, colorscale="RdBu", zmid=0, colorbar={"title": "J_ij"}))
+        fig.update_layout(
+            title={"text": title, "x": 0.5, "font": {"color": "#f8fafc"}},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            height=400,
+        )
+        st.plotly_chart(fig, width="stretch")
+        return
+
+    rows, cols = np.nonzero(J)
+    if rows.size == 0:
+        st.info(f"{title}: coupling matrix is all-zero (N={N}).")
+        return
+    vals = J[rows, cols]
+    vmax = float(np.abs(vals).max())
+    fig = go.Figure(
+        data=go.Scatter(
+            x=cols,
+            y=rows,
+            mode="markers",
+            marker={
+                "size": 4,
+                "color": vals,
+                "colorscale": "RdBu",
+                "cmin": -vmax,
+                "cmax": vmax,
+                "colorbar": {"title": "J_ij", "thickness": 12},
+                "line": {"width": 0},
+            },
+            hovertemplate="i=%{y}, j=%{x}<br>J=%{marker.color:.3f}<extra></extra>",
+        )
+    )
     fig.update_layout(
-        title={"text": title, "x": 0.5, "font": {"color": "#f8fafc"}},
+        title={
+            "text": f"{title} — sparse view ({rows.size} non-zero entries)",
+            "x": 0.5,
+            "font": {"color": "#f8fafc"},
+        },
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        height=400,
+        height=440,
+        xaxis={"title": "j", "scaleanchor": "y", "scaleratio": 1, "autorange": True},
+        yaxis={"title": "i", "autorange": "reversed"},
     )
     st.plotly_chart(fig, width="stretch")
+    st.caption(
+        f"Showing {rows.size} non-zero couplings out of {N * N:,} matrix entries. "
+        "A dense heatmap at this size would crash the browser."
+    )
 
 
 def preview_problem(problem: Any, cfg: dict) -> None:

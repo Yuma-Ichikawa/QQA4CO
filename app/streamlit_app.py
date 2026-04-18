@@ -166,8 +166,8 @@ with st.sidebar:
             format_func=lambda s: _LABELS[s],
         )
 
-        size_default = {"tsp": 10, "qap": 8, "nqueens": 8}.get(problem_kind, 32)
-        size_max = {"tsp": 20, "qap": 14, "nqueens": 14}.get(problem_kind, 400)
+        size_default = {"tsp": 8, "qap": 8, "nqueens": 8, "ea": 6}.get(problem_kind, 32)
+        size_max = {"tsp": 20, "qap": 14, "nqueens": 14, "ea": 16}.get(problem_kind, 400)
         size_label = {
             "tsp": "Cities N",
             "qap": "Facilities N",
@@ -201,7 +201,27 @@ with st.sidebar:
         if problem_kind == "maxsat3":
             extra["ratio"] = st.slider("Clause ratio M/N", 1.0, 6.0, 3.0, 0.1)
         if problem_kind == "tsp":
-            extra["column_penalty"] = st.slider("Column penalty λ", 1.0, 10.0, 3.0, 0.5)
+            st.caption(
+                "TSP is solved with the **penalty method**: the row and column "
+                "constraints are added to the loss as quadratic penalties. "
+                "Higher λ ⇒ more emphasis on feasibility, lower λ ⇒ shorter tours."
+            )
+            extra["row_penalty"] = st.slider(
+                "Row penalty λ_r (each position holds 1 city)",
+                0.5,
+                20.0,
+                5.0,
+                0.5,
+                help="Weight on (Σ_i x[t,i] - 1)² summed over positions t.",
+            )
+            extra["col_penalty"] = st.slider(
+                "Col penalty λ_c (each city visited exactly once)",
+                0.5,
+                20.0,
+                5.0,
+                0.5,
+                help="Weight on (Σ_t x[t,i] - 1)² summed over cities i.",
+            )
         if problem_kind == "qap":
             extra["column_penalty"] = st.slider("Column penalty λ", 1.0, 30.0, 10.0, 0.5)
 

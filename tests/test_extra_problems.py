@@ -196,6 +196,107 @@ def test_anneal_zero_epochs_returns_initial_sample():
     assert r.runtime >= 0.0
 
 
+# ---------------------------------------------------------------------------
+# TSP penalty-method formulation
+# ---------------------------------------------------------------------------
+
+
+def test_tsp_uses_binary_relaxation_with_two_penalties():
+    """v0.4 reformulated TSP as a true penalty method: BinaryRelaxation +
+    explicit row + column penalties (instead of CategoricalRelaxation +
+    one column penalty). This regression test pins both invariants."""
+    from qqa.relaxation import BinaryRelaxation
+
+    p = qqa.TSP(N=4, seed=0, row_penalty=7.0, col_penalty=11.0)
+    assert isinstance(p.relaxation, BinaryRelaxation), "TSP must use BinaryRelaxation"
+    assert p.row_penalty == 7.0
+    assert p.col_penalty == 11.0
+    # Latent shape is (sol_size, N, N) thanks to the shape_fn.
+    assert p.relaxation.init(2, p, "cpu").shape == (2, 4, 4)
+
+
+def test_tsp_loss_decomposes_into_three_additive_terms():
+    """Independently compute the tour, row and column components and check
+    ``loss_fn`` returns their weighted sum exactly. Catches sign/scaling
+    drift in any of the three additive terms."""
+    p = qqa.TSP(N=3, seed=42, row_penalty=2.0, col_penalty=3.0)
+    # A non-permutation: position 0 picks city 0 twice (positions 0 and 1
+    # both pick city 0; position 2 picks city 1). City 2 is missed.
+    x = torch.zeros((1, 3, 3))
+    x[0, 0, 0] = 1.0
+    x[0, 1, 0] = 1.0
+    x[0, 2, 1] = 1.0
+    # row sums: [1, 1, 1] → row penalty 0
+    # col sums: [2, 1, 0] → col penalty (2-1)^2 + (1-1)^2 + (0-1)^2 = 2
+    # tour: pos 0 (city 0) → pos 1 (city 0): d[0,0]=0
+    #       pos 1 (city 0) → pos 2 (city 1): d[0,1]
+    #       pos 2 (city 1) → pos 0 (city 0): d[1,0]  (= d[0,1])
+    d01 = float(p.distance[0, 1].item())
+    expected = (2 * d01) + 2.0 * 0.0 + 3.0 * 2.0
+    assert p.loss_fn(x).item() == pytest.approx(expected, rel=1e-5)
+
+
+def test_tsp_score_summary_always_returns_a_valid_tour():
+    """Even when the raw discrete projection violates row/col constraints
+    the Hungarian snap must produce a feasible permutation. ``feasible``
+    in the score is therefore always True; ``extra.raw_feasible`` reports
+    whether the optimiser itself converged."""
+    p = qqa.TSP(N=4, seed=0, row_penalty=5.0, col_penalty=5.0)
+    x_disc = torch.tensor(
+        [
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+        ]
+    )
+    summary = p.score_summary(x_disc)
+    assert summary["feasible"] is True
+    assert summary["extra"]["raw_feasible"] is False
+    assert summary["extra"]["snapped"] is True
+    # ``best_sol`` must be left as a valid one-hot permutation in place.
+    cleaned = x_disc[0]
+    assert (cleaned.sum(dim=0) == 1).all()
+    assert (cleaned.sum(dim=1) == 1).all()
+
+
+# ---------------------------------------------------------------------------
+# EA preview helper handles big lattices without OOM
+# ---------------------------------------------------------------------------
+
+
+def test_ea_preview_helper_uses_sparse_view_for_big_lattices(monkeypatch):
+    """The Streamlit preview built a dense ``Heatmap(z=problem.J)`` which
+    OOMed for the default EA setting (L=32, dim=3 ⇒ 32 768 spins). v0.4
+    falls back to a sparse non-zero scatter once N exceeds the dense
+    threshold. The chart payload must be ``Scatter`` (not ``Heatmap``)."""
+    import sys as _sys
+
+    _sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1] / "app"))
+    import _common as common
+
+    # L=16 dim=3 ⇒ N=4096 ⇒ matrix is 4096×4096 ≈ 67 M cells. Comfortably
+    # above the dense threshold; small enough to construct in <1s.
+    p = qqa.EdwardsAnderson(L=16, dim=3, seed=0)
+    captured: dict[str, object] = {}
+
+    def _fake_chart(fig, **_kwargs):
+        captured["fig"] = fig
+
+    monkeypatch.setattr(common.st, "plotly_chart", _fake_chart)
+    monkeypatch.setattr(common.st, "caption", lambda *a, **k: None)
+    monkeypatch.setattr(common.st, "info", lambda *a, **k: None)
+    common.preview_problem(p, {"kind": "ea"})
+    fig = captured["fig"]
+    assert fig is not None
+    # Big EA ⇒ sparse scatter, not dense heatmap.
+    import plotly.graph_objects as _go
+
+    assert isinstance(fig.data[0], _go.Scatter)
+
+
 def test_anneal_cuda_requested_but_unavailable_raises():
     """Skip on hosts with CUDA; otherwise expect an informative RuntimeError."""
     if torch.cuda.is_available():
