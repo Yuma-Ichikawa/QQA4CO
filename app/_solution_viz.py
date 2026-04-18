@@ -383,45 +383,90 @@ def render_coloring(problem, result, cfg) -> None:
 
 
 def render_tsp(problem, result, cfg) -> None:
-    sol = _as_numpy(result.best_sol)  # (N, N) categorical
+    sol = _as_numpy(result.best_sol)  # (N, N) one-hot (post Hungarian-snap)
     tour = sol.argmax(axis=-1) if sol.ndim == 2 else sol.astype(int)
     coords = _as_numpy(problem.coords)  # (N, 2)
     p = palette()
 
-    # Close the loop for plotting.
     ordered = np.concatenate([tour, tour[:1]])
     xs = coords[ordered, 0]
     ys = coords[ordered, 1]
     dist = float(result.score.get("value", 0.0))
+    extra = (result.score or {}).get("extra", {}) or {}
+    snapped = bool(extra.get("snapped", False))
+    raw_feasible = bool(extra.get("raw_feasible", True))
 
     fig = go.Figure()
+    # Faint "potential edges" backdrop — every city pair, opacity ∝ 1/distance.
+    # Helps the reader judge whether the tour is locally near-optimal without
+    # hiding the chosen tour itself.
+    if len(coords) <= 16:
+        for i in range(len(coords)):
+            for j in range(i + 1, len(coords)):
+                fig.add_trace(
+                    go.Scatter(
+                        x=[coords[i, 0], coords[j, 0]],
+                        y=[coords[i, 1], coords[j, 1]],
+                        mode="lines",
+                        line={"color": hex_to_rgba(p["muted"], 0.10), "width": 0.6},
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+    # Tour with directional arrows.
     fig.add_trace(
         go.Scatter(
             x=xs,
             y=ys,
             mode="lines+markers",
-            line={"color": p["palette"][0], "width": 2.2},
+            line={"color": p["palette"][0], "width": 2.4},
             marker={"size": 11, "color": p["palette"][1], "line": {"color": "#0f172a", "width": 1}},
             name="tour",
+            hovertemplate="position %{pointNumber}<br>(%{x:.3f}, %{y:.3f})<extra></extra>",
             showlegend=False,
         )
     )
-    # Start marker (larger, distinct colour) at position 0.
+    # Direction arrows at the midpoint of each segment.
+    for k in range(len(tour)):
+        a = coords[tour[k]]
+        b = coords[tour[(k + 1) % len(tour)]]
+        mid_x = (a[0] + b[0]) / 2
+        mid_y = (a[1] + b[1]) / 2
+        fig.add_annotation(
+            x=mid_x,
+            y=mid_y,
+            ax=a[0],
+            ay=a[1],
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            showarrow=True,
+            arrowhead=3,
+            arrowsize=1.0,
+            arrowwidth=1.6,
+            arrowcolor=hex_to_rgba(p["palette"][0], 0.85),
+            standoff=4,
+            startstandoff=4,
+            opacity=0.9,
+        )
+    # Start marker.
     fig.add_trace(
         go.Scatter(
             x=[coords[tour[0], 0]],
             y=[coords[tour[0], 1]],
             mode="markers",
             marker={
-                "size": 18,
+                "size": 20,
                 "color": p["palette"][2],
                 "line": {"color": "#0f172a", "width": 1.4},
                 "symbol": "star",
             },
             name="start",
+            hovertemplate="START · city %{text}<extra></extra>",
+            text=[str(int(tour[0]))],
         )
     )
-    # Annotate each city with its visit order.
     for step, city in enumerate(tour):
         fig.add_annotation(
             x=coords[city, 0],
@@ -432,10 +477,19 @@ def render_tsp(problem, result, cfg) -> None:
             yshift=14,
         )
 
+    badge = (
+        " <span style='color:#16a34a'>● raw permutation</span>"
+        if raw_feasible
+        else " <span style='color:#b45309'>● Hungarian-snapped</span>"
+    )
+    extra_note = " (snapped to nearest permutation)" if snapped else ""
     fig.update_layout(
         **plotly_layout(
-            title={"text": f"TSP tour · length ≈ {dist:.4g}", "x": 0.5},
-            height=500,
+            title={
+                "text": f"TSP tour · length ≈ {dist:.4g}{extra_note}{badge}",
+                "x": 0.5,
+            },
+            height=520,
             showlegend=False,
             xaxis={"scaleanchor": "y", "scaleratio": 1, "showgrid": True},
             yaxis={"showgrid": True},
@@ -699,98 +753,336 @@ def render_maxsat3(problem, result, cfg) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _spin_strip(
-    sol: np.ndarray,
+# Colour scheme shared across spin renderers: warm = up, cool = down.
+_SPIN_UP_COLOR = "#dc2626"  # crimson
+_SPIN_DOWN_COLOR = "#1d4ed8"  # deep blue
+
+
+def _spin_arrow_traces(
+    xs: np.ndarray,
+    ys: np.ndarray,
+    spins: np.ndarray,
     *,
-    title: str,
-    key: str,
-    aspect_height: int = 80,
-) -> None:
-    z = sol.reshape(1, -1)
-    fig = go.Figure(
-        data=go.Heatmap(
-            z=z,
-            colorscale=[[0.0, "#1e3a8a"], [0.5, "#e5e7eb"], [1.0, "#b45309"]],
-            zmin=-1,
-            zmax=1,
-            showscale=False,
-            xgap=0,
-            ygap=0,
+    size: int = 22,
+    border: str = "#0f172a",
+):
+    """Return up/down marker traces (one per spin state).
+
+    Spins are drawn as triangle markers (▲ up, ▼ down) with two complementary
+    colours and a thin outline so they read on both light and dark themes.
+    """
+    s = np.asarray(spins).astype(float).reshape(-1)
+    up = s > 0
+    down = ~up
+    traces = []
+    if up.any():
+        traces.append(
+            go.Scatter(
+                x=xs[up],
+                y=ys[up],
+                mode="markers",
+                marker={
+                    "symbol": "triangle-up",
+                    "size": size,
+                    "color": _SPIN_UP_COLOR,
+                    "line": {"color": border, "width": 1.4},
+                },
+                name="↑ +1",
+                hovertemplate="spin=%{text}<extra>↑ +1</extra>",
+                text=[f"node {i}: ↑" for i in np.flatnonzero(up)],
+                showlegend=True,
+            )
         )
-    )
-    fig.update_layout(
-        **plotly_layout(
-            title={"text": title, "x": 0.5},
-            height=aspect_height,
-            xaxis={"showgrid": False, "zeroline": False, "tickmode": "linear", "dtick": 5},
-            yaxis={"showticklabels": False, "showgrid": False, "zeroline": False},
-            margin={"l": 40, "r": 20, "t": 48, "b": 30},
+    if down.any():
+        traces.append(
+            go.Scatter(
+                x=xs[down],
+                y=ys[down],
+                mode="markers",
+                marker={
+                    "symbol": "triangle-down",
+                    "size": size,
+                    "color": _SPIN_DOWN_COLOR,
+                    "line": {"color": border, "width": 1.4},
+                },
+                name="↓ −1",
+                hovertemplate="spin=%{text}<extra>↓ −1</extra>",
+                text=[f"node {i}: ↓" for i in np.flatnonzero(down)],
+                showlegend=True,
+            )
         )
-    )
-    _render(fig, key=key)
+    return traces
+
+
+def _border_for_theme() -> str:
+    return "#0f172a" if st.session_state.get("theme", "light") == "light" else "#f8fafc"
+
+
+def _ring_layout(N: int) -> tuple[np.ndarray, np.ndarray]:
+    angles = np.linspace(0, 2 * np.pi, N, endpoint=False)
+    return np.cos(angles), np.sin(angles)
 
 
 def render_ising1d(problem, result, cfg) -> None:
     s = _as_numpy(result.best_sol).astype(float).reshape(-1)
-    _spin_strip(s, title=f"1D Ising · N={len(s)} · magnetization={s.mean():+.3f}", key="soln_ising")
+    s = np.where(s >= 0, 1, -1)
+    N = len(s)
+    p = palette()
+
+    # Ring layout: 1D periodic chain → circle. Bonds are nearest neighbours.
+    xs, ys = _ring_layout(N)
+
+    # Bond ribbon: faint background ring connecting consecutive spins.
+    ring_x = np.append(xs, xs[0])
+    ring_y = np.append(ys, ys[0])
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=ring_x,
+            y=ring_y,
+            mode="lines",
+            line={"color": hex_to_rgba(p["muted"], 0.45), "width": 1.2},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    for tr in _spin_arrow_traces(xs, ys, s, size=24, border=_border_for_theme()):
+        fig.add_trace(tr)
+
+    # Tag a few spins with their index so users can read the configuration.
+    step = max(1, N // 16)
+    for i in range(0, N, step):
+        fig.add_annotation(
+            x=xs[i] * 1.15,
+            y=ys[i] * 1.15,
+            text=str(i),
+            showarrow=False,
+            font={"size": 9, "color": p["muted"]},
+        )
+
+    n_up = int((s > 0).sum())
+    n_down = N - n_up
+    mag = float(s.mean())
+    fig.update_layout(
+        **plotly_layout(
+            title={
+                "text": (
+                    f"1D Ising — N={N}, m={mag:+.3f}  "
+                    f"<span style='color:{_SPIN_UP_COLOR}'>↑ {n_up}</span>"
+                    f" · <span style='color:{_SPIN_DOWN_COLOR}'>↓ {n_down}</span>"
+                ),
+                "x": 0.5,
+            },
+            height=460,
+            showlegend=True,
+            legend={"x": 0.01, "y": 0.99},
+            **_axes_off(),
+        )
+    )
+    _render(fig, key="soln_ising_ring")
 
 
 def render_sk(problem, result, cfg) -> None:
     s = _as_numpy(result.best_sol).astype(float).reshape(-1)
+    s = np.where(s >= 0, 1, -1)
     N = len(s)
-    # Show the spin configuration as a strip + a small order-parameter bar.
-    _spin_strip(s, title=f"SK spin glass · N={N}", key="soln_sk_strip")
-
     p = palette()
-    mag = float(s.mean())
-    fig = go.Figure(
-        data=go.Bar(
-            x=["magnetization", "|m|"],
-            y=[mag, abs(mag)],
-            marker={"color": [p["palette"][0], p["palette"][1]]},
+
+    # SK is fully connected — drawing every bond is unreadable. Show the
+    # spin orientation on a circle, and add an order-parameter panel below.
+    xs, ys = _ring_layout(N)
+
+    fig = go.Figure()
+    # Faint backdrop circle (no bonds drawn — the problem is dense).
+    th = np.linspace(0, 2 * np.pi, 200)
+    fig.add_trace(
+        go.Scatter(
+            x=np.cos(th),
+            y=np.sin(th),
+            mode="lines",
+            line={"color": hex_to_rgba(p["muted"], 0.25), "width": 1.0, "dash": "dot"},
+            hoverinfo="skip",
+            showlegend=False,
         )
     )
+    for tr in _spin_arrow_traces(xs, ys, s, size=20, border=_border_for_theme()):
+        fig.add_trace(tr)
+
+    mag = float(s.mean())
     fig.update_layout(
         **plotly_layout(
-            title={"text": "SK order parameters", "x": 0.5},
-            height=260,
-            showlegend=False,
-            yaxis_title="value",
+            title={
+                "text": (
+                    f"SK spin glass — N={N}, m={mag:+.3f}  "
+                    f"<span style='color:{_SPIN_UP_COLOR}'>↑ {int((s > 0).sum())}</span>"
+                    f" · <span style='color:{_SPIN_DOWN_COLOR}'>↓ {int((s < 0).sum())}</span>"
+                ),
+                "x": 0.5,
+            },
+            height=440,
+            showlegend=True,
+            legend={"x": 0.01, "y": 0.99},
+            **_axes_off(),
         )
     )
-    _render(fig, key="soln_sk_mag")
+    _render(fig, key="soln_sk_ring")
+
+    # Energy contribution histogram if J is available.
+    J = getattr(problem, "J", None)
+    if J is not None:
+        J_np = _as_numpy(J)
+        local_field = J_np @ s
+        contrib = -s * local_field  # positive = unhappy
+        fig2 = go.Figure(
+            data=go.Bar(
+                x=np.arange(N),
+                y=contrib,
+                marker={
+                    "color": [_SPIN_UP_COLOR if c > 0 else _SPIN_DOWN_COLOR for c in contrib],
+                    "line": {"color": "#0f172a", "width": 0.4},
+                },
+                hovertemplate="spin %{x}<br>local energy %{y:+.3f}<extra></extra>",
+            )
+        )
+        fig2.add_hline(
+            y=0,
+            line={"color": hex_to_rgba(p["muted"], 0.55), "dash": "dot"},
+        )
+        fig2.update_layout(
+            **plotly_layout(
+                title={"text": "Local energy per spin (positive = frustrated)", "x": 0.5},
+                height=240,
+                showlegend=False,
+                xaxis_title="spin index",
+                yaxis_title="−s_i Σ_j J_ij s_j",
+            )
+        )
+        _render(fig2, key="soln_sk_local_energy")
+
+
+def _ea_2d_arrow_figure(s: np.ndarray, L: int, *, title: str) -> go.Figure:
+    """Render an L×L EA slice as ↑↓ markers on a faint lattice grid."""
+    p = palette()
+    fig = go.Figure()
+
+    # Lattice bonds (vertical + horizontal segments). Plotly likes None-
+    # delimited polylines so the whole grid is one trace.
+    seg_x: list[float | None] = []
+    seg_y: list[float | None] = []
+    for r in range(L):
+        for c in range(L):
+            if c + 1 < L:
+                seg_x.extend([c, c + 1, None])
+                seg_y.extend([r, r, None])
+            if r + 1 < L:
+                seg_x.extend([c, c, None])
+                seg_y.extend([r, r + 1, None])
+    fig.add_trace(
+        go.Scatter(
+            x=seg_x,
+            y=seg_y,
+            mode="lines",
+            line={"color": hex_to_rgba(p["muted"], 0.30), "width": 1.0},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    # Position arrows at every lattice site.
+    xs = np.tile(np.arange(L), L).astype(float)
+    ys = np.repeat(np.arange(L), L).astype(float)
+    for tr in _spin_arrow_traces(xs, ys, s, size=18, border=_border_for_theme()):
+        fig.add_trace(tr)
+
+    fig.update_layout(
+        **plotly_layout(
+            title={"text": title, "x": 0.5},
+            height=520,
+            showlegend=True,
+            legend={"x": 0.01, "y": 0.99},
+            xaxis={
+                "visible": False,
+                "showgrid": False,
+                "zeroline": False,
+                "range": [-0.5, L - 0.5],
+            },
+            yaxis={
+                "visible": False,
+                "showgrid": False,
+                "zeroline": False,
+                "range": [-0.5, L - 0.5],
+                "scaleanchor": "x",
+                "scaleratio": 1,
+                "autorange": "reversed",
+            },
+        )
+    )
+    return fig
 
 
 def render_ea(problem, result, cfg) -> None:
     s = _as_numpy(result.best_sol).astype(float).reshape(-1)
-    L = int(round(len(s) ** (1.0 / getattr(problem, "dim", 3))))
-    if L ** getattr(problem, "dim", 3) == len(s) and getattr(problem, "dim", 3) == 2:
-        grid = s.reshape(L, L)
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=grid,
-                colorscale=[[0.0, "#1e3a8a"], [0.5, "#e5e7eb"], [1.0, "#b45309"]],
-                zmin=-1,
-                zmax=1,
-                showscale=False,
-            )
-        )
-        fig.update_layout(
-            **plotly_layout(
-                title={"text": f"EA spin glass · 2D L×L = {L}×{L}", "x": 0.5},
-                height=460,
-                xaxis={"visible": False},
-                yaxis={"visible": False, "scaleanchor": "x", "scaleratio": 1},
-            )
-        )
-        _render(fig, key="soln_ea_2d")
-    else:
-        _spin_strip(
+    s = np.where(s >= 0, 1, -1)
+    dim = int(getattr(problem, "dim", 3))
+    L = int(getattr(problem, "L", round(len(s) ** (1.0 / dim))))
+    N = len(s)
+    mag = float(s.mean())
+    n_up = int((s > 0).sum())
+
+    if dim == 2 and L * L == N:
+        fig = _ea_2d_arrow_figure(
             s,
-            title=(f"EA spin glass · dim={getattr(problem, 'dim', '?')} · N={len(s)} (flattened)"),
-            key="soln_ea_flat",
-            aspect_height=100,
+            L,
+            title=(
+                f"EA spin glass · 2D {L}×{L} · m={mag:+.3f}  "
+                f"<span style='color:{_SPIN_UP_COLOR}'>↑ {n_up}</span>"
+                f" · <span style='color:{_SPIN_DOWN_COLOR}'>↓ {N - n_up}</span>"
+            ),
         )
+        _render(fig, key="soln_ea_2d_arrows")
+        return
+
+    if dim == 3 and L**3 == N:
+        # Show every z-slice as its own arrow plot, side-by-side.  For
+        # large L (≳ 16) cap the number of slices so the page stays snappy.
+        max_slices = 6
+        z_indices = list(range(L))
+        if max_slices < L:
+            z_indices = list(np.linspace(0, L - 1, max_slices, dtype=int))
+        st.markdown(
+            f"<div style='font-size:0.9rem; color:#64748b;'>EA 3D · L={L} · "
+            f"slices z = {z_indices} · m={mag:+.3f}</div>",
+            unsafe_allow_html=True,
+        )
+        cube = s.reshape(L, L, L)
+        cols = st.columns(min(3, len(z_indices)))
+        for i, z in enumerate(z_indices):
+            slice_2d = cube[:, :, z].reshape(-1)
+            with cols[i % len(cols)]:
+                fig = _ea_2d_arrow_figure(
+                    slice_2d,
+                    L,
+                    title=f"z = {z}  ·  m_slice = {slice_2d.mean():+.3f}",
+                )
+                # Compact slice cards
+                fig.update_layout(height=320, margin={"l": 20, "r": 20, "t": 40, "b": 20})
+                _render(fig, key=f"soln_ea_slice_z{z}")
+        return
+
+    # Fallback: arrange on a single circle.
+    xs, ys = _ring_layout(N)
+    fig = go.Figure()
+    for tr in _spin_arrow_traces(xs, ys, s, size=14, border=_border_for_theme()):
+        fig.add_trace(tr)
+    fig.update_layout(
+        **plotly_layout(
+            title={"text": f"EA spin glass · dim={dim} · N={N}", "x": 0.5},
+            height=460,
+            showlegend=True,
+            **_axes_off(),
+        )
+    )
+    _render(fig, key="soln_ea_ring")
 
 
 def render_perceptron(problem, result, cfg) -> None:
