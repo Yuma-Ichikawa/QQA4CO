@@ -759,6 +759,16 @@ def sidebar_brand() -> None:
             """,
             unsafe_allow_html=True,
         )
+        # The auto-generated entry-page link in Streamlit's multipage
+        # navigator gets its label from the file basename ("streamlit
+        # app"), which is jargony and confused users into thinking the
+        # page wasn't clickable. We hide that auto link in CSS and
+        # instead emit our own properly labelled link here so the user
+        # always has a discoverable way back to the problem-selection
+        # page.
+        if hasattr(st, "page_link"):
+            with contextlib.suppress(Exception):
+                st.page_link("streamlit_app.py", label="Problem", icon="🧩")
 
 
 def empty_state_card(
