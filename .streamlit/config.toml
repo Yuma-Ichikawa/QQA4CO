@@ -1,0 +1,23 @@
+# Streamlit runtime + theme defaults used by the public deployment.
+#
+# The theme palette matches ``app/_common.py::apply_theme`` so the first
+# paint (before custom CSS kicks in) is already on-brand.
+
+[theme]
+base = "dark"
+primaryColor = "#38bdf8"
+backgroundColor = "#05060a"
+secondaryBackgroundColor = "#0b1120"
+textColor = "#e2e8f0"
+font = "sans serif"
+
+[server]
+maxUploadSize = 20
+enableCORS = false
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false

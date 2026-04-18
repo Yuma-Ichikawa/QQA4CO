@@ -1,0 +1,50 @@
+# --------------------------------------------------------------------------
+# Xserver (shared rental) redirect for the QQA Streamlit dashboard
+# --------------------------------------------------------------------------
+#
+# Xserver の共用レンタルサーバーでは Streamlit プロセスを常駐できないため、
+# 計算部分は Streamlit Community Cloud / Hugging Face Spaces に置き、
+# Xserver のドメインはユーザーを外部ホスティングにリダイレクトする役割だけ
+# を担います。
+#
+# 使い方:
+#
+#   1) share.streamlit.io (または huggingface.co/spaces) に
+#      app/streamlit_app.py をデプロイする。
+#   2) 発行された URL を下の TARGET に差し替える。
+#   3) このファイルを `.htaccess` にリネームし、Xserver の対象サブドメイン
+#      の `public_html/` 直下に FTP またはファイルマネージャでアップロード。
+#
+# 301 リダイレクト方式 (アドレスバーに Streamlit 側の URL が表示される)
+# --------------------------------------------------------------------------
+
+RewriteEngine On
+# TARGET: replace with your deployed URL, for example:
+#   https://qqa4co.streamlit.app
+#   https://huggingface.co/spaces/<you>/qqa4co
+RewriteRule ^(.*)$ https://qqa4co.streamlit.app/$1 [R=301,L]
+
+
+# --------------------------------------------------------------------------
+# iframe 方式を使う場合 (アドレスバーに Xserver 側ドメインが残る)
+# --------------------------------------------------------------------------
+# 上記 RewriteRule をコメントアウトし、同じ public_html/ に以下の
+# index.html を置く:
+#
+#   <!doctype html>
+#   <html lang="ja">
+#   <head>
+#     <meta charset="utf-8">
+#     <title>QQA dashboard</title>
+#     <style>html,body,iframe{margin:0;height:100%;width:100%;border:0}</style>
+#   </head>
+#   <body>
+#     <iframe src="https://qqa4co.streamlit.app"
+#             allowfullscreen
+#             allow="clipboard-read; clipboard-write"></iframe>
+#   </body>
+#   </html>
+#
+# 注: Streamlit Community Cloud は X-Frame-Options: SAMEORIGIN を
+# 返さないので iframe 埋め込みは通常問題なく動作しますが、公式保証は
+# されていません。301 リダイレクトの方が確実です。

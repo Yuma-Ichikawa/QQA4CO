@@ -14,6 +14,7 @@ The dashboard is a 4-page app:
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -28,6 +29,12 @@ from _common import (  # noqa: E402
 )
 
 import qqa  # noqa: E402
+
+# The custom-problem editor runs user-supplied Python via ``exec``. Disable
+# it on public deployments by setting ``QQA_ALLOW_CUSTOM=0`` (this is the
+# default on Streamlit Community Cloud / Hugging Face Spaces). Set it to
+# ``1`` to re-enable on a trusted machine.
+ALLOW_CUSTOM = os.getenv("QQA_ALLOW_CUSTOM", "0") == "1"
 
 st.set_page_config(
     page_title="QQA dashboard",
@@ -54,11 +61,18 @@ st.write("")
 with st.sidebar:
     st.header("1 · Problem definition")
 
-    use_custom = st.toggle(
-        "Use custom problem",
-        value=False,
-        help="Plug in your own loss_fn directly from this UI.",
-    )
+    if ALLOW_CUSTOM:
+        use_custom = st.toggle(
+            "Use custom problem",
+            value=False,
+            help="Plug in your own loss_fn directly from this UI.",
+        )
+    else:
+        use_custom = False
+        st.caption(
+            "Custom-loss editor is disabled on this deployment. "
+            "Set `QQA_ALLOW_CUSTOM=1` to enable it on a trusted machine."
+        )
 
     extra: dict = {}
     if use_custom:

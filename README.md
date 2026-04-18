@@ -110,6 +110,59 @@ The dashboard has four pages:
 - **Compare** — run a small hyper-parameter grid and inspect the result
   with parallel-coordinates and overlaid trajectories.
 
+## Deploy to the public web (free)
+
+The dashboard can be published for free via **Streamlit Community Cloud**
+(or Hugging Face Spaces) and bridged from any domain you already own
+(Xserver / お名前ドットコム / Cloudflare / …).
+
+### 1. Deploy to Streamlit Community Cloud
+
+The repository already ships the two files needed by Community Cloud:
+
+- [`requirements.txt`](requirements.txt) — CPU-only PyTorch pin plus the
+  minimal runtime. Installs this repo as the `qqa` package via the
+  trailing `.`.
+- [`.streamlit/config.toml`](.streamlit/config.toml) — on-brand dark
+  theme and telemetry off.
+
+Then:
+
+1. Go to <https://share.streamlit.io> and sign in with GitHub.
+2. **New app** → Repository `Yuma-Ichikawa/QQA4CO`, Branch `main`,
+   Main file path `app/streamlit_app.py`.
+3. Click **Deploy**. Your app will be served at
+   `https://<something>.streamlit.app` after a 3–5 min build.
+
+The custom-problem editor is **off by default** on public deployments
+(it evaluates arbitrary Python via `exec`). Re-enable it on a trusted
+machine with:
+
+```bash
+QQA_ALLOW_CUSTOM=1 uv run qqa gui
+```
+
+### 2. Point your own domain at the app
+
+If you own a domain on a shared rental host (e.g. Xserver), drop this
+snippet into the `public_html/` of the subdomain that you want to use
+(adjust the target URL):
+
+```apache
+RewriteEngine On
+RewriteRule ^(.*)$ https://qqa4co.streamlit.app/$1 [R=301,L]
+```
+
+A ready-to-copy template with both `301` and `iframe` variants lives at
+[`deploy/xserver-htaccess.example`](deploy/xserver-htaccess.example).
+
+### Other targets
+
+The repository is portable enough to drop onto any of the usual
+platforms: Hugging Face Spaces (Streamlit SDK), Fly.io / Render
+(Docker), Google Cloud Run. The same `requirements.txt` and
+`app/streamlit_app.py` serve as the entry points.
+
 ## Visualization
 
 ```python
