@@ -438,11 +438,29 @@ def train_cpra_pi_gnn(
 
     Notes
     -----
-    The reference CPRA implementation returns the *final* iteration's
-    discretised bits rather than the best-so-far solution. This trainer
-    deliberately tracks the running best (per replica) — the QQA-side
-    convention — to avoid losing a good early-epoch solution to a
-    transient late spike.
+    * **Backbone vs. CPRA4CO.** The reference CPRA implementation uses
+      DGL ``GraphSAGE``; this port reuses :class:`GCNNet` (a 2-layer
+      ``GCNConv`` stack) for full parity with :func:`train_cra_pi_gnn`
+      so head-to-head ablations across the two solvers measure the
+      training objective, not the message-passing op.
+    * **Best-tracking.** The reference CPRA loop returns the *final*
+      iteration's discretised bits rather than the best-so-far solution.
+      This trainer deliberately tracks the running best per replica —
+      the QQA-side convention — to avoid losing a good early-epoch
+      solution to a transient late spike.
+    * **History keys differ from** :func:`train_cra_pi_gnn`.
+      ``train_cra_pi_gnn`` reports per-epoch ``"cost"``; CPRA reports
+      ``"mean_cost"`` (per-replica average) because the raw cost scales
+      linearly with R and is harder to compare across runs. When you
+      mix the two trainers in a single plot, normalise by R yourself.
+    * **Replica collapse with** ``vari_param=0`` **and**
+      ``replica_problems=None``. With identical losses on every replica
+      and shared embedding+backbone gradients, the R output channels
+      drift toward the same fixed point. They start different (random
+      init) and remain visibly distinct for the first few hundred
+      epochs, but eventually collapse. For real variation
+      diversification on a fixed problem, set ``vari_param > 0`` (e.g.
+      ``0.1`` to ``0.5`` works in practice).
     """
     require_pyg()
 
@@ -469,9 +487,27 @@ def train_cpra_pi_gnn(
                 f"len(replica_problems)={len(replica_problems)} must equal "
                 f"num_replicas={num_replicas}."
             )
+        # Validate every replica's variable count matches the base problem so
+        # the einsum inside loss_fn doesn't crash deep in the training loop
+        # with an opaque "shape mismatch" message.
+        base_n = getattr(problem, "num_nodes", None)
+        if base_n is not None:
+            for i, rp in enumerate(replica_problems):
+                rp_n = getattr(rp, "num_nodes", None)
+                if rp_n is not None and rp_n != base_n:
+                    raise ValueError(
+                        f"replica_problems[{i}].num_nodes={rp_n} does not "
+                        f"match base problem.num_nodes={base_n}; CPRA expects "
+                        "every replica to live on the same graph."
+                    )
         problems_per_replica = list(replica_problems)
+        # When all replicas share the *same Python object*, fall back to the
+        # vectorised single-problem path below. (User typically passes a list
+        # of distinct instances, so this is a small extra safety check.)
+        single_problem = all(rp is problem for rp in problems_per_replica)
     else:
         problems_per_replica = [problem] * int(num_replicas)
+        single_problem = True
 
     if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError(
@@ -536,14 +572,18 @@ def train_cpra_pi_gnn(
             # GCNNet squeezes to (N,) when num_replicas == 1.
             probs = probs.unsqueeze(-1)
 
-        # Per-replica continuous cost. Each replica r gets its own loss_fn
-        # (penalty diversification) or shares the base problem's loss_fn.
-        per_replica_costs = []
-        for r in range(int(num_replicas)):
-            p_r = probs[:, r]
-            cost_r = problems_per_replica[r].loss_fn(p_r.unsqueeze(0)).sum()
-            per_replica_costs.append(cost_r)
-        cost = torch.stack(per_replica_costs).sum()
+        # Per-replica continuous cost. When every replica shares the same
+        # problem (variation diversification or R=1) we batch the loss in a
+        # single einsum on (R, N); when each replica has its own problem
+        # (penalty diversification) we evaluate them sequentially.
+        if single_problem:
+            cost = problem.loss_fn(probs.t()).sum()
+        else:
+            per_replica_costs = [
+                problems_per_replica[r].loss_fn(probs[:, r].unsqueeze(0)).sum()
+                for r in range(int(num_replicas))
+            ]
+            cost = torch.stack(per_replica_costs).sum()
 
         # CRA penalty: BinaryRelaxation.penalty operates element-wise on the
         # last dim, so passing (R, N) gives the correct per-replica term.
@@ -563,14 +603,19 @@ def train_cpra_pi_gnn(
 
         with torch.no_grad():
             bits_all = (probs >= 0.5).to(probs.dtype)  # (N, R)
-            disc_objs = []
-            for r in range(int(num_replicas)):
-                bits_r = bits_all[:, r]
-                disc_obj = float(problems_per_replica[r].loss_fn(bits_r.unsqueeze(0)).item())
-                disc_objs.append(disc_obj)
+            if single_problem:
+                # One batched einsum + one cuda->cpu transfer for the whole
+                # replica vector — much cheaper than the R-step loop below.
+                disc_objs = problem.loss_fn(bits_all.t()).cpu().tolist()
+            else:
+                disc_objs = [
+                    float(problems_per_replica[r].loss_fn(bits_all[:, r].unsqueeze(0)).item())
+                    for r in range(int(num_replicas))
+                ]
+            for r, disc_obj in enumerate(disc_objs):
                 if disc_obj < best_obj_per_replica[r]:
                     best_obj_per_replica[r] = disc_obj
-                    best_bits_per_replica[r] = bits_r.detach().clone()
+                    best_bits_per_replica[r] = bits_all[:, r].detach().clone()
 
         loss_v = float(loss.item())
         mean_cost_v = float(cost.item()) / float(num_replicas)
@@ -610,12 +655,16 @@ def train_cpra_pi_gnn(
             if probs.dim() == 1:
                 probs = probs.unsqueeze(-1)
             bits_all = (probs >= 0.5).to(probs.dtype)
-            for r in range(int(num_replicas)):
-                bits_r = bits_all[:, r]
-                best_bits_per_replica[r] = bits_r.detach().clone()
-                best_obj_per_replica[r] = float(
-                    problems_per_replica[r].loss_fn(bits_r.unsqueeze(0)).item()
-                )
+            if single_problem:
+                fallback_objs = problem.loss_fn(bits_all.t()).cpu().tolist()
+            else:
+                fallback_objs = [
+                    float(problems_per_replica[r].loss_fn(bits_all[:, r].unsqueeze(0)).item())
+                    for r in range(int(num_replicas))
+                ]
+            for r, obj_r in enumerate(fallback_objs):
+                best_bits_per_replica[r] = bits_all[:, r].detach().clone()
+                best_obj_per_replica[r] = obj_r
 
     # Determine the overall best replica.
     best_replica = int(min(range(int(num_replicas)), key=lambda r: best_obj_per_replica[r]))
