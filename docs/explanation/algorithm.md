@@ -1,12 +1,13 @@
-# Algorithm — PQQA, CRA-PI-GNN, CPRA in one page
+# Algorithm — SA, PQQA, CRA-PI-GNN, CPRA in one page
 
-QQA4CO ships **three solver families** that all share the same problem
-catalogue and the same `AnnealResult` interface. They differ in the
-representation of the relaxed variable and in how the relaxation
-penalty is annealed.
+QQA4CO ships **four solver families** that all share the same problem
+catalogue and a common `AnnealResult` / `SAResult` interface. They differ
+in the representation of the candidate variable and in how the relaxation
+(or temperature) is annealed.
 
 | Solver | Backend | Variable | Schedule | Diversity |
 |---|---|---|---|---|
+| **SA** (baseline) | `qqa.simulated_annealing` | discrete `{0,1}` or `{−1,+1}` per chain | inverse-temperature `β` (geometric / linear) | independent parallel chains |
 | **PQQA** (default) | `qqa.anneal` | parallel batch of `B` raw tensors | linear `bg` over epochs | optional `div_param` cross-replica term |
 | **CRA-PI-GNN** | `qqa.pignn.train_cra_pi_gnn` | output of a 2-layer GCN over the problem graph | linear `γ` from `init_reg_param` (≈ −20) to ≥ 0 | none (single replica) |
 | **CPRA** | `qqa.pignn.train_cpra_pi_gnn` | `R` GCN heads sharing one backbone | same as CRA-PI-GNN, optionally per-head | optional `vari_param` term, or per-head `replica_problems` |
@@ -89,6 +90,53 @@ Source: `src/qqa/pignn/trainer.py:78`–`train_cra_pi_gnn`. The DGL
 backbone of the reference is replaced with `torch_geometric` — see
 [`docs/explanation/architecture.md`](architecture.md) for why.
 
+## SA — `qqa.simulated_annealing`
+
+The baseline. Implemented in `src/qqa/sa.py`; no learning, no
+relaxation — just classical Simulated Annealing parallelised across
+chains on GPU.
+
+For QUBO problems (every problem with a `Q_mat` attribute) we use a
+**Glauber-like parallel update**: at each sweep, the change in energy
+\(\Delta E_i\) for flipping bit \(i\) is computed in closed form,
+
+\[
+\\Delta E_i \\;=\\; (1 - 2 x_i)\\,\\bigl(2(Q\\,x)_i - 2 x_i Q_{ii} + Q_{ii}\\bigr),
+\\]
+
+so a single matmul gives \(\\Delta E\\) for every bit. Each bit is then
+flipped independently with probability
+\(\\min\\bigl(1, e^{-\\beta\\,\\Delta E_i}\\bigr)\). This is *not* a strictly
+correct single-spin Metropolis chain — proposals are not conditional on
+neighbours updated earlier in the same sweep — but in the high-`β`
+limit it converges to the same Boltzmann distribution and matches the
+"parallel-tempered classical SA" baseline used throughout the QQA / CPRA
+literature.
+
+For non-QUBO problems (`Knapsack`, `MaxSAT3`, `BinaryPerceptron`, …) we
+fall back to **strict single-spin sequential Metropolis**: one
+`problem.loss_fn` call per bit per sweep. Correct, but \(N\\times\\) more
+expensive than the QUBO fast path.
+
+The β schedule is geometric by default (recommended for SA),
+\(\\beta_t = \\beta_0 (\\beta_T/\\beta_0)^{t/T}\\). Use the `beta_schedule="linear"`
+flag to disable.
+
+`sol_size` is the number of independent chains, run in parallel as the
+batch dimension on GPU. There is no diversity term — the only "diversity"
+is the random initialisation per chain, exactly as in textbook SA.
+
+When SA is the right choice:
+
+* **As a baseline.** If your fancy method (QQA / CRA / CPRA / your own)
+  doesn't beat SA on a fixed compute budget, the relaxation isn't
+  helping for that problem.
+* **Tiny instances** (`N ≲ 50`) where SA converges in a few hundred
+  sweeps and the GCN training overhead of CRA-PI-GNN is wasted.
+* **Sanity check after problem changes.** SA's flat code path makes it
+  much easier to debug a new `loss_fn` than the relaxed-then-annealed
+  path of QQA.
+
 ## CPRA — `qqa.pignn.train_cpra_pi_gnn`
 
 Reference paper: Y. Ichikawa & H. Iwashita, *"Continuous Parallel
@@ -126,6 +174,9 @@ matrix.
 
 * **Default to PQQA.** It works on every problem in the catalogue, is
   the cheapest by far, and is the most thoroughly tested.
+* **Reach for SA first** when you want a *baseline* — if QQA / CRA /
+  CPRA can't beat SA on the same budget, the extra machinery isn't
+  paying its way for your problem.
 * **Switch to CRA-PI-GNN** when you need the GNN's smoothness prior on
   large, sparse graph problems and you can afford a longer training
   run.
