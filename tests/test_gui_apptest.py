@@ -270,6 +270,65 @@ def test_solve_page_pa_backend_smoke_run():
     )
 
 
+def test_solve_page_survives_old_qqa_without_population_annealing(monkeypatch):
+    """Regression for ``module 'qqa' has no attribute 'population_annealing'``.
+
+    Reproduces the production bug seen on Streamlit Community Cloud when
+    pip resolved ``qqa==0.5.0`` from PyPI (which predates PA) instead of
+    the in-tree wheel. The Solve page must:
+
+    * not crash on import / first render,
+    * not present PA as a selectable backend, and
+    * surface a human-readable ``st.warning`` explaining the missing
+      capability so the user knows to redeploy.
+    """
+    import qqa as _qqa  # noqa: PLC0415
+
+    monkeypatch.delattr(_qqa, "population_annealing", raising=False)
+    monkeypatch.delattr(_qqa, "PAResult", raising=False)
+
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 6,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    backend_radios = [r for r in at.sidebar.radio if "backend" in r.label.lower()]
+    assert backend_radios, "Backend radio missing"
+    options = list(backend_radios[0].options)
+    assert "PQQA" in options
+    assert not any("PA" in opt for opt in options), (
+        f"PA option must be hidden when qqa.population_annealing is absent; got {options!r}"
+    )
+
+    warnings = [getattr(w, "body", "") or getattr(w, "value", "") for w in at.warning]
+    assert any("PA backend not available" in (b or "") for b in warnings), (
+        f"Capability-missing warning not shown; warnings={warnings!r}"
+    )
+
+
+def test_visualize_page_survives_old_qqa_without_pa_result(monkeypatch):
+    """Visualize page must not crash if the deployed qqa lacks ``PAResult``.
+
+    Older wheels (pre-0.5.1) do not expose ``PAResult``; the page used to
+    do a top-level ``from qqa import PAResult`` which would raise on
+    import. The hardened page now degrades gracefully — it should render
+    the empty state when no run is loaded, instead of crashing.
+    """
+    import qqa as _qqa  # noqa: PLC0415
+
+    monkeypatch.delattr(_qqa, "PAResult", raising=False)
+
+    at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=60)
+    at.run()
+    assert not at.exception, at.exception
+
+
 def test_solve_runs_with_default_mis():
     """Regression for the duplicate-element-key crash on the default MIS
     problem.
