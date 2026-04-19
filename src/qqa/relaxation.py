@@ -70,7 +70,14 @@ class BinaryRelaxation:
         return torch.rand(shape, device=device, requires_grad=True)
 
     def forward(self, x):
-        return x
+        # Clamp to [0, 1] so the loss / penalty Φ(p) = 1 - (1 - 2p)^α stay
+        # within the regime CRA Theorem 3.1 assumes ("ˆl(p; C) bounded on
+        # [0, 1]^N"). Without this clamp, AdamW can push ``x`` outside the
+        # cube and Φ becomes *negative*, which gives the optimiser a perverse
+        # incentive to drift further out — empirically this freezes PQQA's
+        # best loss / DIV value within the first few thousand epochs at
+        # ``temp=0`` (the default). See ``tasks/test/verify_freeze_bug.py``.
+        return x.clamp(0.0, 1.0)
 
     def project(self, x):
         # AdamW can push ``x`` far outside ``[0, 1]`` during early epochs, and
@@ -82,7 +89,11 @@ class BinaryRelaxation:
     def penalty(self, x, curve_rate):
         # Sum across variable axes (keep leading batch axes intact).
         # For shape (B, N) -> (B,); for shape (B, I, N) -> (B, I).
-        return torch.sum(1 - (1 - 2 * x) ** curve_rate, dim=-1)
+        # Clamp to [0, 1] for the same reason ``forward`` does — the penalty
+        # is otherwise unbounded below for x outside the cube and the CRA
+        # annealing schedule's discrete attractor at γ > 0 collapses.
+        x_clip = x.clamp(0.0, 1.0)
+        return torch.sum(1 - (1 - 2 * x_clip) ** curve_rate, dim=-1)
 
     def diversity(self, x):
         # Standard deviation across the batch axis (dim=0), summed over the rest.
@@ -90,11 +101,17 @@ class BinaryRelaxation:
         return std.sum()
 
     def perturb_(self, x, learning_rate, temp):
-        if temp <= 0:
-            return
+        # Always clamp x back into [0, 1] in-place after the AdamW step, even
+        # when ``temp == 0`` (the PQQA default). Without the clamp, AdamW
+        # drifts ``x`` outside the cube within ~1 k epochs and the relaxation
+        # loses its semantic meaning (the discrete project clips, so the
+        # *integer* solution stays sensible, but the gradient signal that
+        # drives further improvement vanishes).
         with torch.no_grad():
-            noise = torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5)
-            x.add_(noise).clamp_(0.0, 1.0)
+            if temp > 0:
+                noise = torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5)
+                x.add_(noise)
+            x.clamp_(0.0, 1.0)
 
     def num_variables(self, problem):
         return problem.num_nodes

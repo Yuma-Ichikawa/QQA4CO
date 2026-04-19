@@ -40,6 +40,7 @@ from qqa.annealing import AnnealResult
 from qqa.pignn._import import require_pyg
 from qqa.pignn.graph import extract_nx_graph, nx_to_edge_index
 from qqa.pignn.model import GCNNet, default_in_feats
+from qqa.polish import greedy_one_flip
 from qqa.relaxation import BinaryRelaxation
 from qqa.utils import fix_seed, require_cuda_if_requested, safe_score_summary
 
@@ -97,6 +98,7 @@ def train_cra_pi_gnn(
     device: str | torch.device = "cpu",
     seed: int | None = None,
     verbose: bool = True,
+    polish: bool = True,
 ) -> AnnealResult:
     """Train a CRA-PI-GNN solver and return a :class:`qqa.AnnealResult`.
 
@@ -312,6 +314,16 @@ def train_cra_pi_gnn(
             best_bits = (probs >= 0.5).to(probs.dtype)
             best_obj = float(problem.loss_fn(best_bits.unsqueeze(0)).item())
 
+    # Default-on greedy 1-flip polish — same contract as ``qqa.anneal``.
+    polished_sol: torch.Tensor | None = None
+    if polish and getattr(problem, "Q_mat", None) is not None:
+        polished_sol = greedy_one_flip(problem, best_bits)
+        with torch.no_grad():
+            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
+        if pol_obj < best_obj:
+            best_bits = polished_sol
+            best_obj = pol_obj
+
     score = safe_score_summary(problem, best_bits, fallback_obj=float(best_obj))
 
     if verbose:
@@ -327,6 +339,7 @@ def train_cra_pi_gnn(
         history={k: np.asarray(v) for k, v in history.items()},
         callbacks=[],
         score=score,
+        polished_sol=polished_sol,
     )
 
 
@@ -372,6 +385,7 @@ def train_cpra_pi_gnn(
     device: str | torch.device = "cpu",
     seed: int | None = None,
     verbose: bool = True,
+    polish: bool = True,
 ) -> AnnealResult:
     """Train a **CPRA** multi-head PI-GNN solver and return an :class:`AnnealResult`.
 
@@ -715,6 +729,21 @@ def train_cpra_pi_gnn(
     best_bits = best_bits_per_replica[best_replica]
     best_obj = best_obj_per_replica[best_replica]
 
+    # Default-on polish on the winning replica only — polishing all R replicas
+    # would O(R)x the post-processing time without changing the headline
+    # ``best_sol``. Users who want every replica polished can iterate over
+    # ``score['extra']['replicas']`` and call ``greedy_one_flip`` themselves.
+    polished_sol: torch.Tensor | None = None
+    if polish and getattr(problem, "Q_mat", None) is not None and best_bits is not None:
+        polished_sol = greedy_one_flip(problem, best_bits)
+        with torch.no_grad():
+            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
+        if pol_obj < best_obj:
+            best_bits = polished_sol
+            best_obj = pol_obj
+            best_bits_per_replica[best_replica] = polished_sol
+            best_obj_per_replica[best_replica] = pol_obj
+
     # Per-replica score summaries.
     replica_records: list[dict] = []
     for r in range(int(num_replicas)):
@@ -755,4 +784,5 @@ def train_cpra_pi_gnn(
         history={k: np.asarray(v, dtype=float) for k, v in history.items()},
         callbacks=[],
         score=score,
+        polished_sol=polished_sol,
     )
