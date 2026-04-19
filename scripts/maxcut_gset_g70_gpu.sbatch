@@ -1,0 +1,57 @@
+#!/bin/bash
+# Reproduce G-set G70 MaxCut >= 9514 with PQQA / CRA-PI-GNN / CPRA on a
+# single GPU. Submits all three methods sequentially in the same job so
+# one log file shows the head-to-head comparison.
+#
+# Submit with:    sbatch scripts/maxcut_gset_g70_gpu.sbatch
+# Watch with:     squeue -u $USER
+# Logs land in:   tasks/logs/<job-name>-<jobid>.{out,err}
+#
+# Notes
+# -----
+# * --exclude=kagura-gpu07: known broken cuInit on that node
+#   (see tasks/lessons.md "kagura-gpu07 is broken").
+# * Walltime budget: PQQA ~5 min, CRA ~60 min, CPRA ~75 min on a B200
+#   class GPU. 3 h gives headroom for slower nodes.
+
+#SBATCH --job-name=qqa-g70
+#SBATCH --partition=debug
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=06:00:00
+#SBATCH --exclude=kagura-gpu07
+#SBATCH --output=tasks/logs/%x-%j.out
+#SBATCH --error=tasks/logs/%x-%j.err
+#
+# Walltime budget on a B200-class GPU with the post-fix sweet-spot recipe:
+#   PQQA  single-shot (S=5000, div=0.5, BFS warm-start)        ~30 min
+#   CRA   5 seeds @ paper hyperparameters (γ(0)=-6, H0=N^0.8)  ~50 min
+#   CPRA  (16,1.0) + (32,2.0) replica/diversity sweep          ~70 min
+#   ---
+#   Total ≈ 150 min (3 h budget gives 1 h headroom for slower nodes)
+
+set -euo pipefail
+cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
+mkdir -p tasks/logs data/gset
+
+source .venv/bin/activate
+unset VIRTUAL_ENV_PROMPT
+
+echo "=== HOST / GPU ==="
+hostname
+date
+nvidia-smi -L || true
+python -c "import torch; print('torch:', torch.__version__, 'cuda available:', torch.cuda.is_available())"
+
+# A single ``--method all`` invocation iterates over PQQA / CRA / CPRA inside
+# the same Python process, so the BFS-2color baseline and the G70 graph are
+# only built once. ``|| true`` keeps the job running even if one method
+# fails — the per-method PASS/FAIL line is the source of truth.
+python scripts/maxcut_gset_g70.py --method all --device cuda || true
+
+echo
+echo "=== SUMMARY ==="
+grep -E "method=.* cut=" tasks/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out || true
+
+echo
+echo "=== DONE ==="
