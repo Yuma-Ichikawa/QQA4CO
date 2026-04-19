@@ -29,6 +29,7 @@ Loss functions must accept a tensor whose leading axis is the parallel batch
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from typing import Literal
 
@@ -147,15 +148,14 @@ def user_problem_from_source(
     )
 
 
-def load_problem_from_file(path: str | os.PathLike[str]) -> COProblem:  # noqa: F821
+def load_problem_from_file(path: str | os.PathLike[str]) -> COProblem:
     """Load a user-provided problem from a Python file.
 
     The file must either define a top-level variable ``problem`` that is a
     :class:`COProblem` instance, or a callable ``make_problem()`` / ``build()``
     that returns one.
     """
-    import importlib.util
-    import os
+    import importlib.util  # noqa: PLC0415
 
     p = os.fspath(path)
     spec = importlib.util.spec_from_file_location("_qqa_user_problem", p)

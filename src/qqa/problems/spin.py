@@ -114,7 +114,11 @@ class Ising1D(SpinProblem):
             J_mat[0, N - 1] = J
             J_mat[N - 1, 0] = J
         self.J = J_mat.to(device)
-        self.h = torch.full((N,), float(h), device=device) if h != 0.0 else None
+        # Treat tiny |h| as the field-free case so the float-equality
+        # comparison ``h == 0.0`` cannot bite when ``h`` is the result of
+        # an upstream computation (e.g. h = a - b that is mathematically 0
+        # but floats to ~1e-17).
+        self.h = torch.full((N,), float(h), device=device) if abs(float(h)) > 1e-15 else None
         self.relaxation = SpinRelaxation()
 
 

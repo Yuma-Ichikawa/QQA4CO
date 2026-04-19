@@ -161,12 +161,24 @@ def simulated_annealing(
             "simulated_annealing does not support CategoricalRelaxation problems "
             "(e.g. Coloring, GraphBisection). Use qqa.anneal for those."
         )
+    # Batched-instance problems (MaximumIndependentSetInstance, ...) carry a
+    # 3-D state ``(B, I, N)`` and a ``loss_fn`` that expects the instance
+    # axis. The single-instance SA loop below would either silently misuse
+    # the einsum or crash deep inside the per-sweep matmul; surface a clear
+    # message at the API boundary instead.
+    if hasattr(problem, "num_instance"):
+        raise NotImplementedError(
+            "simulated_annealing does not support batched-instance problems "
+            f"({type(problem).__name__}); SA needs a single-instance "
+            "problem. Iterate over instances and call simulated_annealing "
+            "on each, or use qqa.anneal which handles batched instances."
+        )
     is_spin = isinstance(relax, SpinRelaxation)
     is_binary = isinstance(relax, BinaryRelaxation) and not is_spin
     if not (is_spin or is_binary):
         raise TypeError(
             f"Unsupported relaxation {type(relax).__name__}; expected "
-            "BinaryRelaxation, BinaryInstanceRelaxation, or SpinRelaxation."
+            "BinaryRelaxation or SpinRelaxation."
         )
 
     num_vars = _resolve_num_vars(problem)
