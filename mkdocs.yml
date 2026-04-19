@@ -34,12 +34,26 @@ theme:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
-  - Problem catalog: problems.md
-  - GUI: gui.md
-  - Visualization: visualization.md
-  - API reference: api.md
-  - Verification: verification.md
-  - Migration from 0.2.x: migration.md
+  - How-to:
+    - Run on GPU: how-to/gpu.md
+    - Tune hyper-parameters: how-to/tuning.md
+    - Integrate into a pipeline: how-to/integrate.md
+  - Reference:
+    - Problem catalog: problems.md
+    - CLI: reference/cli.md
+    - Backends: reference/backends.md
+    - API: api.md
+    - Visualization: visualization.md
+    - GUI: gui.md
+    - Verification sweep: verification.md
+    - Migration from 0.2.x: migration.md
+  - Explanation:
+    - Algorithm: explanation/algorithm.md
+    - Architecture: explanation/architecture.md
+  - Develop:
+    - Extending QQA4CO: develop/extending.md
+    - Internals: develop/internals.md
+    - Releasing: develop/releasing.md
 
 markdown_extensions:
   - admonition

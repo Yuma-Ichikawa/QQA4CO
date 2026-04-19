@@ -59,5 +59,22 @@ qqa gui              # opens http://localhost:8501
 - `examples/04_edwards_anderson_3d.ipynb`
 - `examples/06_binary_perceptron.ipynb`
 - …
+- `notebooks/cra_pignn_example.ipynb` — CRA-PI-GNN walkthrough across
+  every supported graph problem
+- `notebooks/cpra_pignn_example.ipynb` — CPRA penalty / variation
+  diversification
 
 Run any of them with ``uv run jupyter lab``.
+
+## Where to go next
+
+* [Backends reference](reference/backends.md) — pick `qqa` / `pignn`
+  / `cpra` for your problem.
+* [How-to → Tuning](how-to/tuning.md) — `sol_size`, `num_epochs`,
+  schedule defaults that work.
+* [How-to → GPU](how-to/gpu.md) — CUDA / MPS / Blackwell notes and the
+  device-mismatch pitfall.
+* [How-to → Integrate](how-to/integrate.md) — embed QQA4CO into a
+  pipeline.
+* [Develop → Extending QQA4CO](develop/extending.md) — add a new
+  problem, relaxation, callback, or whole backend.
