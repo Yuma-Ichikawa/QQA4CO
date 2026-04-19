@@ -288,7 +288,7 @@ def test_visualize_renders_3d_pca_and_diversity_with_population(tmp_path):
     at.run()
     assert not at.exception, at.exception
     labels = [t.label for t in at.tabs]
-    for required in ("3D PCA flow", "Diversity", "Loss spectrogram"):
+    for required in ("Solution-space PCA", "Diversity", "Loss spectrogram"):
         assert required in labels, f"missing tab {required!r} (got {labels})"
 
     # Belt and braces: the 3D PCA tab body wraps the PCA computation in a

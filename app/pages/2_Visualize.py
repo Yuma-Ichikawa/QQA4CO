@@ -70,7 +70,7 @@ render_score_card(result.score, raw_loss=raw)
         "Best trajectory",
         "Schedule",
         "Parallel population",
-        "3D PCA flow",
+        "Solution-space PCA",
         "Diversity",
         "Loss spectrogram",
         "Ridgeline",
@@ -146,119 +146,116 @@ with tab_pop:
 
 with tab_pca:
     if pop_tracker is None or not pop_tracker.x:
-        st.info("No x-snapshots recorded (population_tracker requires record_x=True).")
+        st.info(
+            "No x-snapshots recorded — re-run with the default "
+            "`PopulationTracker(record_x=True)` to enable this view."
+        )
     else:
         try:
             import plotly.graph_objects as go
 
-            xs = pop_tracker.x  # list[T] of (B, ...) ndarrays
-            epochs = np.asarray(pop_tracker.epochs)
-            X = np.stack([np.asarray(snap).reshape(snap.shape[0], -1) for snap in xs], axis=0)
-            # X: (T, B, D). Stack into a flat (T*B, D) cloud and run a
-            # truncated SVD so PCA-3D scales to N≈10⁴ variables comfortably.
-            T_, B, D = X.shape
-            flat = X.reshape(T_ * B, D)
-            mean = flat.mean(axis=0, keepdims=True)
-            flat0 = flat - mean
-            ncomp = min(3, flat0.shape[1], flat0.shape[0])
+            # Final-population-only PCA. We deliberately ignore the epoch
+            # dimension here — temporal dynamics live in the spectrogram /
+            # diversity / replica-fate tabs. This view answers a different
+            # question: "where in solution space did my parallel replicas
+            # end up?".
+            x_final = np.asarray(pop_tracker.x[-1])  # (B, ...)
+            B = x_final.shape[0]
+            X = x_final.reshape(B, -1).astype(np.float32, copy=False)  # (B, D)
+            D = X.shape[1]
+            mean = X.mean(axis=0, keepdims=True)
+            X0 = X - mean
+            ncomp = min(3, D, B)
             try:
-                # Faster than np.linalg.svd for tall matrices.
-                _, _, vt = np.linalg.svd(flat0, full_matrices=False)
+                _, sigmas, vt = np.linalg.svd(X0, full_matrices=False)
             except np.linalg.LinAlgError:
-                vt = np.eye(D)[:ncomp]
+                sigmas = np.zeros(ncomp, dtype=np.float32)
+                vt = np.eye(D, dtype=np.float32)[:ncomp]
             comps = vt[:ncomp].T  # (D, ncomp)
-            proj = (flat0 @ comps).reshape(T_, B, ncomp)  # (T, B, 3)
+            proj = X0 @ comps  # (B, ncomp)
             if ncomp < 3:
-                pad = np.zeros((T_, B, 3 - ncomp))
-                proj = np.concatenate([proj, pad], axis=-1)
+                proj = np.concatenate([proj, np.zeros((B, 3 - ncomp))], axis=-1)
 
-            final_loss = np.asarray(pop_tracker.loss[-1])
-            cmin = float(final_loss.min())
-            cmax = float(final_loss.max())
+            # Explained-variance ratio per axis (handles the degenerate
+            # σ = 0 case as 0%).
+            var_total = float((sigmas**2).sum())
+            evr = (sigmas[:3] ** 2 / var_total) if var_total > 0 else np.zeros(3)
+            evr = np.pad(evr, (0, max(0, 3 - len(evr))))[:3]
+
+            final_loss = np.asarray(pop_tracker.loss[-1], dtype=np.float64)
+            best_idx = int(np.argmin(final_loss))
+
             p = palette()
             fig = go.Figure()
-            # One faint trajectory per replica.
-            stride = max(1, B // 64)  # cap visible lines for readability
-            for i in range(0, B, stride):
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=proj[:, i, 0],
-                        y=proj[:, i, 1],
-                        z=proj[:, i, 2],
-                        mode="lines",
-                        line={"color": p["muted"], "width": 1.5},
-                        opacity=0.18,
-                        showlegend=False,
-                        hoverinfo="skip",
-                    )
-                )
-            # Snapshot scatter coloured by epoch — gives the "flow" feel.
-            for k in range(T_):
-                fig.add_trace(
-                    go.Scatter3d(
-                        x=proj[k, :, 0],
-                        y=proj[k, :, 1],
-                        z=proj[k, :, 2],
-                        mode="markers",
-                        marker={
-                            "size": 2.5,
-                            "color": [int(epochs[k])] * B,
-                            "colorscale": "Viridis",
-                            "cmin": int(epochs.min()),
-                            "cmax": int(epochs.max()),
-                            "showscale": k == T_ - 1,
-                            "colorbar": {"title": "epoch"} if k == T_ - 1 else None,
-                            "opacity": 0.55,
-                        },
-                        showlegend=False,
-                        name=f"epoch {int(epochs[k])}",
-                        hovertemplate=f"epoch {int(epochs[k])}<br>PC1=%{{x:.3f}}, PC2=%{{y:.3f}}, PC3=%{{z:.3f}}<extra></extra>",
-                    )
-                )
-            # Overlay final population coloured by per-replica final loss.
             fig.add_trace(
                 go.Scatter3d(
-                    x=proj[-1, :, 0],
-                    y=proj[-1, :, 1],
-                    z=proj[-1, :, 2],
+                    x=proj[:, 0],
+                    y=proj[:, 1],
+                    z=proj[:, 2],
                     mode="markers",
                     marker={
-                        "size": 4.2,
+                        "size": 5.5,
                         "color": final_loss,
                         "colorscale": "Plasma",
-                        "cmin": cmin,
-                        "cmax": cmax,
+                        "cmin": float(final_loss.min()),
+                        "cmax": float(final_loss.max()),
                         "showscale": True,
-                        "colorbar": {"title": "final loss", "x": 1.12},
+                        "colorbar": {"title": "loss"},
                         "line": {"color": "white", "width": 0.6},
+                        "opacity": 0.95,
                     },
-                    name="final",
+                    text=[
+                        f"replica {i}<br>loss = {float(v):.4f}" for i, v in enumerate(final_loss)
+                    ],
+                    hovertemplate="%{text}<extra></extra>",
                     showlegend=False,
-                    hovertemplate="final<br>loss=%{marker.color:.4f}<extra></extra>",
+                )
+            )
+            # Highlight the global-best replica with a diamond.
+            fig.add_trace(
+                go.Scatter3d(
+                    x=[float(proj[best_idx, 0])],
+                    y=[float(proj[best_idx, 1])],
+                    z=[float(proj[best_idx, 2])],
+                    mode="markers",
+                    marker={
+                        "size": 11,
+                        "symbol": "diamond",
+                        "color": p["accent2"],
+                        "line": {"color": "white", "width": 1.5},
+                    },
+                    name=f"best (replica {best_idx})",
+                    hovertemplate=(
+                        f"best replica {best_idx}<br>"
+                        f"loss = {float(final_loss[best_idx]):.4f}<extra></extra>"
+                    ),
                 )
             )
             fig.update_layout(
                 **plotly_layout(
-                    title={"text": "3D PCA flow of the parallel population"},
+                    title={
+                        "text": ("Final parallel population in solution space (PCA-3 projection)")
+                    },
                     height=620,
-                    showlegend=False,
+                    showlegend=True,
+                    legend={"x": 0.02, "y": 0.98},
                 )
             )
             fig.update_scenes(
-                xaxis_title="PC1",
-                yaxis_title="PC2",
-                zaxis_title="PC3",
+                xaxis_title=f"PC1 ({evr[0] * 100:.1f}%)",
+                yaxis_title=f"PC2 ({evr[1] * 100:.1f}%)",
+                zaxis_title=f"PC3 ({evr[2] * 100:.1f}%)",
                 bgcolor=palette()["bg_card"],
             )
             st.plotly_chart(fig, width="stretch")
             st.caption(
-                "Truncated-SVD PCA (3 components) of the continuous-variable "
-                "population. Each grey thread is one replica's trajectory; "
-                "snapshot dots are coloured by epoch (Viridis); the final "
-                "population is overlaid in Plasma by per-replica final loss. "
-                "Drag to rotate."
+                f"PCA-3 of the **final** ``sol_size = {B}`` parallel solutions "
+                f"({D}-dimensional, projected via truncated SVD). Marker colour "
+                "encodes per-replica final loss; the diamond is the global best. "
+                "Drag to rotate. The three axes capture "
+                f"{evr[:3].sum() * 100:.1f}% of the population's spread."
             )
-            with st.expander("Show 2D projection", expanded=False):
+            with st.expander("Show 2D projection / epoch trajectory", expanded=False):
                 fig2 = viz.plot_population_embedding(pop_tracker, backend="plotly", show=False)
                 st.plotly_chart(_retheme(fig2), width="stretch")
         except Exception as e:

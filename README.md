@@ -28,8 +28,54 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/demo.gif" width="420" alt="QQA dashboard demo">
+  <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/demo.gif" width="640" alt="QQA dashboard demo">
 </p>
+
+---
+
+<h2 align="center">🌐 Try the Web dashboard — no install required</h2>
+
+<p align="center">
+  <a href="https://parallelquasiquantum4co.streamlit.app/">
+    <img src="https://static.streamlit.io/badges/streamlit_badge_black_white.svg" alt="Open in Streamlit Community Cloud" height="40">
+  </a>
+</p>
+
+<p align="center">
+  <b><a href="https://parallelquasiquantum4co.streamlit.app/">→ parallelquasiquantum4co.streamlit.app</a></b>
+  &nbsp;·&nbsp; one-click hosted instance &nbsp;·&nbsp; CPU back-end &nbsp;·&nbsp; light / dark mode
+</p>
+
+The dashboard is a four-page Streamlit app that drives the same `qqa.anneal`
+solver this README documents — pick a problem, watch the relaxed variables
+discretise live, race PQQA against simulated annealing, and inspect the
+parallel population in 3D PCA / loss-spectrogram views.
+
+| Page | What you can do |
+| --- | --- |
+| **Home** | Pick from 19 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware. |
+| **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, polish (1-flip local search) and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
+| **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
+| **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA shootout** that reports the wall-clock speed-up at matched compute budget. |
+
+### Run the dashboard locally
+
+```bash
+pip install "qqa[gui]"        # pulls Streamlit + Plotly
+qqa gui                       # opens http://localhost:8501
+```
+
+Or with uv:
+
+```bash
+uv sync --extra gui
+uv run qqa gui
+```
+
+That's it — the same Web UI, your hardware, your problems. CUDA is picked
+up automatically when available.
+
+---
 
 ## What's in the box
 
