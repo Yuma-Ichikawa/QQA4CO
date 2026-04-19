@@ -451,6 +451,19 @@ def test_home_page_lists_min_dominating_set_and_bgp():
     assert any("balanced" in o or "partition" in o for o in cat_options), (
         f"Balanced Graph Partition missing from Categorical problems; got {cat_options!r}"
     )
+    # Physics catalog must list the v0.5 additions (PSpinGlass, RFIM).
+    family_select = next(s for s in at.sidebar.selectbox if "family" in s.label.lower())
+    family_select.set_value("Physics / spin")
+    at.run()
+    assert not at.exception, at.exception
+    problem_select = next(s for s in at.sidebar.selectbox if s.label == "Problem")
+    phys_options = [str(o).lower() for o in (problem_select.options or [])]
+    assert any("p-spin" in o or "pspin" in o for o in phys_options), (
+        f"p-spin glass missing from Physics problems; got {phys_options!r}"
+    )
+    assert any("rfim" in o or "random field" in o for o in phys_options), (
+        f"Random Field Ising missing from Physics problems; got {phys_options!r}"
+    )
 
 
 def test_solve_runs_with_min_dominating_set_default():

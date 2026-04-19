@@ -154,6 +154,8 @@ with st.sidebar:
                 ("ising1d", "1D Ising model"),
                 ("ea", "Edwards–Anderson spin glass"),
                 ("sk", "Sherrington–Kirkpatrick spin glass"),
+                ("pspin", "p-spin glass (dense, p ≥ 2)"),
+                ("rfim", "Random Field Ising Model (RFIM)"),
                 ("perceptron", "Binary perceptron"),
                 ("hopfield", "Hopfield memory"),
             ],
@@ -168,8 +170,12 @@ with st.sidebar:
             format_func=lambda s: _LABELS[s],
         )
 
-        size_default = {"tsp": 8, "qap": 8, "nqueens": 8, "ea": 6}.get(problem_kind, 32)
-        size_max = {"tsp": 20, "qap": 14, "nqueens": 14, "ea": 16}.get(problem_kind, 400)
+        size_default = {"tsp": 8, "qap": 8, "nqueens": 8, "ea": 6, "rfim": 8, "pspin": 16}.get(
+            problem_kind, 32
+        )
+        size_max = {"tsp": 20, "qap": 14, "nqueens": 14, "ea": 16, "rfim": 20, "pspin": 32}.get(
+            problem_kind, 400
+        )
         size_label = {
             "tsp": "Cities N",
             "qap": "Facilities N",
@@ -178,6 +184,8 @@ with st.sidebar:
             "knapsack": "Items N",
             "number_partition": "Values N",
             "ea": "Lattice side L",
+            "rfim": "Lattice side L",
+            "pspin": "Spins N",
         }.get(problem_kind, "Problem size (N)")
         size = st.number_input(size_label, min_value=4, max_value=size_max, value=size_default)
         seed = st.number_input("Seed", min_value=0, max_value=10_000, value=0)
@@ -203,6 +211,12 @@ with st.sidebar:
             )
         if problem_kind == "ea":
             extra["dim"] = st.selectbox("Lattice dim", (2, 3), index=1)
+        if problem_kind == "rfim":
+            extra["dim"] = st.selectbox("Lattice dim", (1, 2, 3), index=1)
+            extra["coupling_J"] = st.slider("Ferromagnetic coupling J", 0.1, 5.0, 1.0, 0.1)
+            extra["h_std"] = st.slider("Random-field σ_h", 0.0, 5.0, 1.0, 0.1)
+        if problem_kind == "pspin":
+            extra["p_order"] = st.slider("Interaction order p", 2, 5, 3)
         if problem_kind == "perceptron":
             extra["alpha"] = st.slider("Loading α = M/N", 0.1, 1.5, 0.5, 0.1)
         if problem_kind == "hopfield":

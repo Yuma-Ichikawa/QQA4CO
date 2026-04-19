@@ -19,6 +19,7 @@ from _common import (  # noqa: E402
     palette,
     paper_link_footer,
     plotly_layout,
+    render_config_chips,
     render_score_card,
     sidebar_brand,
     theme_toggle_in_sidebar,
@@ -49,10 +50,7 @@ if "problem_config" not in st.session_state:
     )
     st.stop()
 cfg = st.session_state["problem_config"]
-st.caption(
-    f"problem: **{cfg['kind']}** | size: **{cfg['size']}** | "
-    f"device: **{cfg['device']}** | seed: **{cfg['seed']}**"
-)
+render_config_chips(cfg)
 
 # Hyper-parameter presets — each tuple is
 # (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
@@ -447,7 +445,21 @@ class StreamlitCallback(Callback):
         )
 
 
-run = st.button("▶  Run QQA", type="primary")
+# Compact "active hyper-params" chip row, so the user can see what is
+# about to run without scrolling the sidebar.
+render_config_chips(
+    cfg,
+    extras={
+        "sol_size": sol_size,
+        "epochs": epochs,
+        "lr": f"{learning_rate:.2g}",
+        "T": f"{temp:.2g}",
+        "polish": "on" if polish else "off",
+        "warm-start": "on" if warm_start else "off",
+    },
+)
+
+run = st.button("▶  Run QQA", type="primary", width="stretch")
 if run:
     try:
         problem = build_problem(cfg)
@@ -521,13 +533,19 @@ if run:
         else float(np.asarray(result.best_obj).mean())
     )
     # The callback tracks the *un-polished* running best (it fires inside
-    # the annealing loop, before greedy_one_flip runs). Surface that here
-    # so users can see how much polish contributed when it actually fired.
-    pre_polish = (
-        cb.best_disc[-1] if (polish and result.polished_sol is not None and cb.best_disc) else None
-    )
+    # the annealing loop, before greedy_one_flip runs). Inject it into
+    # the score dict so render_score_card can show a "polish improved
+    # by Δ" badge when polish actually moved the needle. We pass it via
+    # the dict (instead of a kwarg) so an older deployed _common.py
+    # cannot raise ``TypeError: got an unexpected keyword argument``.
+    import contextlib  # noqa: PLC0415
+
+    score_payload = dict(result.score) if isinstance(result.score, dict) else {}
+    if polish and result.polished_sol is not None and cb.best_disc:
+        with contextlib.suppress(TypeError, ValueError):
+            score_payload["pre_polish_loss"] = float(cb.best_disc[-1])
     with score_holder.container():
-        render_score_card(result.score, raw_loss=raw, pre_polish_loss=pre_polish)
+        render_score_card(score_payload, raw_loss=raw)
     st.session_state.setdefault("results", []).append(
         {
             "cfg": dict(cfg),

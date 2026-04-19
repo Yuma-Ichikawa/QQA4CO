@@ -450,12 +450,16 @@ def apply_theme() -> None:
             box-shadow: 0 1px 2px rgba(15,23,42,0.04);
         }}
         .qqa-score {{
-            background: linear-gradient(135deg, rgba(15,118,110,0.06), rgba(30,58,138,0.06));
+            background:
+              radial-gradient(120% 150% at 0% 0%, rgba(56,189,248,0.10) 0%, transparent 60%),
+              linear-gradient(135deg, rgba(15,118,110,0.06), rgba(30,58,138,0.06));
             border: 1px solid var(--qqa-accent);
-            border-left: 4px solid var(--qqa-accent);
-            padding: 1rem 1.4rem;
-            border-radius: 8px;
+            border-left: 5px solid var(--qqa-accent);
+            padding: 1.1rem 1.4rem;
+            border-radius: 14px;
             margin: 0.6rem 0 1rem 0;
+            box-shadow: 0 6px 24px -12px rgba(56,189,248,0.32),
+                        0 1px 2px rgba(15,23,42,0.06);
         }}
         .qqa-score .label {{
             font-size: 0.72rem;
@@ -465,10 +469,11 @@ def apply_theme() -> None:
         }}
         .qqa-score .value {{
             font-family: 'Source Serif 4', Georgia, serif;
-            font-size: 2.2rem;
+            font-size: 2.4rem;
             font-weight: 700;
             color: var(--qqa-text);
             line-height: 1.1;
+            letter-spacing: -0.01em;
         }}
         .qqa-score .value.infeasible {{ color: #b45309; }}
         .qqa-score .unit {{
@@ -481,7 +486,14 @@ def apply_theme() -> None:
             color: var(--qqa-muted);
             font-size: 0.85rem;
             margin-top: 0.3rem;
+            font-variant-numeric: tabular-nums;
         }}
+        .qqa-score .raw.polish {{
+            color: #047857;
+            font-weight: 500;
+            margin-top: 0.45rem;
+        }}
+        .qqa-score .raw .muted {{ color: var(--qqa-muted); font-weight: 400; }}
         .qqa-badge {{
             display: inline-block;
             padding: 0.12rem 0.55rem;
@@ -661,12 +673,16 @@ def apply_theme() -> None:
             backdrop-filter: blur(10px);
         }}
         .qqa-score {{
-            background: linear-gradient(135deg, rgba(56,189,248,0.14), rgba(168,85,247,0.14));
+            background:
+              radial-gradient(120% 150% at 0% 0%, rgba(56,189,248,0.18) 0%, transparent 60%),
+              linear-gradient(135deg, rgba(56,189,248,0.14), rgba(168,85,247,0.14));
             border: 1px solid rgba(56,189,248,0.4);
-            border-left: 4px solid var(--qqa-accent);
-            padding: 1rem 1.4rem;
-            border-radius: 12px;
+            border-left: 5px solid var(--qqa-accent);
+            padding: 1.1rem 1.4rem;
+            border-radius: 14px;
             margin: 0.6rem 0 1rem 0;
+            box-shadow: 0 14px 36px -16px rgba(56,189,248,0.50),
+                        0 1px 2px rgba(0,0,0,0.30);
         }}
         .qqa-score .label {{
             font-size: 0.72rem; letter-spacing: 0.12em;
@@ -674,7 +690,8 @@ def apply_theme() -> None:
         }}
         .qqa-score .value {{
             font-family: 'Source Serif 4', serif;
-            font-size: 2.2rem; font-weight: 700; color: #f8fafc;
+            font-size: 2.4rem; font-weight: 700; color: #f8fafc;
+            letter-spacing: -0.01em;
         }}
         .qqa-score .value.infeasible {{ color: #fcd34d; }}
         .qqa-score .unit {{
@@ -683,7 +700,14 @@ def apply_theme() -> None:
         }}
         .qqa-score .raw {{
             color: var(--qqa-muted); font-size: 0.85rem; margin-top: 0.3rem;
+            font-variant-numeric: tabular-nums;
         }}
+        .qqa-score .raw.polish {{
+            color: #6ee7b7;
+            font-weight: 500;
+            margin-top: 0.45rem;
+        }}
+        .qqa-score .raw .muted {{ color: var(--qqa-muted); font-weight: 400; }}
         .qqa-badge {{
             display: inline-block; padding: 0.12rem 0.55rem; border-radius: 999px;
             font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
@@ -705,6 +729,7 @@ def apply_theme() -> None:
 _PAPER_URL = "https://openreview.net/forum?id=9EfBeXaXf0"
 _GITHUB_URL = "https://github.com/Yuma-Ichikawa/QQA4CO"
 _DEMO_URL = "https://parallelquasiquantum4co.streamlit.app/"
+_DOI_URL = "https://doi.org/10.5281/zenodo.19648231"
 
 
 def sidebar_brand() -> None:
@@ -851,6 +876,8 @@ def paper_link_footer() -> None:
                    text-decoration:none;">📄  Paper (OpenReview)</a>
                 <a href="{_GITHUB_URL}" target="_blank" style="color:{link};
                    text-decoration:none;">⎇  GitHub repository</a>
+                <a href="{_DOI_URL}" target="_blank" style="color:{link};
+                   text-decoration:none;">🆔  Cite (Zenodo DOI)</a>
                 <a href="{_DEMO_URL}" target="_blank" style="color:{link};
                    text-decoration:none;">🚀  Hosted live demo</a>
               </div>
@@ -893,51 +920,111 @@ def hero_badges() -> None:
     )
 
 
+def render_config_chips(
+    cfg: dict,
+    *,
+    extras: dict | None = None,
+) -> None:
+    """Render the active problem configuration as a row of chip-style badges.
+
+    A more polished replacement for the bare ``problem: x | size: y | ...``
+    caption used at the top of the Solve / Visualize / Compare pages.
+
+    Args:
+        cfg: Problem configuration dict, must contain ``kind`` / ``size`` /
+            ``device`` / ``seed``.
+        extras: Optional ``{label: value}`` dict appended after the standard
+            chips (e.g. ``{"polish": "on", "warm-start": "off"}``).
+    """
+    p = palette()
+    accent = p["accent"]
+    border = p["border"]
+    muted = p["muted"]
+    chip_style = (
+        "display:inline-flex;align-items:center;gap:0.35rem;"
+        f"padding:0.22rem 0.7rem;border:1px solid {border};"
+        "background:rgba(148,163,184,0.10);border-radius:999px;"
+        "font-size:0.78rem;font-variant-numeric:tabular-nums;"
+        "white-space:nowrap;"
+    )
+    label_style = f"color:{muted};text-transform:uppercase;letter-spacing:0.06em;font-size:0.66rem;"
+    val_style = f"color:{accent};font-weight:600;"
+
+    def _chip(label: str, value: object) -> str:
+        return (
+            f'<span style="{chip_style}">'
+            f'<span style="{label_style}">{label}</span>'
+            f'<span style="{val_style}">{value}</span>'
+            f"</span>"
+        )
+
+    chips = [
+        _chip("problem", cfg.get("kind", "?")),
+        _chip("size", cfg.get("size", "?")),
+        _chip("device", cfg.get("device", "?")),
+        _chip("seed", cfg.get("seed", "?")),
+    ]
+    if extras:
+        for k, v in extras.items():
+            chips.append(_chip(k, v))
+    st.markdown(
+        '<div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin:0.2rem 0 0.9rem 0;">'
+        + "".join(chips)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_score_card(
     score: dict,
     raw_loss: float | None = None,
-    *,
-    pre_polish_loss: float | None = None,
+    **_extra: object,
 ) -> None:
     """Render the big problem-specific score tile used by the Solve page.
 
     Parameters
     ----------
     score:
-        Output of ``problem.score_summary``.
+        Output of ``problem.score_summary``. The dict may carry an extra
+        ``pre_polish_loss`` key — when present *and* strictly worse than
+        ``raw_loss`` we surface a small "before polish" badge so users
+        can see how much :func:`qqa.polish.greedy_one_flip` contributed.
     raw_loss:
         Optional raw ``loss_fn`` value (after polish, since ``anneal``
         replaces ``best_obj`` with the polished value).
-    pre_polish_loss:
-        Optional ``loss_fn`` value of the *un-polished* annealer winner.
-        Displayed as a small "before polish" badge whenever it is
-        strictly worse than ``raw_loss`` so the user can see how much
-        :func:`qqa.polish.greedy_one_flip` contributed.
+    **_extra:
+        Forward-compatible: silently absorbs any future kwargs from
+        callers so an out-of-sync deployment never crashes the page
+        with ``TypeError: got an unexpected keyword argument``.
     """
-    if not score:
+    if not isinstance(score, dict) or not score:
         return
-    feas = score.get("feasible", True)
+    feas = bool(score.get("feasible", True))
     badge = (
         '<span class="qqa-badge ok">feasible</span>'
         if feas
         else '<span class="qqa-badge warn">infeasible</span>'
     )
     value = score.get("value", "-")
-    value_s = f"{value:.4g}" if isinstance(value, float) else str(value)
+    value_s = f"{value:.4g}" if isinstance(value, int | float) else str(value)
     unit = score.get("unit", "")
     unit_html = f'<span class="unit">{unit}</span>' if unit else ""
-    raw_html = f'<div class="raw">raw loss = {raw_loss:.4g}</div>' if raw_loss is not None else ""
+    raw_html = ""
+    if isinstance(raw_loss, int | float):
+        raw_html = f'<div class="raw">raw loss = {float(raw_loss):.4g}</div>'
     polish_html = ""
+    pre_polish = score.get("pre_polish_loss")
     if (
-        pre_polish_loss is not None
-        and raw_loss is not None
+        isinstance(pre_polish, int | float)
+        and isinstance(raw_loss, int | float)
         # Only surface the line when polish actually moved the needle.
-        and pre_polish_loss > raw_loss + 1e-9
+        and float(pre_polish) > float(raw_loss) + 1e-9
     ):
-        delta = pre_polish_loss - raw_loss
+        delta = float(pre_polish) - float(raw_loss)
         polish_html = (
-            f'<div class="raw">pre-polish loss = {pre_polish_loss:.4g} '
-            f"(polish improved by {delta:.4g})</div>"
+            f'<div class="raw polish">▴ polish improved by '
+            f"<b>{delta:.4g}</b> "
+            f'<span class="muted">(pre-polish = {float(pre_polish):.4g})</span></div>'
         )
     value_cls = "value" if feas else "value infeasible"
     st.markdown(
@@ -1006,6 +1093,24 @@ def build_problem(cfg: dict) -> Any:
         )
     if kind == "sk":
         return _safe_call(qqa.SherringtonKirkpatrick, N=size, seed=seed, device=device)
+    if kind == "pspin":
+        return _safe_call(
+            qqa.PSpinGlass,
+            N=size,
+            p=int(extra.get("p_order", 3)),
+            seed=seed,
+            device=device,
+        )
+    if kind == "rfim":
+        return _safe_call(
+            qqa.RandomFieldIsing,
+            L=size,
+            dim=int(extra.get("dim", 2)),
+            J=float(extra.get("coupling_J", 1.0)),
+            h_std=float(extra.get("h_std", 1.0)),
+            seed=seed,
+            device=device,
+        )
     if kind == "perceptron":
         return _safe_call(
             qqa.BinaryPerceptron,

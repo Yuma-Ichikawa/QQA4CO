@@ -1422,7 +1422,14 @@ _RENDERERS: dict[str, Any] = {
     "maxsat3": render_maxsat3,
     "ising1d": render_ising1d,
     "sk": render_sk,
+    # Dense p-spin glass has no useful spatial layout — reuse the SK ring
+    # + local-energy view (J is None for p > 2 so only the ring renders,
+    # which is exactly what we want).
+    "pspin": render_sk,
     "ea": render_ea,
+    # RFIM lives on the same hyper-cubic lattice as EA, so the EA
+    # 2D-slice renderer applies as-is.
+    "rfim": render_ea,
     "perceptron": render_perceptron,
     "hopfield": render_hopfield,
 }
