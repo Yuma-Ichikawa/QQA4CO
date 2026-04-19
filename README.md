@@ -1,11 +1,17 @@
-# QQA4CO — Parallel Quasi-Quantum Annealing for Combinatorial Optimisation
+# Parallel Quasi-Quantum Annealer (PQQA)
 
-A research-grade PyTorch toolkit organised around **Parallel Quasi-Quantum
-Annealing (PQQA)** — a gradient-based, GPU-friendly framework for
-combinatorial optimisation (CO) that unifies several recent
-unsupervised-learning solvers under a single API. One installation gives you
-the PQQA solver, an optional GNN backend that plugs in CRA-PI-GNN-style
-methods, a 20+ class problem catalogue, a Streamlit dashboard and a CLI.
+A research-grade PyTorch toolkit for **continuous-relaxation combinatorial
+optimisation**. PQQA unifies the recent line of work that *lifts* a
+discrete CO problem into a continuous space and then solves it with
+gradient descent — **PQQA** (ICLR 2025), the **CRA-PI-GNN** baseline
+(NeurIPS 2024) and the **CPRA** diverse-solution framework (TMLR 2025) —
+behind a single, GPU-friendly API. One installation gives you the PQQA
+solver, an optional GNN backend that plugs in CRA-PI-GNN-style methods,
+GPU-parallel **SA** and **Population Annealing** baselines for honest
+comparisons, a 20+ class problem catalogue, a Streamlit dashboard and a CLI.
+
+The package is published on PyPI as **`qqa`** for backwards compatibility
+with earlier QQA4CO releases (``import qqa``).
 
 <p align="center">
   <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/v/qqa.svg?logo=pypi&logoColor=white&label=PyPI" alt="PyPI version"></a>
@@ -51,7 +57,7 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 | **Home** | Pick from 19 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware. |
 | **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, polish (1-flip local search) and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
-| **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA shootout** that reports the wall-clock speed-up at matched compute budget. |
+| **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
 
 ### Or run it locally — same UI, your hardware
 
@@ -92,12 +98,20 @@ CUDA is picked up automatically when available.
    diverse-solution framework (TMLR 2025) all share `AnnealResult`,
    `score_summary`, the same problem builders and the same CLI flags — A/B
    comparing methods is one `--backend` switch away.
-4. **A polished Streamlit dashboard** (light / dark, live progress, parallel
+4. **GPU-parallel MCMC baselines** for honest head-to-head comparisons —
+   classical **Simulated Annealing** (`qqa.simulated_annealing`) with a
+   QUBO Glauber fast path, and **Population Annealing**
+   (`qqa.population_annealing`, Hukushima-Iba / Machta) with systematic or
+   multinomial resampling between temperature steps. Both expose the same
+   `best_sol` / `best_obj` / `history` surface as `qqa.anneal`, so the
+   Streamlit *Compare* page can race PQQA against either at a matched
+   compute budget.
+5. **A polished Streamlit dashboard** (light / dark, live progress, parallel
    population view, per-problem solution viz, hyper-parameter sweeps) and a
    `qqa` **CLI** (`solve / bench / gui / version`) for reproducible
    experiments. A hosted instance lives at
    <https://parallelquasiquantum4co.streamlit.app/>.
-5. **MkDocs + Material reference docs** with auto-generated API pages, a
+6. **MkDocs + Material reference docs** with auto-generated API pages, a
    runnable `examples/` notebook gallery (Open-in-Colab badges) and a
    `scripts/verify_all_problems.py` correctness sweep that benchmarks every
    problem against ground truth or a strong baseline (29 / 29 instances pass
