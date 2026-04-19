@@ -171,8 +171,9 @@ def test_solve_page_end_to_end_run():
 
 def test_visualize_page_renders_pa_result():
     """After a PA run is stored in session state, Visualize must render
-    the PA-specific tabs (ESS / β, Free energy, Equilibrium pop., Family
-    tree) without crashing and without breaking the legacy tabs.
+    the PA-specific tabs (ESS / β, Free energy, Equilibrium pop.) and the
+    backend-aware Family tree tab without crashing or breaking the
+    legacy tabs.
     """
     import networkx as nx  # noqa: PLC0415
 
@@ -209,6 +210,54 @@ def test_visualize_page_renders_pa_result():
     assert any("F(β_end)" in lab for lab in metric_labels), (
         f"PA F(β_end)/N metric missing; got {metric_labels!r}"
     )
+    # The backend-aware Family tree tab must be present (PA branch should
+    # render Muller-plot output).
+    tab_labels = [t.label for t in at.tabs]
+    assert "Family tree" in tab_labels, (
+        f"Family tree tab must always be present; got {tab_labels!r}"
+    )
+
+
+def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
+    """PQQA's Family tree view (dendrogram + per-clade energy trajectory)
+    must render without exception when a population tracker is attached.
+
+    This pins the new backend-aware "Family tree" tab so it doesn't
+    regress to PA-only behaviour. The tab must be present for both
+    backends and produce non-empty content for PQQA.
+    """
+    import sys
+
+    sys.path.insert(0, str(APP.parent))
+    from _common import build_problem as _build  # noqa: PLC0415
+
+    import qqa  # noqa: PLC0415
+    from qqa.callbacks import PopulationTracker  # noqa: PLC0415
+
+    cfg = {"kind": "mis", "size": 24, "seed": 1, "device": "cpu", "extra": {}}
+    problem = _build(cfg)
+    tracker = PopulationTracker(stride=4)
+    result = qqa.anneal(
+        problem,
+        sol_size=16,
+        num_epochs=80,
+        learning_rate=0.5,
+        device="cpu",
+        verbose=False,
+        callbacks=[tracker],
+    )
+    at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=90)
+    at.session_state["last_result"] = result
+    at.session_state["last_problem"] = problem
+    at.session_state["last_pop_tracker"] = tracker
+    at.session_state["problem_config"] = cfg
+    at.run()
+    assert not at.exception, at.exception
+
+    tab_labels = [t.label for t in at.tabs]
+    assert "Family tree" in tab_labels, (
+        f"Family tree tab must be present for PQQA results; got {tab_labels!r}"
+    )
 
 
 def test_solve_page_pa_backend_smoke_run():
@@ -240,18 +289,26 @@ def test_solve_page_pa_backend_smoke_run():
     at.run()
     assert not at.exception, at.exception
 
-    # PA sidebar should now expose its own knobs.
-    pa_sliders = [
-        s
-        for s in at.sidebar.slider
-        if s.label
-        in (
-            "PA population (sol_size)",
-            "num_temps",
-            "sweeps_per_temp",
-        )
-    ]
-    assert pa_sliders, "PA hyper-parameter sliders missing"
+    # PA sidebar should now expose its own knobs (and ONLY those — the
+    # backend-aware refactor must hide PQQA-specific sliders).
+    sidebar_labels = [s.label for s in at.sidebar.slider]
+    assert any(lab.startswith("PA population") for lab in sidebar_labels), (
+        f"PA hyper-parameter sliders missing; got {sidebar_labels!r}"
+    )
+    assert any(lab.startswith("num_temps") for lab in sidebar_labels), (
+        f"PA num_temps slider missing; got {sidebar_labels!r}"
+    )
+    assert any(lab.startswith("sweeps_per_temp") for lab in sidebar_labels), (
+        f"PA sweeps_per_temp slider missing; got {sidebar_labels!r}"
+    )
+    # Regression for the screenshot bug: PQQA-only sliders must be hidden.
+    pqqa_only = {"sol_size", "epochs", "learning rate", "min bg", "max bg", "div_param"}
+    leaked = [lab for lab in sidebar_labels if lab in pqqa_only]
+    assert not leaked, (
+        f"PQQA-only sliders leaked into PA sidebar: {leaked!r}; "
+        f"all sidebar sliders = {sidebar_labels!r}"
+    )
+
     _set_slider(at, "PA population", 8)
     _set_slider(at, "num_temps", 10)
     _set_slider(at, "sweeps_per_temp", 1)
