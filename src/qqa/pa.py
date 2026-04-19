@@ -33,6 +33,7 @@ is empirically very effective on rugged spin-glass landscapes.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import time
@@ -54,7 +55,9 @@ class PAResult:
     """Result returned by :func:`population_annealing`.
 
     Mirrors :class:`qqa.AnnealResult` / :class:`qqa.SAResult` so it can be
-    plugged into the same plotting and scoring helpers.
+    plugged into the same plotting and scoring helpers, and adds three
+    PA-specific extensions: the equilibrium population at ``β_end``, an
+    unbiased free-energy estimator, and an optional genealogy dump.
 
     Attributes
     ----------
@@ -66,12 +69,43 @@ class PAResult:
     runtime:
         Wall-clock seconds spent inside the MCMC loop.
     history:
-        Per-temperature-step diagnostics: ``loss_mean``, ``loss_min``,
-        ``best_obj``, ``beta``, ``ess`` (effective sample size after
-        reweighting, in ``[1, R]``).
+        Per-temperature-step diagnostics. Always populated:
+        ``loss_mean``, ``loss_min``, ``best_obj``, ``beta``,
+        ``ess`` (effective sample size after reweighting, in ``[1, R]``),
+        ``log_z_ratio`` (per-step ``ln Z(β_t) - ln Z(β_{t-1})``,
+        Hukushima–Iba estimator, **with the resampling correction implicit**
+        because we average the unnormalised weights over the current
+        population), ``log_z`` (running **absolute** ``ln Z(β_t)``,
+        anchored at ``ln Z(0) = N · ln 2``), ``free_energy_density``
+        (``F(β_t) / N`` from ``log_z``).
     score:
         ``problem.score_summary`` of ``best_sol`` if defined, otherwise
         ``{"objective": best_obj}``.
+    final_x:
+        ``(sol_size, num_vars)`` population at ``β_end``. After enough
+        equilibration sweeps these are approximately Boltzmann samples at
+        the final inverse temperature — use them to estimate observables
+        rather than ``best_sol`` (which is the running min, not a sample).
+    final_loss:
+        ``(sol_size,)`` energies of ``final_x``.
+    log_z:
+        Final absolute ``ln Z(β_end)`` estimate, anchored at
+        ``ln Z(0) = N · ln 2`` for both binary and spin encodings (each
+        of the ``N`` variables has two states under the uniform prior).
+    free_energy:
+        ``F(β_end) = -ln Z(β_end) / β_end`` (absolute, includes the
+        ``N · ln 2`` reference).
+    free_energy_density:
+        ``F(β_end) / N``.
+    genealogy:
+        Present when ``record_genealogy=True``. A dict with keys
+        ``parents`` (list of ``(R,)`` long tensors, one per resampling
+        step, holding the *index into the previous population* each
+        replica was copied from) and ``ancestors`` (list of ``(R,)`` long
+        tensors, the **root** ancestor index in the initial population
+        for each replica, propagated through every resampling step). Use
+        ``ancestors[-1]`` to draw a "family tree" or count the number of
+        surviving founders.
     """
 
     best_sol: torch.Tensor
@@ -79,6 +113,12 @@ class PAResult:
     runtime: float
     history: dict = field(default_factory=dict)
     score: dict = field(default_factory=dict)
+    final_x: torch.Tensor | None = None
+    final_loss: torch.Tensor | None = None
+    log_z: float | None = None
+    free_energy: float | None = None
+    free_energy_density: float | None = None
+    genealogy: dict | None = None
 
 
 def _systematic_resample_indices(weights: torch.Tensor, rng: torch.Generator) -> torch.Tensor:
@@ -130,6 +170,7 @@ def population_annealing(
     initial_state: torch.Tensor | None = None,
     history_stride: int = 1,
     record_history: bool = True,
+    record_genealogy: bool = False,
     verbose: bool = True,
     check_interval: int = 10,
     callback: Callable[[int, float, float, float], None] | None = None,
@@ -165,10 +206,24 @@ def population_annealing(
     check_interval, callback:
         Same semantics as :func:`qqa.simulated_annealing`. ``callback`` is
         ``(step_idx, mean_loss, best_obj, ess) -> None``.
+    record_genealogy:
+        If ``True``, store per-step parent indices and the running
+        root-ancestor map on the result, so callers can reconstruct the
+        family tree of the population. Costs ``O(R · num_temps)`` integer
+        memory; off by default.
 
     Returns
     -------
     PAResult
+        With the equilibrium population (``final_x`` / ``final_loss``)
+        and a free-energy estimate (``log_z`` / ``free_energy`` /
+        ``free_energy_density``) populated. The free-energy estimator is
+        Hukushima–Iba's
+        ``Σ_t  ln (1/R) Σ_r exp(-Δβ_t · E_r^{(t)})``, where ``E_r^{(t)}``
+        is the energy of replica ``r`` *just before* the resampling at
+        step ``t``. Resampling cancels in expectation because we average
+        the unnormalised weights — this is the property the textbooks
+        flag as "PA gives free energies for free".
     """
     if sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
@@ -225,26 +280,57 @@ def population_annealing(
         "best_obj": [],
         "beta": [],
         "ess": [],
+        # Free-energy diagnostics. ``log_z_ratio[t] = ln Z(β_t) - ln Z(β_{t-1})``
+        # for t >= 1, and the implicit ``β = 0 → β_start`` jump at t = 0
+        # (so ``log_z[t] = ln Z(β_t) - ln Z(0)`` is comparable across runs).
+        "log_z_ratio": [],
+        "log_z": [],
+        "free_energy_density": [],
     }
+    # Free-energy reference: at β = 0 every configuration is equally likely,
+    # so ``Z(0) = 2^N`` and ``ln Z(0) = N · ln 2`` for both binary {0,1}
+    # and spin {-1,+1} encodings (each variable has two states).
+    log_z_zero = float(num_vars) * math.log(2.0)
+
+    # Genealogy buffers — only allocated when the caller asks for them so
+    # the default-path memory footprint stays at O(R · N) floats.
+    parents_log: list[torch.Tensor] = []
+    ancestors: torch.Tensor | None = None
+    if record_genealogy:
+        ancestors = torch.arange(sol_size, device=device, dtype=torch.long)
 
     with torch.no_grad():
         loss_curr = problem.loss_fn(x)
     min_val, min_idx = torch.min(loss_curr, dim=0)
     best_obj = float(min_val.item())
     best_sol = x[int(min_idx.item())].detach().clone()
+    log_z_running = 0.0  # accumulator for ln Z(β_t) - ln Z(0)
 
     runtime_start = time()
-    prev_beta = float(betas[0].item())
+    prev_beta = 0.0  # virtual β=0 reference, so step 0 carries the β=0 → β_start jump
     for step in range(num_temps):
         beta = float(betas[step].item())
-        delta_beta = beta - prev_beta  # 0.0 on the first step → no reweighting
+        delta_beta = beta - prev_beta
 
+        # ----- Reweighting + free-energy update + resampling --------------
+        # We always compute the log-weights (even at step 0, where Δβ
+        # is the full jump from β=0 to β_start) because Hukushima–Iba's
+        # free-energy estimator needs the average unnormalised weight at
+        # *every* annealing step — not only the ones that resample.
         if delta_beta > 0.0:
-            # Numerically-stable Boltzmann reweighting:
-            # log w_r = -Δβ · (E_r - min E),  w_r = exp(log w_r)
             with torch.no_grad():
-                log_w = -delta_beta * (loss_curr - loss_curr.min())
-                weights = torch.exp(log_w)
+                # Numerically-stable: factor out the min so that the largest
+                # log-weight is 0 and exp() never under/over-flows. The
+                # additive constant is reintroduced on the log-Z side.
+                e_min = float(loss_curr.min().item())
+                log_w_shift = -delta_beta * (loss_curr - e_min)
+                weights = torch.exp(log_w_shift)
+                # ln(1/R Σ w_r) = logsumexp(log_w_shift) - ln R - Δβ · e_min.
+                log_z_step = (
+                    float(torch.logsumexp(log_w_shift, dim=0).item())
+                    - math.log(float(sol_size))
+                    - delta_beta * e_min
+                )
                 ess = _effective_sample_size(weights)
                 if resample == "systematic":
                     idx = _systematic_resample_indices(weights, rng)
@@ -252,9 +338,16 @@ def population_annealing(
                     idx = _multinomial_resample_indices(weights, rng)
                 x = x[idx].contiguous()
                 loss_curr = loss_curr[idx].contiguous()
+                if record_genealogy:
+                    parents_log.append(idx.detach().clone())
+                    ancestors = ancestors[idx].contiguous()
         else:
+            log_z_step = 0.0
             ess = float(sol_size)
 
+        log_z_running += log_z_step
+
+        # ----- Equilibration sweeps at the new temperature ----------------
         with torch.no_grad():
             for _ in range(sweeps_per_temp):
                 if use_qubo_fast:
@@ -270,12 +363,18 @@ def population_annealing(
                     best_obj = float(min_val.item())
                     best_sol = x[int(min_idx.item())].detach().clone()
 
+        # F(β_t) = -ln Z(β_t) / β_t. ln Z(β_t) = ln Z(0) + log_z_running.
+        free_energy_density = -(log_z_zero + log_z_running) / (beta * float(num_vars))
+
         if record_history and (step % history_stride == 0 or step == num_temps - 1):
             history["loss_mean"].append(float(loss_curr.mean().item()))
             history["loss_min"].append(float(loss_curr.min().item()))
             history["best_obj"].append(best_obj)
             history["beta"].append(beta)
             history["ess"].append(float(ess))
+            history["log_z_ratio"].append(float(log_z_step))
+            history["log_z"].append(float(log_z_zero + log_z_running))
+            history["free_energy_density"].append(float(free_energy_density))
 
         if callback is not None and (step % history_stride == 0 or step == num_temps - 1):
             callback(step, float(loss_curr.mean().item()), best_obj, float(ess))
@@ -284,21 +383,46 @@ def population_annealing(
             print(
                 f"[PA] step {step:>5d}/{num_temps}  beta={beta:.4f}  "
                 f"mean_loss={float(loss_curr.mean().item()):.4f}  "
-                f"best={best_obj:.4f}  ess={ess:.1f}/{sol_size}"
+                f"best={best_obj:.4f}  ess={ess:.1f}/{sol_size}  "
+                f"f={free_energy_density:.4f}"
             )
 
         prev_beta = beta
 
     runtime = time() - runtime_start
     if verbose:
-        print(f"[PA] done. best={best_obj:.6f}  runtime={runtime:.2f}s")
+        print(
+            f"[PA] done. best={best_obj:.6f}  "
+            f"f(β_end)={-(log_z_zero + log_z_running) / (float(betas[-1].item()) * float(num_vars)):.6f}  "
+            f"runtime={runtime:.2f}s"
+        )
 
     best_sol_disc = best_sol.detach()
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
+
+    beta_final = float(betas[-1].item())
+    log_z_total = log_z_zero + log_z_running
+    free_energy = -log_z_total / beta_final
+    f_density = free_energy / float(num_vars)
+
+    genealogy: dict | None = None
+    if record_genealogy:
+        genealogy = {
+            "parents": parents_log,
+            "ancestors": ancestors.detach().clone() if ancestors is not None else None,
+            "betas": [float(b.item()) for b in betas],
+        }
+
     return PAResult(
         best_sol=best_sol_disc,
         best_obj=best_obj,
         runtime=runtime,
         history=history,
         score=score,
+        final_x=x.detach().clone(),
+        final_loss=loss_curr.detach().clone(),
+        log_z=float(log_z_total),
+        free_energy=float(free_energy),
+        free_energy_density=float(f_density),
+        genealogy=genealogy,
     )

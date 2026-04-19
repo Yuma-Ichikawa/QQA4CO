@@ -1,4 +1,15 @@
-"""Solve page — run QQA with live progress, metrics, and a parallel-search view."""
+"""Solve page — run PQQA or Population Annealing with live progress.
+
+Two backends are exposed via a sidebar radio:
+
+* **PQQA** (default) — Parallel Quasi-Quantum Annealing, the gradient-based
+  CRA-PI-GNN family that ships with the library.
+* **PA** — Hukushima–Iba Population Annealing with resampling, equilibrium
+  sample dump, free-energy estimation, and genealogy recording. The
+  recorded genealogy + ``final_x`` populate the new "PA: …" tabs on the
+  Visualize page so you can inspect resampling collapse and the family
+  tree of the final population.
+"""
 
 from __future__ import annotations
 
@@ -52,6 +63,21 @@ if "problem_config" not in st.session_state:
 cfg = st.session_state["problem_config"]
 render_config_chips(cfg)
 
+with st.sidebar:
+    st.header("2 · Backend")
+    backend = st.radio(
+        "Solver backend",
+        ["PQQA", "PA (Population Annealing)"],
+        index=0,
+        help=(
+            "PQQA = Parallel Quasi-Quantum Annealing (gradient-based, the "
+            "library's headline solver). PA = Hukushima–Iba Population "
+            "Annealing with resampling — also produces equilibrium samples "
+            "and a free-energy estimate."
+        ),
+        key="solve_backend",
+    )
+
 # Hyper-parameter presets — each tuple is
 # (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
 #  div_param, update_every).
@@ -81,7 +107,12 @@ def _apply_preset(name: str) -> None:
 
 
 with st.sidebar:
-    st.header("2 · QQA hyper-parameters")
+    st.header("3 · QQA hyper-parameters")
+    if backend != "PQQA":
+        st.caption(
+            ":material/info: PQQA controls below are inactive — PA "
+            "uses its own knobs further down the sidebar."
+        )
     preset_name = st.radio(
         "Preset",
         list(_PRESETS),
@@ -207,6 +238,74 @@ with st.sidebar:
             key="update_every",
             help="Lower = smoother animation but slower wall-clock; higher = faster.",
         )
+
+    if backend != "PQQA":
+        st.divider()
+        st.header("3′ · PA hyper-parameters")
+        st.caption(
+            "Population Annealing with resampling. PA records its full "
+            "genealogy and an equilibrium population at β_end so the "
+            "Visualize page can show a resampling family tree and a "
+            "free-energy density curve."
+        )
+        with st.expander("Population & schedule", expanded=True):
+            pa_sol_size = st.slider(
+                "PA population (sol_size)",
+                4,
+                512,
+                st.session_state.get("pa_sol_size", 128),
+                key="pa_sol_size",
+                help="Number of replicas carried through resampling.",
+            )
+            pa_num_temps = st.slider(
+                "num_temps",
+                10,
+                500,
+                st.session_state.get("pa_num_temps", 100),
+                step=10,
+                key="pa_num_temps",
+                help="Number of inverse-temperature steps in the schedule.",
+            )
+            pa_sweeps_per_temp = st.slider(
+                "sweeps_per_temp",
+                1,
+                50,
+                st.session_state.get("pa_sweeps_per_temp", 10),
+                key="pa_sweeps_per_temp",
+                help="MCMC sweeps after each resampling step (K in the textbook).",
+            )
+            pa_beta_start = st.slider(
+                "β_start",
+                0.01,
+                2.0,
+                st.session_state.get("pa_beta_start", 0.1),
+                step=0.01,
+                key="pa_beta_start",
+            )
+            pa_beta_end = st.slider(
+                "β_end",
+                0.5,
+                100.0,
+                st.session_state.get("pa_beta_end", 10.0),
+                step=0.5,
+                key="pa_beta_end",
+            )
+            pa_beta_schedule = st.selectbox(
+                "β schedule",
+                ["geometric", "linear"],
+                index=0,
+                key="pa_beta_schedule",
+            )
+            pa_resample = st.selectbox(
+                "Resampling rule",
+                ["systematic", "multinomial"],
+                index=0,
+                key="pa_resample",
+                help=(
+                    "Systematic = low-variance (Doucet & Johansen, "
+                    "2008). Multinomial = standard SMC baseline."
+                ),
+            )
 
 
 class StreamlitCallback(Callback):
@@ -447,20 +546,34 @@ class StreamlitCallback(Callback):
 
 # Compact "active hyper-params" chip row, so the user can see what is
 # about to run without scrolling the sidebar.
-render_config_chips(
-    cfg,
-    extras={
-        "sol_size": sol_size,
-        "epochs": epochs,
-        "lr": f"{learning_rate:.2g}",
-        "T": f"{temp:.2g}",
-        "polish": "on" if polish else "off",
-        "warm-start": "on" if warm_start else "off",
-    },
-)
+if backend == "PQQA":
+    render_config_chips(
+        cfg,
+        extras={
+            "sol_size": sol_size,
+            "epochs": epochs,
+            "lr": f"{learning_rate:.2g}",
+            "T": f"{temp:.2g}",
+            "polish": "on" if polish else "off",
+            "warm-start": "on" if warm_start else "off",
+        },
+    )
+else:
+    render_config_chips(
+        cfg,
+        extras={
+            "backend": "PA",
+            "R": pa_sol_size,
+            "T": pa_num_temps,
+            "K": pa_sweeps_per_temp,
+            "β": f"{pa_beta_start:.2g}→{pa_beta_end:.2g}",
+            "resample": pa_resample,
+        },
+    )
 
-run = st.button("▶  Run QQA", type="primary", width="stretch")
-if run:
+run_label = "▶  Run QQA" if backend == "PQQA" else "▶  Run Population Annealing"
+run = st.button(run_label, type="primary", width="stretch")
+if run and backend == "PQQA":
     try:
         problem = build_problem(cfg)
     except Exception as e:
@@ -577,6 +690,169 @@ if run:
     render_solution_view(problem, result, cfg)
 
     st.info("Open **Visualize** for deeper inspection of this run (history, PCA, ridgeline).")
+
+
+# =============================================================================
+# Population Annealing (PA) backend
+# =============================================================================
+if run and backend != "PQQA":
+    try:
+        problem = build_problem(cfg)
+    except Exception as e:
+        st.error(f"Could not build problem: {e}")
+        st.stop()
+
+    progress = st.progress(0.0)
+    metrics = st.empty()
+    score_holder = st.empty()
+    chart = st.empty()
+    free_energy_holder = st.empty()
+
+    pa_loss_mean: list[float] = []
+    pa_best: list[float] = []
+    pa_ess: list[float] = []
+    pa_steps: list[int] = []
+
+    pa_total_steps = int(pa_num_temps)
+    pa_update_every = max(1, pa_total_steps // 50)
+    pa_t0 = time.time()
+
+    def _pa_callback(step: int, mean_loss: float, best_obj: float, ess: float) -> None:
+        pa_steps.append(step)
+        pa_loss_mean.append(float(mean_loss))
+        pa_best.append(float(best_obj))
+        pa_ess.append(float(ess))
+        if step % pa_update_every != 0 and step != pa_total_steps - 1:
+            return
+        progress.progress(min(1.0, (step + 1) / pa_total_steps))
+        elapsed = time.time() - pa_t0
+        with metrics.container():
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("step", f"{step + 1} / {pa_total_steps}")
+            r2.metric("best", f"{best_obj:.4g}")
+            r3.metric("mean", f"{mean_loss:.4g}")
+            r4.metric("ESS", f"{ess:.1f} / {int(pa_sol_size)}")
+            r5, r6, r7, r8 = st.columns(4)
+            r5.metric("elapsed", f"{elapsed:.1f}s")
+            r6.metric("R", f"{int(pa_sol_size)}")
+            r7.metric("K", f"{int(pa_sweeps_per_temp)}")
+            r8.metric("backend", "PA")
+        # Live convergence plot
+        p = palette()
+        fig = go.Figure()
+        fig.add_trace(
+            go.Scatter(
+                x=pa_steps,
+                y=pa_loss_mean,
+                mode="lines",
+                name="mean / replica",
+                line={"color": p["palette"][0], "width": 2},
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=pa_steps,
+                y=pa_best,
+                mode="lines",
+                name="best so far",
+                line={"color": p["palette"][1], "width": 2.4},
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=pa_steps,
+                y=pa_ess,
+                mode="lines",
+                yaxis="y2",
+                name="ESS",
+                line={"color": p["palette"][2], "width": 1.5, "dash": "dot"},
+            )
+        )
+        fig.update_layout(
+            **plotly_layout(
+                height=360,
+                title={"text": "PA dynamics (loss + ESS)"},
+                xaxis_title="Temperature step",
+                yaxis_title="Loss",
+                yaxis2={"overlaying": "y", "side": "right", "title": "ESS"},
+                legend={"x": 0.01, "y": 0.99},
+            )
+        )
+        chart.plotly_chart(fig, width="stretch", theme=None, config={"displayModeBar": False})
+
+    try:
+        pa_result = qqa.population_annealing(
+            problem,
+            sol_size=int(pa_sol_size),
+            num_temps=int(pa_num_temps),
+            sweeps_per_temp=int(pa_sweeps_per_temp),
+            beta_schedule=pa_beta_schedule,
+            beta_start=float(pa_beta_start),
+            beta_end=float(pa_beta_end),
+            resample=pa_resample,
+            device=cfg["device"],
+            record_genealogy=True,
+            verbose=False,
+            callback=_pa_callback,
+        )
+    except Exception as e:
+        st.error(f"PA run failed: {e}")
+        st.stop()
+
+    progress.empty()
+    raw = float(pa_result.best_obj)
+    with score_holder.container():
+        render_score_card(pa_result.score, raw_loss=raw)
+
+    # Free-energy density curve
+    if pa_result.history.get("beta") and pa_result.history.get("free_energy_density"):
+        p = palette()
+        fig_f = go.Figure()
+        fig_f.add_trace(
+            go.Scatter(
+                x=pa_result.history["beta"],
+                y=pa_result.history["free_energy_density"],
+                mode="lines+markers",
+                line={"color": p["palette"][3 % len(p["palette"])], "width": 2.4},
+                name="F(β)/N",
+            )
+        )
+        fig_f.update_layout(
+            **plotly_layout(
+                height=320,
+                title={"text": "Free-energy density estimate (Hukushima–Iba)"},
+                xaxis_title="β (inverse temperature)",
+                yaxis_title="F(β) / N",
+                xaxis={"type": "log"} if pa_beta_schedule == "geometric" else None,
+            )
+        )
+        free_energy_holder.plotly_chart(
+            fig_f, width="stretch", theme=None, config={"displayModeBar": False}
+        )
+        st.caption(
+            f"PA estimate at β={float(pa_beta_end):.3g}: "
+            f"**F/N = {pa_result.free_energy_density:.4f}**, "
+            f"ln Z = {pa_result.log_z:.3f}. The estimator uses the "
+            "average unnormalised reweighting factor at every annealing "
+            "step, so the resampling correction is implicit."
+        )
+
+    st.session_state["last_result"] = pa_result
+    st.session_state["last_problem"] = problem
+    st.session_state["last_pop_tracker"] = None  # PA stores its own population
+    st.session_state["last_pa_result"] = pa_result
+
+    st.markdown("### Solution")
+    st.caption(
+        "Problem-aware view of the best configuration PA found. The "
+        "**Visualize** page shows the full equilibrium population, ESS "
+        "history, free-energy curve, and a resampling family tree."
+    )
+    render_solution_view(problem, pa_result, cfg)
+    st.info(
+        "Open **Visualize** to see the equilibrium population, ESS over β, "
+        "the free-energy density curve, and the resampling family tree."
+    )
 
 
 paper_link_footer()
