@@ -287,6 +287,184 @@ class SherringtonKirkpatrick(SpinProblem):
 
 
 # ---------------------------------------------------------------------------
+# p-spin Sherrington-Kirkpatrick (dense, multi-body interactions)
+# ---------------------------------------------------------------------------
+
+
+class PSpinGlass(SpinProblem):
+    """Dense ``p``-spin Sherrington-Kirkpatrick model.
+
+    Energy:
+
+    .. math::
+
+        E = -\\sum_{i_1 < i_2 < \\dots < i_p} J_{i_1 i_2 \\dots i_p}
+            s_{i_1} s_{i_2} \\dots s_{i_p}
+
+    with i.i.d. Gaussian couplings drawn from
+    ``J \\sim \\mathcal{N}(0,\\, p!/(2 N^{p-1}))`` so that the typical
+    ground-state energy density is intensive (`Crisanti & Sommers, 1992
+    <https://doi.org/10.1051/jphys:0199200530100128300>`_).
+
+    For ``p = 2`` this reduces to the classical Sherrington-Kirkpatrick
+    model (use :class:`SherringtonKirkpatrick` for the symmetric ``J``
+    matrix form). For ``p \\ge 3`` the model exhibits a discontinuous
+    1RSB freezing transition and is a canonical hard benchmark for
+    annealing solvers — small instances already form rugged landscapes
+    with exponentially many metastable states.
+
+    Args:
+        N: Number of spins.
+        p: Interaction order (``p \\ge 2``). Defaults to ``3``.
+        seed: RNG seed for the couplings.
+    """
+
+    def __init__(
+        self,
+        N: int,
+        p: int = 3,
+        seed: int = 0,
+        device: str | torch.device = "cpu",
+    ):
+        super().__init__()
+        if int(p) < 2:
+            raise ValueError(f"p must be >= 2; got {p}")
+        if int(p) > int(N):
+            raise ValueError(f"need p <= N (got p={p}, N={N})")
+        self.num_spins = int(N)
+        self.p = int(p)
+        self.seed = int(seed)
+        self.device = device
+
+        # Crisanti–Sommers normalisation: Var[J] = p! / (2 N^{p-1}).
+        from math import factorial
+
+        scale = (factorial(self.p) / (2.0 * (N ** (self.p - 1)))) ** 0.5
+        rng = np.random.default_rng(seed)
+
+        # Enumerate the C(N, p) sorted index tuples and their couplings
+        # in float32. ``itertools.combinations`` keeps memory tight for
+        # the N <= ~32, p <= 4 instances the dashboard exercises.
+        from itertools import combinations
+
+        idx = np.fromiter(
+            (i for combo in combinations(range(N), self.p) for i in combo),
+            dtype=np.int64,
+        ).reshape(-1, self.p)
+        if idx.size == 0:
+            # p == N edge case — single coupling on the all-spin product.
+            idx = np.arange(N, dtype=np.int64).reshape(1, N)
+        couplings = rng.normal(0.0, scale, size=idx.shape[0]).astype(np.float32)
+
+        self.indices = torch.from_numpy(idx).to(device)
+        self.couplings = torch.from_numpy(couplings).to(device)
+        # Quadratic helpers are not used; loss_fn is overridden below.
+        self.J = None
+        self.h = None
+        self.relaxation = SpinRelaxation()
+
+    def loss_fn(self, s: torch.Tensor) -> torch.Tensor:
+        # ``s`` shape: (B, N). Gather the p indices for every coupling
+        # → (M, p), index into spins → (B, M, p), product across the
+        # last axis → (B, M), then weight by couplings and sum.
+        s = s if s.ndim == 2 else s.unsqueeze(0)
+        spins = s[:, self.indices]  # (B, M, p)
+        prods = spins.prod(dim=-1)  # (B, M)
+        return -(prods * self.couplings).sum(dim=-1)
+
+    def score_summary(self, s_disc: torch.Tensor) -> dict:
+        s = s_disc if s_disc.ndim == 2 else s_disc.unsqueeze(0)
+        with torch.no_grad():
+            e = self.loss_fn(s.float())
+        idx = int(torch.argmin(e).item())
+        e_best = float(e[idx].item())
+        return {
+            "label": "energy / spin",
+            "value": e_best / self.num_spins,
+            "unit": "",
+            "feasible": True,
+            "extra": {
+                "total_energy": e_best,
+                "N": self.num_spins,
+                "p": self.p,
+                "num_couplings": int(self.indices.shape[0]),
+            },
+        }
+
+
+# ---------------------------------------------------------------------------
+# Random Field Ising Model (RFIM) on a hyper-cubic lattice
+# ---------------------------------------------------------------------------
+
+
+class RandomFieldIsing(SpinProblem):
+    """Random-Field Ising Model on a hyper-cubic lattice.
+
+    Energy:
+
+    .. math::
+
+        E = -J \\sum_{\\langle i, j \\rangle} s_i s_j - \\sum_i h_i s_i,
+        \\qquad h_i \\sim \\mathcal{N}(0,\\, \\sigma_h^2)
+
+    The couplings are uniform ferromagnetic (``J > 0``) and the disorder
+    sits in the local fields. This is one of the cleanest models with
+    quenched randomness in equilibrium statistical physics: in 3D with
+    Gaussian fields it has a well-studied finite-temperature phase
+    transition, and the zero-temperature ground-state problem at finite
+    ``\\sigma_h / J`` is a classical optimisation benchmark (max-flow
+    polynomial-time exact solvers exist — useful as a sanity check for
+    annealing solvers).
+
+    Args:
+        L: Lattice side length (``N = L ** dim`` spins).
+        dim: Spatial dimension (default ``2``).
+        J: Uniform ferromagnetic coupling.
+        h_std: Standard deviation of the Gaussian random field.
+        seed: RNG seed for the fields.
+        periodic: Periodic boundary conditions.
+    """
+
+    def __init__(
+        self,
+        L: int,
+        dim: int = 2,
+        J: float = 1.0,
+        h_std: float = 1.0,
+        seed: int = 0,
+        periodic: bool = True,
+        device: str | torch.device = "cpu",
+    ):
+        super().__init__()
+        if int(dim) < 1:
+            raise ValueError(f"dim must be >= 1; got {dim}")
+        if float(h_std) < 0:
+            raise ValueError(f"h_std must be >= 0; got {h_std}")
+        self.L = int(L)
+        self.dim = int(dim)
+        self.J_value = float(J)
+        self.h_std = float(h_std)
+        self.seed = int(seed)
+        self.periodic = bool(periodic)
+        self.device = device
+
+        N = self.L**self.dim
+        self.num_spins = N
+        shape = (self.L,) * self.dim
+
+        J_mat = torch.zeros((N, N))
+        for i, j in _lattice_neighbors(shape, self.periodic):
+            J_mat[i, j] = float(J)
+            J_mat[j, i] = float(J)
+        self.J = J_mat.to(device)
+
+        rng = np.random.default_rng(seed)
+        h_vec = rng.normal(0.0, self.h_std, size=N).astype(np.float32)
+        self.h = torch.from_numpy(h_vec).to(device)
+        self.relaxation = SpinRelaxation()
+
+
+# ---------------------------------------------------------------------------
 # Binary (discrete) perceptron — teacher/student learning problem
 # ---------------------------------------------------------------------------
 

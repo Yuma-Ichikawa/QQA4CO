@@ -61,6 +61,9 @@ def build_parser() -> argparse.ArgumentParser:
             # Phase-B catalog growth (v0.5+).
             "bgp",
             "min_dominating_set",
+            # Physics catalog growth (v0.5+).
+            "pspin",
+            "rfim",
         ],
         help="Problem family. Mutually exclusive with --problem-file.",
     )
@@ -78,7 +81,25 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument(
         "--size", type=int, default=50, help="Problem size (for synthetic problems)."
     )
-    solve.add_argument("--dim", type=int, default=3, help="Lattice dimension (EA).")
+    solve.add_argument("--dim", type=int, default=3, help="Lattice dimension (EA / RFIM).")
+    solve.add_argument(
+        "--p-order",
+        type=int,
+        default=3,
+        help="Interaction order p for the dense p-spin glass (>= 2; default 3).",
+    )
+    solve.add_argument(
+        "--h-std",
+        type=float,
+        default=1.0,
+        help="Random-field standard deviation σ_h for RFIM.",
+    )
+    solve.add_argument(
+        "--coupling-J",
+        type=float,
+        default=1.0,
+        help="Uniform ferromagnetic coupling J for RFIM.",
+    )
     solve.add_argument(
         "--alpha", type=float, default=0.5, help="Loading ratio (perceptron/Hopfield)."
     )
@@ -311,6 +332,17 @@ def _build_problem(args: argparse.Namespace):
         return qqa.EdwardsAnderson(L=args.size, dim=args.dim, seed=args.seed, device=device)
     if kind == "sk":
         return qqa.SherringtonKirkpatrick(N=args.size, seed=args.seed, device=device)
+    if kind == "pspin":
+        return qqa.PSpinGlass(N=args.size, p=args.p_order, seed=args.seed, device=device)
+    if kind == "rfim":
+        return qqa.RandomFieldIsing(
+            L=args.size,
+            dim=args.dim,
+            J=args.coupling_J,
+            h_std=args.h_std,
+            seed=args.seed,
+            device=device,
+        )
     if kind == "perceptron":
         return qqa.BinaryPerceptron(N=args.size, alpha=args.alpha, seed=args.seed, device=device)
     if kind == "hopfield":

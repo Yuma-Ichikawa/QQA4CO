@@ -541,3 +541,63 @@ def test_min_dominating_set_loss_matches_discrete_definition():
     x[0, 3] = 1.0
     val = float(prob.loss_fn(x).item())
     assert val == pytest.approx(2.0, abs=1e-4)
+
+
+# ---------------------------------------------------------------------------
+# PSpinGlass / RandomFieldIsing — focused physics-correctness checks
+# ---------------------------------------------------------------------------
+
+
+def test_pspin_p2_matches_dense_gaussian_form():
+    """For p = 2 the energy is a homogeneous degree-2 form in s. The total
+    number of couplings must equal C(N, 2) and the loss must be invariant
+    under a global spin flip s → -s (parity)."""
+    qqa.fix_seed(0)
+    prob = qqa.PSpinGlass(N=8, p=2, seed=0)
+    assert int(prob.indices.shape[0]) == 28  # C(8, 2)
+    s = torch.tensor([[1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0]])
+    e_pos = float(prob.loss_fn(s).item())
+    e_neg = float(prob.loss_fn(-s).item())
+    assert e_pos == pytest.approx(e_neg, abs=1e-5), "p=2 must be parity-symmetric"
+
+
+def test_pspin_p3_breaks_parity():
+    """For odd p the energy flips sign under s → -s. This is the canonical
+    distinguishing feature of p-spin models with odd interaction order."""
+    prob = qqa.PSpinGlass(N=8, p=3, seed=1)
+    s = torch.randn(1, 8).sign()
+    e_pos = float(prob.loss_fn(s).item())
+    e_neg = float(prob.loss_fn(-s).item())
+    assert e_pos == pytest.approx(-e_neg, abs=1e-5), "p=3 must flip sign under s→-s"
+
+
+def test_pspin_anneals_and_is_finite():
+    prob = qqa.PSpinGlass(N=10, p=3, seed=0)
+    res = qqa.anneal(prob, sol_size=32, num_epochs=120, verbose=False)
+    assert torch.isfinite(torch.as_tensor(res.best_obj)).all()
+    score = res.score
+    assert score["feasible"] is True
+    assert "p" in score["extra"] and score["extra"]["p"] == 3
+
+
+def test_rfim_strong_field_aligns_with_field():
+    """In the limit σ_h ≫ J the ground state is s_i = sign(h_i): each spin
+    independently aligns with its local field. Run a tiny anneal at large
+    h_std and check the resulting overlap is large and positive."""
+    qqa.fix_seed(0)
+    prob = qqa.RandomFieldIsing(L=4, dim=2, J=0.05, h_std=5.0, seed=0)
+    res = qqa.anneal(prob, sol_size=64, num_epochs=300, verbose=False)
+    s = res.best_sol.float().reshape(-1)
+    h = prob.h.cpu().float()
+    overlap = float((s * torch.sign(h)).mean().item())
+    assert overlap > 0.7, f"strong-field RFIM should align with h: overlap={overlap}"
+
+
+def test_rfim_lattice_sizes_and_field_shape():
+    prob = qqa.RandomFieldIsing(L=3, dim=2, J=1.0, h_std=1.0, seed=0)
+    assert prob.num_spins == 9
+    assert prob.J.shape == (9, 9)
+    assert prob.h.shape == (9,)
+    # Symmetric ferromagnetic J with diag = 0.
+    assert torch.allclose(prob.J, prob.J.t())
+    assert float(prob.J.diag().abs().max().item()) == 0.0

@@ -119,3 +119,49 @@ def test_cli_solve_no_polish_flag_accepted():
     )
     assert out.returncode == 0, out.stderr
     assert "best_obj" in out.stdout
+
+
+def test_cli_solve_pspin_glass():
+    """Physics catalog: --problem pspin --p-order routes to PSpinGlass."""
+    out = _run(
+        "solve",
+        "--problem",
+        "pspin",
+        "--size",
+        "10",
+        "--p-order",
+        "3",
+        "--sol-size",
+        "16",
+        "--epochs",
+        "60",
+        "--quiet",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "best_obj" in out.stdout
+    assert "energy / spin" in out.stdout
+
+
+def test_cli_solve_random_field_ising():
+    """Physics catalog: --problem rfim --h-std --coupling-J routes to RFIM."""
+    out = _run(
+        "solve",
+        "--problem",
+        "rfim",
+        "--size",
+        "4",
+        "--dim",
+        "2",
+        "--h-std",
+        "1.0",
+        "--coupling-J",
+        "1.0",
+        "--sol-size",
+        "16",
+        "--epochs",
+        "60",
+        "--quiet",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "best_obj" in out.stdout
+    assert "energy / spin" in out.stdout

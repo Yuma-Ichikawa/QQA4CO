@@ -41,6 +41,8 @@ from qqa.problems.spin import (
     EdwardsAnderson,
     HopfieldMemory,
     Ising1D,
+    PSpinGlass,
+    RandomFieldIsing,
     SherringtonKirkpatrick,
     SpinProblem,
 )
@@ -65,6 +67,8 @@ __all__ = [
     "Ising1D",
     "EdwardsAnderson",
     "SherringtonKirkpatrick",
+    "PSpinGlass",
+    "RandomFieldIsing",
     "BinaryPerceptron",
     "HopfieldMemory",
     "Knapsack",
