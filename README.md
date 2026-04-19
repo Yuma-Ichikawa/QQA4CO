@@ -5,7 +5,7 @@ Annealing (PQQA)** — a gradient-based, GPU-friendly framework for
 combinatorial optimisation (CO) that unifies several recent
 unsupervised-learning solvers under a single API. One installation gives you
 the PQQA solver, an optional GNN backend that plugs in CRA-PI-GNN-style
-methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
+methods, a 20+ class problem catalogue, a Streamlit dashboard and a CLI.
 
 <p align="center">
   <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/v/qqa.svg?logo=pypi&logoColor=white&label=PyPI" alt="PyPI version"></a>
@@ -19,37 +19,32 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
 </p>
 
 <p align="center">
-  <a href="https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/00_colab_quickstart.ipynb">
-    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open Quickstart in Colab">
-  </a>
-  <a href="https://parallelquasiquantum4co.streamlit.app/">
-    <img src="https://static.streamlit.io/badges/streamlit_badge_black_white.svg" alt="Open in Streamlit">
-  </a>
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/demo.gif" width="640" alt="QQA dashboard demo">
-</p>
-
----
-
-<h2 align="center">🌐 Try the Web dashboard — no install required</h2>
-
-<p align="center">
   <a href="https://parallelquasiquantum4co.streamlit.app/">
     <img src="https://static.streamlit.io/badges/streamlit_badge_black_white.svg" alt="Open in Streamlit Community Cloud" height="40">
   </a>
+  &nbsp;
+  <a href="https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/00_colab_quickstart.ipynb">
+    <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open Quickstart in Colab" height="40">
+  </a>
 </p>
+
+<h2 align="center">🌐 Try the Web dashboard — zero install, runs in your browser</h2>
 
 <p align="center">
   <b><a href="https://parallelquasiquantum4co.streamlit.app/">→ parallelquasiquantum4co.streamlit.app</a></b>
-  &nbsp;·&nbsp; one-click hosted instance &nbsp;·&nbsp; CPU back-end &nbsp;·&nbsp; light / dark mode
+  &nbsp;·&nbsp; hosted on Streamlit Community Cloud &nbsp;·&nbsp; CPU back-end &nbsp;·&nbsp; light / dark mode
+</p>
+
+<p align="center">
+  <a href="https://parallelquasiquantum4co.streamlit.app/">
+    <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/demo.gif" width="720" alt="QQA dashboard demo — click to open the live app">
+  </a>
 </p>
 
 The dashboard is a four-page Streamlit app that drives the same `qqa.anneal`
 solver this README documents — pick a problem, watch the relaxed variables
 discretise live, race PQQA against simulated annealing, and inspect the
-parallel population in 3D PCA / loss-spectrogram views.
+parallel population in 3D solution-space PCA / loss-spectrogram views.
 
 | Page | What you can do |
 | --- | --- |
@@ -58,7 +53,7 @@ parallel population in 3D PCA / loss-spectrogram views.
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA shootout** that reports the wall-clock speed-up at matched compute budget. |
 
-### Run the dashboard locally
+### Or run it locally — same UI, your hardware
 
 ```bash
 pip install "qqa[gui]"        # pulls Streamlit + Plotly
@@ -72,8 +67,7 @@ uv sync --extra gui
 uv run qqa gui
 ```
 
-That's it — the same Web UI, your hardware, your problems. CUDA is picked
-up automatically when available.
+CUDA is picked up automatically when available.
 
 ---
 
@@ -83,13 +77,15 @@ up automatically when available.
    that lifts any QUBO / Ising / categorical / permutation problem into a
    continuous relaxation and minimises it with gradient descent + diversity
    regularisation. CPU / CUDA / MPS, deterministic with `qqa.fix_seed`.
-2. **A 17-class problem catalogue** spanning QUBO graphs (MIS, Max-Cut,
-   MaxClique, Vertex Cover, Graph Bisection), classic CO (Knapsack,
-   NumberPartitioning, MaxSAT3), permutation problems (TSP, QAP, NQueens),
-   colouring, spin glasses (1D Ising, Edwards-Anderson 2D/3D, SK) and
-   statistical-physics models (BinaryPerceptron, HopfieldMemory). Every class
-   implements the same `loss_fn` / `score_summary` contract, so the solver,
-   CLI and dashboard are completely problem-agnostic.
+2. **A 20+ class problem catalogue** spanning QUBO graphs (MIS, Max-Cut,
+   MaxClique, Vertex Cover, Graph Bisection, Minimum Dominating Set),
+   classic CO (Knapsack, NumberPartitioning, MaxSAT3), permutation problems
+   (TSP, QAP, NQueens), categorical/assignment (graph Coloring, Balanced
+   K-way Partition), spin glasses (1D Ising, Edwards-Anderson 2D/3D, SK,
+   p-spin, Random-Field Ising) and statistical-physics models
+   (BinaryPerceptron, HopfieldMemory). Every class implements the same
+   `loss_fn` / `score_summary` contract, so the solver, CLI and dashboard
+   are completely problem-agnostic.
 3. **An optional GNN backend** (`qqa.pignn`, install with `qqa[pignn]`) that
    plugs **GNN-based unsupervised-learning CO solvers** into the same API.
    PQQA, the **CRA-PI-GNN** baseline (NeurIPS 2024) and the **CPRA**
