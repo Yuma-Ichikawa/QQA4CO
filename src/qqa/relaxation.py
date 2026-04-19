@@ -38,6 +38,19 @@ class Relaxation(Protocol):
     def num_variables(self, problem) -> int: ...
 
 
+def _default_penalty_from_forward(relax, x, x_fwd, curve_rate):  # noqa: ARG001 - x_fwd unused in default
+    """Default fallback: ignore the cached forward and recompute via ``penalty``.
+
+    Relaxations whose ``penalty`` does not internally re-run ``forward`` (e.g.
+    :class:`BinaryRelaxation`, :class:`SpinRelaxation`) get the same numerical
+    behaviour. Relaxations that *do* re-run ``forward`` (notably
+    :class:`CategoricalRelaxation`) should override ``penalty_from_forward``
+    so the annealing loop can reuse the cached normalised tensor and skip the
+    second forward pass.
+    """
+    return relax.penalty(x, curve_rate)
+
+
 class BinaryRelaxation:
     """Relaxation for binary variables x in [0, 1].
 
@@ -114,11 +127,9 @@ class SpinRelaxation(BinaryRelaxation):
         return 2 * x.clamp(0.0, 1.0) - 1
 
     def project(self, x):
-        return torch.where(
-            x >= 0.5,
-            torch.ones_like(x),
-            -torch.ones_like(x),
-        )
+        # Broadcasted scalar ``where`` avoids allocating two ``ones_like``
+        # intermediates per call (which is hot on large batches).
+        return torch.where(x >= 0.5, 1.0, -1.0).to(x.dtype)
 
     def perturb_(self, x, learning_rate, temp):
         with torch.no_grad():
@@ -195,7 +206,20 @@ class CategoricalRelaxation:
 
     def penalty(self, x, curve_rate):
         x_norm = self.forward(x)
-        K = x.shape[2]
+        return self._penalty_from_norm(x_norm, curve_rate)
+
+    def penalty_from_forward(self, x, x_fwd, curve_rate):  # noqa: ARG002 - x unused
+        """Optimised path: reuse the already-normalised tensor from ``forward``.
+
+        Used by :func:`qqa.anneal` to avoid the simplex normalisation
+        re-running every epoch (the legacy ``penalty`` calls ``forward``
+        internally, which doubled the cost on the hot path).
+        """
+        return self._penalty_from_norm(x_fwd, curve_rate)
+
+    @staticmethod
+    def _penalty_from_norm(x_norm, curve_rate):
+        K = x_norm.shape[2]
         if K < 2:
             raise ValueError(
                 f"CategoricalRelaxation.penalty is undefined for K={K}; use num_category >= 2."

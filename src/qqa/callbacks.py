@@ -48,9 +48,32 @@ class Callback:
 
 
 class HistoryRecorder(Callback):
-    """Record loss / penalty / diversity statistics per epoch."""
+    """Record loss / penalty / diversity statistics per epoch.
 
-    def __init__(self) -> None:
+    Performance notes
+    -----------------
+    The recorder is on the hot path of every annealing step. Naively calling
+    ``tensor.item()`` for every metric forces a CUDA ``device->host`` sync at
+    each epoch and dominates the wall-clock when the kernels themselves are
+    cheap (small problems / GPU). To avoid that:
+
+    * Per-epoch scalars are kept as **GPU 0-dim tensors** and appended to a
+      Python list. There is no ``.item()`` call inside :meth:`on_epoch_end`.
+    * :meth:`on_train_end` performs a **single** ``torch.stack(...).cpu()``
+      per metric, which costs one sync regardless of ``num_epochs``.
+    * ``stride`` skips intermediate epochs entirely (the last epoch is always
+      recorded so that final-state observers see a non-empty history).
+
+    The exposed ``self.history`` dict is still a ``dict[str, list[float]]``
+    (or ``list[list[float]]`` for ``best_obj`` of batched-instance problems),
+    so existing code that reads ``recorder.history["loss_mean"][-1]`` is
+    unchanged.
+    """
+
+    def __init__(self, *, stride: int = 1) -> None:
+        if stride < 1:
+            raise ValueError(f"stride must be >= 1, got {stride}.")
+        self.stride = int(stride)
         self.history: dict[str, list] = {
             "loss_mean": [],
             "loss_std": [],
@@ -61,25 +84,80 @@ class HistoryRecorder(Callback):
             "bg": [],
             "best_obj": [],
         }
+        # Per-epoch GPU scalars accumulated until ``on_train_end``.
+        self._loss_mean_buf: list[torch.Tensor] = []
+        self._loss_std_buf: list[torch.Tensor] = []
+        self._loss_min_buf: list[torch.Tensor] = []
+        self._penalty_mean_buf: list[torch.Tensor] = []
+        self._penalty_std_buf: list[torch.Tensor] = []
+        self._diversity_buf: list[torch.Tensor] = []
+        # ``bg`` is a Python float and ``best_obj`` is already host-side
+        # (or a numpy array for batched problems), so they cost nothing to
+        # append directly.
+        self._bg_buf: list[float] = []
+        self._best_obj_buf: list = []
+
+    def _should_record(self, state: CallbackState) -> bool:
+        # Always record the final epoch so post-hoc consumers see the
+        # terminal state regardless of stride.
+        return state.epoch % self.stride == 0 or state.epoch == state.num_epochs - 1
 
     def on_epoch_end(self, state: CallbackState) -> None:
+        if not self._should_record(state):
+            return
         losses = state.losses.detach()
         penalties = state.penalties.detach()
-        self.history["loss_mean"].append(float(losses.mean().item()))
-        self.history["loss_std"].append(float(losses.std().item()) if losses.numel() > 1 else 0.0)
-        self.history["loss_min"].append(float(losses.min().item()))
-        self.history["penalty_mean"].append(float(penalties.mean().item()))
-        self.history["penalty_std"].append(
-            float(penalties.std().item()) if penalties.numel() > 1 else 0.0
-        )
+
+        # Keep all reductions on the device. ``losses.std()`` of a 1-element
+        # tensor returns NaN; mirror the legacy behaviour (0.0) by using a
+        # zero-valued GPU scalar instead of forcing a device sync to branch.
+        self._loss_mean_buf.append(losses.mean())
+        if losses.numel() > 1:
+            self._loss_std_buf.append(losses.std())
+        else:
+            self._loss_std_buf.append(torch.zeros((), device=losses.device, dtype=losses.dtype))
+        self._loss_min_buf.append(losses.min())
+
+        self._penalty_mean_buf.append(penalties.mean())
+        if penalties.numel() > 1:
+            self._penalty_std_buf.append(penalties.std())
+        else:
+            self._penalty_std_buf.append(
+                torch.zeros((), device=penalties.device, dtype=penalties.dtype)
+            )
+
         div = state.diversity
-        self.history["diversity"].append(float(div.item()) if torch.is_tensor(div) else float(div))
-        self.history["bg"].append(state.bg)
+        if torch.is_tensor(div):
+            self._diversity_buf.append(div.detach())
+        else:
+            # Float diversity (e.g. sol_size == 1 path) — wrap as a CPU scalar
+            # so the final ``stack`` works without a device transfer.
+            self._diversity_buf.append(torch.tensor(float(div)))
+
+        self._bg_buf.append(state.bg)
         bo = state.best_obj
         if hasattr(bo, "tolist"):
-            self.history["best_obj"].append(bo.tolist())
+            self._best_obj_buf.append(bo.tolist())
         else:
-            self.history["best_obj"].append(float(bo))
+            self._best_obj_buf.append(float(bo))
+
+    def on_train_end(self, state: CallbackState) -> None:  # noqa: ARG002 - state unused
+        # Bulk device->host transfer: one sync per metric instead of per epoch.
+        def _flush(buf: list[torch.Tensor]) -> list[float]:
+            if not buf:
+                return []
+            # Tensors may live on different devices if a custom callback added
+            # entries; promote to CPU first to keep ``stack`` happy.
+            return [float(t) for t in torch.stack([t.detach().to("cpu") for t in buf]).tolist()]
+
+        self.history["loss_mean"] = _flush(self._loss_mean_buf)
+        self.history["loss_std"] = _flush(self._loss_std_buf)
+        self.history["loss_min"] = _flush(self._loss_min_buf)
+        self.history["penalty_mean"] = _flush(self._penalty_mean_buf)
+        self.history["penalty_std"] = _flush(self._penalty_std_buf)
+        self.history["diversity"] = _flush(self._diversity_buf)
+        self.history["bg"] = list(self._bg_buf)
+        self.history["best_obj"] = list(self._best_obj_buf)
 
 
 class AutoDivTuner(Callback):
