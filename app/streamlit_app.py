@@ -136,9 +136,11 @@ with st.sidebar:
                 ("maxclique", "Max Clique"),
                 ("vertex_cover", "Vertex Cover"),
                 ("graph_bisection", "Graph bisection"),
+                ("min_dominating_set", "Minimum Dominating Set"),
             ],
             "Categorical / assignment": [
                 ("coloring", "Graph coloring"),
+                ("bgp", "Balanced graph partition (K-way)"),
                 ("tsp", "Travelling Salesman (TSP)"),
                 ("qap", "Quadratic Assignment (QAP)"),
                 ("nqueens", "N-Queens"),
@@ -181,11 +183,24 @@ with st.sidebar:
         seed = st.number_input("Seed", min_value=0, max_value=10_000, value=0)
 
         # Per-problem auxiliary controls.
-        if problem_kind in {"mis", "maxcut", "maxclique", "vertex_cover", "graph_bisection"}:
+        if problem_kind in {
+            "mis",
+            "maxcut",
+            "maxclique",
+            "vertex_cover",
+            "graph_bisection",
+            "min_dominating_set",
+        }:
             extra["graph_d"] = st.slider("Random-regular degree d", 2, 8, 3)
         if problem_kind == "coloring":
             extra["num_category"] = st.slider("Number of colours K", 2, 6, 3)
             extra["graph_d"] = st.slider("Random-regular degree d", 2, 8, 3)
+        if problem_kind == "bgp":
+            extra["num_category"] = st.slider("Number of partitions K", 2, 8, 3)
+            extra["graph_d"] = st.slider("Random-regular degree d", 2, 8, 3)
+            extra["balance_penalty"] = st.slider(
+                "Balance penalty", 0.0001, 0.01, 0.0005, 0.0001, format="%.4f"
+            )
         if problem_kind == "ea":
             extra["dim"] = st.selectbox("Lattice dim", (2, 3), index=1)
         if problem_kind == "perceptron":

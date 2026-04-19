@@ -392,6 +392,92 @@ def test_compare_page_shootout_mode_runs_pqqa_vs_sa():
     )
 
 
+def test_solve_page_exposes_polish_and_warmstart_toggles():
+    """The Solve page must surface the post-processing & warm-start toggles
+    introduced in the v0.5 release. Polish defaults to ON; warm-start
+    defaults to OFF (only useful for graph problems)."""
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
+    at.session_state["problem_config"] = {
+        "kind": "maxcut",
+        "size": 16,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {"graph_d": 3},
+    }
+    at.run()
+    assert not at.exception, at.exception
+    toggle_labels = [t.label for t in at.sidebar.toggle]
+    assert any("polish" in lab.lower() for lab in toggle_labels), (
+        f"Polish toggle missing; got {toggle_labels!r}"
+    )
+    assert any(
+        "warm-start" in lab.lower() or "warm start" in lab.lower() for lab in toggle_labels
+    ), f"Warm-start toggle missing; got {toggle_labels!r}"
+    polish_toggles = [t for t in at.sidebar.toggle if "polish" in t.label.lower()]
+    assert polish_toggles[0].value is True, "Polish toggle should default to ON"
+    warm_toggles = [
+        t
+        for t in at.sidebar.toggle
+        if "warm-start" in t.label.lower() or "warm start" in t.label.lower()
+    ]
+    assert warm_toggles[0].value is False, "Warm-start toggle should default to OFF"
+
+
+def test_home_page_lists_min_dominating_set_and_bgp():
+    """The new problem catalog entries (MinimumDominatingSet,
+    BalancedGraphPartition) must be selectable from the Home page so the
+    UI exercises the same registry as the CLI."""
+    at = AppTest.from_file(str(APP), default_timeout=60)
+    at.run()
+    assert not at.exception, at.exception
+    selectboxes = at.sidebar.selectbox
+    family_select = next((s for s in selectboxes if "family" in s.label.lower()), None)
+    problem_select = next((s for s in selectboxes if s.label == "Problem"), None)
+    assert family_select is not None and problem_select is not None, (
+        f"Family/Problem selectboxes missing; got {[s.label for s in selectboxes]!r}"
+    )
+    # The dropdown is populated with human-readable labels via
+    # ``format_func``, so search the rendered strings rather than the raw
+    # kind keys. Default family is "Graph (binary QUBO)".
+    graph_options = [str(o).lower() for o in (problem_select.options or [])]
+    assert any("dominating" in o for o in graph_options), (
+        f"Minimum Dominating Set missing from Graph problems; got {graph_options!r}"
+    )
+    family_select.set_value("Categorical / assignment")
+    at.run()
+    assert not at.exception, at.exception
+    problem_select = next(s for s in at.sidebar.selectbox if s.label == "Problem")
+    cat_options = [str(o).lower() for o in (problem_select.options or [])]
+    assert any("balanced" in o or "partition" in o for o in cat_options), (
+        f"Balanced Graph Partition missing from Categorical problems; got {cat_options!r}"
+    )
+
+
+def test_solve_runs_with_min_dominating_set_default():
+    """End-to-end smoke for the new MinimumDominatingSet problem under
+    the same UI flow used by every other graph QUBO."""
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
+    at.session_state["problem_config"] = {
+        "kind": "min_dominating_set",
+        "size": 16,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {"graph_d": 3},
+    }
+    at.run()
+    assert not at.exception, at.exception
+    _set_slider(at, "sol_size", 8)
+    _set_slider(at, "epochs", 100)
+    _set_slider(at, "UI update every", 10)
+    at.run()
+    assert not at.exception, at.exception
+    runs = [b for b in at.button if "Run" in b.label]
+    assert runs, "Run QQA button missing"
+    runs[0].click()
+    at.run()
+    assert not at.exception, at.exception
+
+
 def test_solution_viz_smoke_across_problem_kinds(tmp_path):
     """Every registered renderer in ``_solution_viz`` must accept a real
     ``(problem, result, cfg)`` triple without raising.
