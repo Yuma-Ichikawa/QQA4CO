@@ -5,6 +5,8 @@ Mirrors :mod:`tests.test_sa` so the two MCMC baselines stay symmetric.
 
 from __future__ import annotations
 
+import math
+
 import networkx as nx
 import pytest
 import torch
@@ -165,6 +167,114 @@ def test_pa_resample_modes_both_run():
         )
         assert res.best_sol.shape == (15,)
         assert res.best_obj < 0  # MaxCut loss is -|cut|
+
+
+def test_pa_returns_equilibrium_population_and_free_energy():
+    """``final_x`` / ``final_loss`` mirror ``loss_fn``; free-energy fields populated."""
+    qqa.fix_seed(6)
+    g = nx.erdos_renyi_graph(12, 0.4, seed=6)
+    prob = qqa.MaxCut(g)
+    R = 16
+    res = qqa.population_annealing(
+        prob,
+        sol_size=R,
+        num_temps=8,
+        sweeps_per_temp=2,
+        beta_start=0.1,
+        beta_end=4.0,
+        seed=6,
+        verbose=False,
+    )
+    assert res.final_x is not None
+    assert res.final_loss is not None
+    assert res.final_x.shape == (R, 12)
+    assert res.final_loss.shape == (R,)
+    # ``final_loss`` must be the loss of ``final_x``.
+    recomputed = prob.loss_fn(res.final_x)
+    assert torch.allclose(recomputed, res.final_loss, atol=1e-4)
+    # All free-energy fields populated.
+    assert res.log_z is not None
+    assert res.free_energy is not None
+    assert res.free_energy_density is not None
+    # History has matching free-energy series.
+    assert len(res.history["log_z_ratio"]) == 8
+    assert len(res.history["log_z"]) == 8
+    assert len(res.history["free_energy_density"]) == 8
+    # ``log_z`` is the *absolute* ln Z(β_end); per-step ratios sum to
+    # ln Z(β_end) − ln Z(0). Anchor: ln Z(0) = N · ln 2.
+    log_z_zero = 12 * math.log(2.0)
+    cum = sum(res.history["log_z_ratio"])
+    assert math.isclose(log_z_zero + cum, res.history["log_z"][-1], rel_tol=1e-6, abs_tol=1e-6)
+    assert math.isclose(res.log_z, res.history["log_z"][-1], rel_tol=1e-6, abs_tol=1e-6)
+    # F = -ln Z / β and F density = F / N must agree with the stored fields.
+    beta_end = res.history["beta"][-1]
+    assert math.isclose(res.free_energy, -res.log_z / beta_end, rel_tol=1e-6)
+    assert math.isclose(res.free_energy_density, res.free_energy / 12, rel_tol=1e-6)
+
+
+def test_pa_free_energy_recovers_one_spin_ising_exactly():
+    """Single-spin Ising H = −h s has F(β) = −β⁻¹ ln(2 cosh βh).
+
+    With R = 4096 replicas and a long anneal, the PA estimator should
+    match within ~1% — this is the textbook closed-form check that
+    catches sign / Δβ / log-space bugs in the reweighting code.
+    """
+    qqa.fix_seed(7)
+    h = 0.7
+    prob = qqa.Ising1D(N=1, h=h)
+    beta_end = 3.0
+    res = qqa.population_annealing(
+        prob,
+        sol_size=4096,
+        num_temps=80,
+        sweeps_per_temp=4,
+        beta_start=0.05,
+        beta_end=beta_end,
+        seed=7,
+        verbose=False,
+    )
+    # F(β) = −β⁻¹ ln(2 cosh βh) per spin (and N = 1 here)
+    f_exact = -math.log(2.0 * math.cosh(beta_end * h)) / beta_end
+    assert abs(res.free_energy_density - f_exact) < 0.02, (
+        f"PA free-energy density {res.free_energy_density:.4f} vs exact {f_exact:.4f}"
+    )
+
+
+def test_pa_genealogy_matches_population_size():
+    """``record_genealogy=True`` produces consistent parent / ancestor logs."""
+    qqa.fix_seed(8)
+    g = nx.erdos_renyi_graph(15, 0.4, seed=8)
+    prob = qqa.MaxCut(g)
+    R = 24
+    res = qqa.population_annealing(
+        prob,
+        sol_size=R,
+        num_temps=12,
+        sweeps_per_temp=2,
+        beta_start=0.1,
+        beta_end=5.0,
+        record_genealogy=True,
+        seed=8,
+        verbose=False,
+    )
+    assert res.genealogy is not None
+    parents = res.genealogy["parents"]
+    ancestors = res.genealogy["ancestors"]
+    # First step (β_start) jumps from β=0 → β_start so it *does* resample,
+    # so we should have one parent log per temperature step.
+    assert len(parents) == 12
+    for p in parents:
+        assert p.shape == (R,)
+        assert int(p.min().item()) >= 0
+        assert int(p.max().item()) < R
+    # Ancestor map has R entries, each in [0, R).
+    assert ancestors.shape == (R,)
+    assert int(ancestors.min().item()) >= 0
+    assert int(ancestors.max().item()) < R
+    # Number of distinct surviving founders must be <= R (and typically
+    # much smaller after enough annealing).
+    n_unique = int(torch.unique(ancestors).numel())
+    assert 1 <= n_unique <= R
 
 
 def test_pa_validates_arguments():

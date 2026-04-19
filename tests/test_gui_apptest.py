@@ -169,6 +169,107 @@ def test_solve_page_end_to_end_run():
     assert "qqa-score" in texts or "energy" in texts.lower() or "raw loss" in texts
 
 
+def test_visualize_page_renders_pa_result():
+    """After a PA run is stored in session state, Visualize must render
+    the PA-specific tabs (ESS / β, Free energy, Equilibrium pop., Family
+    tree) without crashing and without breaking the legacy tabs.
+    """
+    import networkx as nx  # noqa: PLC0415
+
+    import qqa  # noqa: PLC0415
+
+    g = nx.erdos_renyi_graph(8, 0.5, seed=0)
+    prob = qqa.MaxCut(g)
+    res = qqa.population_annealing(
+        prob,
+        sol_size=8,
+        num_temps=6,
+        sweeps_per_temp=1,
+        beta_start=0.1,
+        beta_end=2.0,
+        record_genealogy=True,
+        seed=0,
+        verbose=False,
+    )
+    at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=90)
+    at.session_state["last_result"] = res
+    at.session_state["last_problem"] = prob
+    at.session_state["last_pop_tracker"] = None
+    at.session_state["problem_config"] = {
+        "kind": "maxcut",
+        "size": 8,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+    # PA metric tiles populate (free-energy density + ln Z + R).
+    metric_labels = [m.label for m in at.metric]
+    assert any("F(β_end)" in lab for lab in metric_labels), (
+        f"PA F(β_end)/N metric missing; got {metric_labels!r}"
+    )
+
+
+def test_solve_page_pa_backend_smoke_run():
+    """The Solve page exposes PA as a backend and runs a tiny PA anneal end-to-end.
+
+    Drives the new "Backend" radio onto Population Annealing, shrinks the
+    PA hyper-parameter sliders, clicks Run, and asserts no exception. This
+    catches the most common UI regressions: missing radio, mis-keyed
+    sliders, callback signature mismatch with `qqa.population_annealing`,
+    or a free-energy plot that breaks on a tiny problem.
+    """
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 6,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    # Switch backend to PA.
+    backend_radios = [r for r in at.sidebar.radio if "backend" in r.label.lower()]
+    assert backend_radios, "Backend radio missing on Solve page"
+    pa_options = [opt for opt in backend_radios[0].options if "PA" in opt]
+    assert pa_options, f"PA option missing in {backend_radios[0].options!r}"
+    backend_radios[0].set_value(pa_options[0])
+    at.run()
+    assert not at.exception, at.exception
+
+    # PA sidebar should now expose its own knobs.
+    pa_sliders = [
+        s
+        for s in at.sidebar.slider
+        if s.label
+        in (
+            "PA population (sol_size)",
+            "num_temps",
+            "sweeps_per_temp",
+        )
+    ]
+    assert pa_sliders, "PA hyper-parameter sliders missing"
+    _set_slider(at, "PA population", 8)
+    _set_slider(at, "num_temps", 10)
+    _set_slider(at, "sweeps_per_temp", 1)
+    at.run()
+    assert not at.exception, at.exception
+
+    runs = [b for b in at.button if "Population Annealing" in b.label]
+    assert runs, "Run Population Annealing button missing"
+    runs[0].click()
+    at.run()
+    assert not at.exception, at.exception
+    # Headline: PA's metric tiles (ESS, backend) should be on the page.
+    metric_labels = [m.label for m in at.metric]
+    assert "ESS" in metric_labels and any(lab == "backend" for lab in metric_labels), (
+        f"PA-specific metric tiles missing; got labels={metric_labels!r}"
+    )
+
+
 def test_solve_runs_with_default_mis():
     """Regression for the duplicate-element-key crash on the default MIS
     problem.
