@@ -602,18 +602,23 @@ def plot_solution_heatmap(
         sol = sol.detach().cpu().numpy()
     sol = np.asarray(sol)
     if sol.ndim == 2:
-        # Two valid 2-D shapes reach here:
+        # Three valid 2-D shapes reach here:
         #   * batched-instance problems: ``(num_instance, max_node)`` — keep
         #     the whole matrix so each row is one instance's solution.
         #   * single-instance categorical problems: ``(N, K)`` — collapse to
         #     the chosen category per variable via argmax so the heatmap
         #     shows a single row of class indices.
+        #   * permutation problems (TSP, QAP, NQueens) where ``best_sol`` is
+        #     a square one-hot ``(N, N)`` matrix — show the full matrix so
+        #     the assignment structure is visible. When ``problem`` is not
+        #     provided we still show the full matrix rather than silently
+        #     collapsing to the first row.
         if problem is not None and getattr(problem, "num_instance", None) is not None:
             arr = sol
         elif problem is not None and getattr(problem, "num_category", None) is not None:
             arr = np.argmax(sol, axis=1)[None, :].astype(float)
         else:
-            arr = sol[0][None, :]
+            arr = sol
     elif sol.ndim == 1:
         arr = sol[None, :]
     else:

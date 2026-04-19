@@ -109,9 +109,15 @@ def simulated_annealing(
     Parameters
     ----------
     problem:
-        Any :class:`~qqa.problems.COProblem` exposing ``loss_fn(x)`` and a
-        ``relaxation`` attribute (BinaryRelaxation, BinaryInstanceRelaxation,
-        or SpinRelaxation). CategoricalRelaxation is not yet supported.
+        Any single-instance :class:`~qqa.problems.COProblem` exposing
+        ``loss_fn(x)`` and a ``relaxation`` attribute
+        (:class:`~qqa.relaxation.BinaryRelaxation` or
+        :class:`~qqa.relaxation.SpinRelaxation`).
+        :class:`~qqa.relaxation.CategoricalRelaxation` and batched-instance
+        problems (those exposing ``num_instance``) are rejected at the API
+        boundary with :class:`NotImplementedError`; iterate over instances
+        and call :func:`simulated_annealing` per instance, or use
+        :func:`qqa.anneal` which handles both natively.
     sol_size:
         Number of independent SA chains run in parallel on GPU.
     num_sweeps:
