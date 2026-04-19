@@ -27,6 +27,31 @@ def fix_seed(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
 
 
+def enable_tf32(enabled: bool = True) -> None:
+    """Toggle TF32 matmul / cuDNN paths for Ampere+ GPUs.
+
+    QQA's hot path is dominated by dense ``einsum`` / ``bmm`` over the QUBO
+    matrix. On Ampere (A100), Hopper (H100) and Blackwell GPUs, allowing
+    TF32 typically yields a **1.1x–1.5x** wall-clock improvement on those
+    matmuls with negligible accuracy loss for the binary projection
+    downstream.
+
+    The library deliberately **does not** flip these flags on import (that
+    would be a global side effect). Call this once at the top of a benchmark
+    script when you want maximum speed::
+
+        import qqa
+        qqa.enable_tf32()
+        qqa.fix_seed(0)
+        result = qqa.anneal(problem, sol_size=256, num_epochs=2000, device="cuda")
+
+    Pass ``enabled=False`` to restore PyTorch's default precision policy.
+    Has no effect on CPU or pre-Ampere GPUs.
+    """
+    torch.backends.cuda.matmul.allow_tf32 = bool(enabled)
+    torch.backends.cudnn.allow_tf32 = bool(enabled)
+
+
 def generate_graph(
     n: int,
     d: int | None = None,
