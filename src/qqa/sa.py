@@ -41,6 +41,7 @@ import numpy as np
 import torch
 
 from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
+from qqa.utils import require_cuda_if_requested, safe_score_summary
 
 
 @dataclass
@@ -151,11 +152,7 @@ def simulated_annealing(
     if history_stride < 1:
         raise ValueError(f"history_stride must be >= 1, got {history_stride}.")
 
-    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(
-            f"device={device!r} requested but torch.cuda.is_available() is False. "
-            "Install a CUDA-enabled torch build, or pass device='cpu'."
-        )
+    require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
     relax = getattr(problem, "relaxation", None)
@@ -288,17 +285,7 @@ def simulated_annealing(
     # problems want {0,1} (which is what we already track).
     best_sol_disc = best_sol.detach()
 
-    score: dict = {}
-    try:
-        score = problem.score_summary(best_sol_disc)
-    except Exception as exc:  # noqa: BLE001 - mirror anneal's contract
-        score = {
-            "label": "loss",
-            "value": float(best_obj),
-            "unit": "",
-            "feasible": False,
-            "extra": {"error": str(exc)},
-        }
+    score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 
     return SAResult(
         best_sol=best_sol_disc,

@@ -41,6 +41,7 @@ from qqa.pignn._import import require_pyg
 from qqa.pignn.graph import extract_nx_graph, nx_to_edge_index
 from qqa.pignn.model import GCNNet, default_in_feats
 from qqa.relaxation import BinaryRelaxation
+from qqa.utils import fix_seed, require_cuda_if_requested, safe_score_summary
 
 
 def _ensure_problem_on_device(problem, device: torch.device) -> None:
@@ -187,16 +188,10 @@ def train_cra_pi_gnn(
     if patience < 1:
         raise ValueError(f"patience must be >= 1, got {patience}.")
 
-    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(
-            f"device={device!r} requested but torch.cuda.is_available() is False. "
-            "Install a CUDA-enabled torch build, or pass device='cpu'."
-        )
+    require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
     if seed is not None:
-        from qqa.utils import fix_seed
-
         fix_seed(seed)
 
     g = extract_nx_graph(problem, override=nx_graph)
@@ -317,17 +312,7 @@ def train_cra_pi_gnn(
             best_bits = (probs >= 0.5).to(probs.dtype)
             best_obj = float(problem.loss_fn(best_bits.unsqueeze(0)).item())
 
-    score: dict = {}
-    try:
-        score = problem.score_summary(best_bits)
-    except Exception as exc:  # noqa: BLE001 - mirror qqa.anneal's contract
-        score = {
-            "label": "loss",
-            "value": float(best_obj),
-            "unit": "",
-            "feasible": False,
-            "extra": {"error": str(exc)},
-        }
+    score = safe_score_summary(problem, best_bits, fallback_obj=float(best_obj))
 
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
@@ -529,16 +514,10 @@ def train_cpra_pi_gnn(
         problems_per_replica = [problem] * int(num_replicas)
         single_problem = True
 
-    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(
-            f"device={device!r} requested but torch.cuda.is_available() is False. "
-            "Install a CUDA-enabled torch build, or pass device='cpu'."
-        )
+    require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
     if seed is not None:
-        from qqa.utils import fix_seed
-
         fix_seed(seed)
 
     g = extract_nx_graph(problem, override=nx_graph)
@@ -740,16 +719,11 @@ def train_cpra_pi_gnn(
     replica_records: list[dict] = []
     for r in range(int(num_replicas)):
         bits_r = best_bits_per_replica[r]
-        try:
-            score_r = problems_per_replica[r].score_summary(bits_r)
-        except Exception as exc:  # noqa: BLE001 - mirror anneal's contract
-            score_r = {
-                "label": "loss",
-                "value": float(best_obj_per_replica[r]),
-                "unit": "",
-                "feasible": False,
-                "extra": {"error": str(exc)},
-            }
+        score_r = safe_score_summary(
+            problems_per_replica[r],
+            bits_r,
+            fallback_obj=float(best_obj_per_replica[r]),
+        )
         replica_records.append(
             {
                 "replica": r,

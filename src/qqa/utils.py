@@ -5,10 +5,52 @@ from __future__ import annotations
 import random
 from itertools import combinations, islice
 from time import time
+from typing import Any
 
 import networkx as nx
 import numpy as np
 import torch
+
+
+def require_cuda_if_requested(device: str | torch.device) -> None:
+    """Raise a friendly :class:`RuntimeError` if a CUDA device is requested
+    but CUDA is unavailable.
+
+    All solver entry points (``qqa.anneal``, ``qqa.simulated_annealing``,
+    ``train_cra_pi_gnn``, ``train_cpra_pi_gnn``) call this once at the
+    start so users see a single, copy-pasteable message instead of a
+    cryptic stack trace from deep inside ``.to(device)``.
+    """
+    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(
+            f"device={device!r} requested but torch.cuda.is_available() is False. "
+            "Install a CUDA-enabled torch build, or pass device='cpu'."
+        )
+
+
+def safe_score_summary(problem: Any, sol: Any, fallback_obj: float) -> dict:
+    """Call ``problem.score_summary(sol)`` but never let it abort a solve.
+
+    All four solver backends wrap their final ``score_summary`` call in
+    the same ``try/except`` that returns a uniform ``{"label": "loss",
+    "feasible": False, "extra": {"error": ...}}`` dict on failure. This
+    helper centralises that contract so the fields stay in lock-step
+    across :mod:`qqa.annealing`, :mod:`qqa.sa`, and
+    :mod:`qqa.pignn.trainer`.
+    """
+    try:
+        return problem.score_summary(sol)
+    except Exception as exc:  # noqa: BLE001 - surface but never abort
+        # ``feasible=False`` (not True) so that downstream UIs / CLI don't
+        # mis-advertise an unchecked solution as valid just because the
+        # scorer itself crashed.
+        return {
+            "label": "loss",
+            "value": float(fallback_obj),
+            "unit": "",
+            "feasible": False,
+            "extra": {"error": str(exc)},
+        }
 
 
 def fix_seed(seed: int) -> None:
@@ -79,6 +121,16 @@ def generate_graph(
 
 def _gen_combinations(combs, chunk_size: int):
     yield from iter(lambda: list(islice(combs, chunk_size)), [])
+
+
+# -----------------------------------------------------------------------------
+# Legacy graph-evaluation helpers
+# -----------------------------------------------------------------------------
+# The functions below predate the :mod:`qqa.problems` API and are no longer
+# referenced anywhere inside the library. They remain here because external
+# callers may import them as ``from qqa.utils import approximate_mis`` etc.
+# Prefer ``problem.score_summary(...)`` from any modern :class:`COProblem`
+# subclass instead — it returns a richer dict with feasibility info.
 
 
 def approximate_mis(nx_graph: nx.Graph):
