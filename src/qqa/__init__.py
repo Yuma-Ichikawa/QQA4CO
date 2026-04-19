@@ -72,8 +72,9 @@ from qqa.relaxation import (
     Relaxation,
     SpinRelaxation,
 )
+from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
-from qqa.utils import fix_seed, generate_graph
+from qqa.utils import enable_tf32, fix_seed, generate_graph
 
 # Single-source the version from the wheel metadata so ``__version__`` is
 # always whatever ``pip install qqa`` actually installed. The fallback covers
@@ -118,6 +119,7 @@ __all__ = [
     "PopulationTracker",
     "QUBOProblem",
     "Relaxation",
+    "SAResult",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
@@ -126,8 +128,10 @@ __all__ = [
     "VertexCover",
     "__version__",
     "anneal",
+    "enable_tf32",
     "fix_seed",
     "generate_graph",
     "load_problem_from_file",
+    "simulated_annealing",
     "user_problem_from_source",
 ]
