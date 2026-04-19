@@ -58,6 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
             "tsp",
             "qap",
             "nqueens",
+            # Phase-B catalog growth (v0.5+).
+            "bgp",
+            "min_dominating_set",
         ],
         help="Problem family. Mutually exclusive with --problem-file.",
     )
@@ -103,6 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--seed", type=int, default=0)
     solve.add_argument("--device", type=str, default="cpu")
     solve.add_argument("--quiet", action="store_true", help="Suppress per-epoch logs.")
+    solve.add_argument(
+        "--no-polish",
+        action="store_true",
+        help=(
+            "Disable the default greedy 1-flip polish applied to QUBO winners "
+            "(only affects --backend qqa). Polishing is a 'free improvement' "
+            "of +10 to +90 cut on hard MaxCut/MIS/VertexCover instances; "
+            "turn it off only if you want a strictly comparable raw-anneal score."
+        ),
+    )
     solve.add_argument(
         "--output",
         type=str,
@@ -324,6 +337,12 @@ def _build_problem(args: argparse.Namespace):
         return qqa.QAP(N=args.size, seed=args.seed, device=device)
     if kind == "nqueens":
         return qqa.NQueens(N=args.size, device=device)
+    if kind == "bgp":
+        g = nx.random_regular_graph(d=3, n=args.size, seed=args.seed)
+        return qqa.BalancedGraphPartition(g, num_category=args.num_category, device=device)
+    if kind == "min_dominating_set":
+        g = nx.random_regular_graph(d=3, n=args.size, seed=args.seed)
+        return qqa.MinimumDominatingSet(g, device=device)
 
     raise ValueError(f"Unknown problem kind {kind!r}.")
 
@@ -473,6 +492,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             div_param=args.div_param,
             num_epochs=args.epochs,
             device=args.device,
+            polish=not args.no_polish,
             verbose=not args.quiet,
         )
     print("")

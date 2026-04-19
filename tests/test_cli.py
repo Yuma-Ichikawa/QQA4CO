@@ -61,3 +61,61 @@ def test_cli_solve_sk_small():
         "--quiet",
     )
     assert out.returncode == 0, out.stderr
+
+
+def test_cli_solve_min_dominating_set():
+    """Phase-B: --problem min_dominating_set is wired end-to-end."""
+    out = _run(
+        "solve",
+        "--problem",
+        "min_dominating_set",
+        "--size",
+        "16",
+        "--sol-size",
+        "16",
+        "--epochs",
+        "80",
+        "--quiet",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "best_obj" in out.stdout
+    assert "dominating set size" in out.stdout
+
+
+def test_cli_solve_balanced_graph_partition():
+    """Phase-B: --problem bgp + --num-category exposes BalancedGraphPartition."""
+    out = _run(
+        "solve",
+        "--problem",
+        "bgp",
+        "--size",
+        "12",
+        "--num-category",
+        "3",
+        "--sol-size",
+        "16",
+        "--epochs",
+        "80",
+        "--quiet",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "edge cut" in out.stdout
+
+
+def test_cli_solve_no_polish_flag_accepted():
+    """--no-polish must be accepted and produce a finite result."""
+    out = _run(
+        "solve",
+        "--problem",
+        "mis",
+        "--size",
+        "16",
+        "--sol-size",
+        "16",
+        "--epochs",
+        "80",
+        "--no-polish",
+        "--quiet",
+    )
+    assert out.returncode == 0, out.stderr
+    assert "best_obj" in out.stdout
