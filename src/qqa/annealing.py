@@ -22,6 +22,7 @@ import torch
 from qqa.callbacks import Callback, CallbackState, HistoryRecorder
 from qqa.relaxation import _default_penalty_from_forward
 from qqa.schedule import LinearBGSchedule
+from qqa.utils import require_cuda_if_requested, safe_score_summary
 
 
 @dataclass
@@ -134,11 +135,7 @@ def anneal(
 
     # Surface a helpful message when CUDA is requested but unavailable,
     # before torch raises its own (cryptic) error deep inside .to().
-    if isinstance(device, str) and device.startswith("cuda") and not torch.cuda.is_available():
-        raise RuntimeError(
-            f"device={device!r} requested but torch.cuda.is_available() is False. "
-            "Install a CUDA-enabled torch build, or pass device='cpu'."
-        )
+    require_cuda_if_requested(device)
 
     _is_cuda = (isinstance(device, str) and device.startswith("cuda")) or (
         isinstance(device, torch.device) and device.type == "cuda"
@@ -299,19 +296,7 @@ def anneal(
     # where ``best_sol`` is a single solution tensor.
     score: dict = {}
     if not is_batch:
-        try:
-            score = problem.score_summary(best_sol)
-        except Exception as exc:  # noqa: BLE001 - surface but never abort
-            # ``feasible=False`` (not True) so that downstream UIs / CLI don't
-            # mis-advertise an unchecked solution as valid just because the
-            # scorer itself crashed.
-            score = {
-                "label": "loss",
-                "value": float(best_obj),
-                "unit": "",
-                "feasible": False,
-                "extra": {"error": str(exc)},
-            }
+        score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
 
     return AnnealResult(
         best_sol=best_sol,
