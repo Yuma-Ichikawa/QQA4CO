@@ -6,6 +6,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-19
+
 ### Added
 
 - Streamlit Compare page now offers a **PQQA vs SA shootout** mode that
@@ -27,12 +29,36 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   as superseded by `problem.score_summary`. They are kept for backward
   compatibility but are no longer used internally.
 
+### Documentation
+
+- Repo-wide audit of the QQA / CPRA paper citations. Three places had
+  silently swapped the QQA paper (Ichikawa & Arai, ICLR 2025) with the
+  CPRA paper (Ichikawa & Iwashita, TMLR 2025) — fixed in
+  `src/qqa/__init__.py` docstring, `notebooks/cra_pignn_example.ipynb`
+  and `notebooks/cpra_pignn_example.ipynb`. Adopted the TMLR-published
+  title for CPRA ("Continuous Parallel Relaxation for Finding Diverse
+  Solutions in Combinatorial Optimization Problems"); the older
+  arXiv-preprint title ("Continuous Tensor Relaxation …") is no longer
+  used.
+- Added a Codecov coverage badge to `README.md` and a placeholder for
+  the Zenodo DOI badge (uncommented and DOI-substituted as soon as the
+  first release is minted).
+- Fixed `CITATION.cff` `preferred-citation` block: title now correctly
+  matches the URL (both point at the QQA ICLR 2025 paper); arXiv:2409.02135
+  added as an explicit identifier so citation tooling (Zenodo, ORCID,
+  OpenAlex) resolves to the same artefact.
+
 ### Infrastructure
 
 - `publish.yml` Trusted Publishing wired up end-to-end on PyPI:
   GitHub Actions environment `pypi` is now connected to the registered
   Trusted Publisher, so future tagged releases upload automatically
   without manual `twine` invocations.
+- Broadened PyPI classifiers in `pyproject.toml`
+  (`Environment :: Console`, `Environment :: GPU :: NVIDIA CUDA`,
+  `Intended Audience :: Education / Developers`, OS-specific tags,
+  `Topic :: Mathematics / Physics`, `Typing :: Typed`) for better PyPI
+  discoverability.
 
 ## [0.4.0] - 2026-04-19
 
