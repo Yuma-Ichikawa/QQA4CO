@@ -291,6 +291,17 @@ def test_visualize_renders_3d_pca_and_diversity_with_population(tmp_path):
     for required in ("3D PCA flow", "Diversity", "Loss spectrogram"):
         assert required in labels, f"missing tab {required!r} (got {labels})"
 
+    # Belt and braces: the 3D PCA tab body wraps the PCA computation in a
+    # try/except that surfaces failures via ``st.info``. If a future palette
+    # / signature change reintroduces a KeyError, the exception is silently
+    # rendered as "PCA could not be computed: ..." rather than failing the
+    # smoke test. Walk every ``info`` message rendered on the page and make
+    # sure no "could not be computed" string slipped through.
+    info_texts = " ".join(getattr(m, "body", "") or "" for m in at.info)
+    assert "could not be computed" not in info_texts.lower(), (
+        f"a Visualize tab silently swallowed an error: {info_texts}"
+    )
+
 
 def test_solve_dynamics_separates_discrete_and_relaxed_best():
     """Regression: the per-replica chart used to plot the running discrete

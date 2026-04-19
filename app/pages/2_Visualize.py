@@ -248,7 +248,7 @@ with tab_pca:
                 xaxis_title="PC1",
                 yaxis_title="PC2",
                 zaxis_title="PC3",
-                bgcolor=palette()["surface"],
+                bgcolor=palette()["bg_card"],
             )
             st.plotly_chart(fig, width="stretch")
             st.caption(
