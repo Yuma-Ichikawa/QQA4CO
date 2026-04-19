@@ -11,7 +11,7 @@ license: BSD-3-Clause
 version: 0.3.0
 preferred-citation:
   type: conference-paper
-  title: "Continuous Tensor Relaxation for Finding Diverse Solutions in Combinatorial Optimization"
+  title: "Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling"
   authors:
     - family-names: Ichikawa
       given-names: Yuma
@@ -21,3 +21,7 @@ preferred-citation:
     name: "International Conference on Learning Representations (ICLR)"
   year: 2025
   url: "https://openreview.net/forum?id=9EfBeXaXf0"
+  identifiers:
+    - type: other
+      value: "arXiv:2409.02135"
+      description: arXiv preprint
