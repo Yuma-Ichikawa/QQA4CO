@@ -19,6 +19,8 @@ from collections import deque
 import networkx as nx
 import torch
 
+from qqa.problems.base import normalize_graph
+
 
 def bfs_2color(graph: nx.Graph) -> torch.Tensor:
     """Return a ``{0, 1}`` bitstring from BFS 2-coloring every component.
@@ -31,10 +33,17 @@ def bfs_2color(graph: nx.Graph) -> torch.Tensor:
     achieves ~0.959 of the best-known cut and is 1-flip-polishable to ~0.967
     in <1 s — a strong, deterministic floor that warm-starting PQQA / CRA
     cannot regress below.
+
+    The graph is internally relabeled to ``0..N-1`` (via
+    :func:`qqa.problems.base.normalize_graph`) so callers can pass a graph
+    with arbitrary node labels and still get back a tensor whose ``i``-th
+    entry corresponds to the ``i``-th row/column of the QUBO. The input is
+    not mutated.
     """
-    n = graph.number_of_nodes()
+    g = normalize_graph(graph)
+    n = g.number_of_nodes()
     color = [-1] * n
-    for root in graph.nodes:
+    for root in g.nodes:
         if color[root] != -1:
             continue
         color[root] = 0
@@ -42,7 +51,7 @@ def bfs_2color(graph: nx.Graph) -> torch.Tensor:
         while q:
             u = q.popleft()
             cu = color[u]
-            for v in graph.neighbors(u):
+            for v in g.neighbors(u):
                 if color[v] == -1:
                     color[v] = 1 - cu
                     q.append(v)

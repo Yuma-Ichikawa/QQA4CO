@@ -144,9 +144,14 @@ class SpinRelaxation(BinaryRelaxation):
         return 2 * x.clamp(0.0, 1.0) - 1
 
     def project(self, x):
-        # Broadcasted scalar ``where`` avoids allocating two ``ones_like``
-        # intermediates per call (which is hot on large batches).
-        return torch.where(x >= 0.5, 1.0, -1.0).to(x.dtype)
+        # Clamp first for the same defensive reason ``BinaryRelaxation.project``
+        # does: AdamW can drift the latent ``x`` outside ``[0, 1]`` between
+        # the final perturb_ and a downstream caller's manual ``project``,
+        # and a stray ``x = -3`` would otherwise still threshold cleanly to
+        # ``-1`` here but mask the issue. Broadcasted scalar ``where``
+        # avoids allocating two ``ones_like`` intermediates per call (hot
+        # on large batches).
+        return torch.where(x.clamp(0.0, 1.0) >= 0.5, 1.0, -1.0).to(x.dtype)
 
     def perturb_(self, x, learning_rate, temp):
         with torch.no_grad():

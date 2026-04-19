@@ -156,6 +156,20 @@ def anneal(
         raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
     if mixed_precision not in ("fp32", "bf16"):
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
+    # Mirror the validation that the pignn / cpra trainers already enforce:
+    # the binary / spin penalty 1 - (1 - 2p)^c is asymmetric for odd c and
+    # silently breaks the discrete attractor at γ > 0. CategoricalRelaxation
+    # uses a different penalty form (K p - 1)^c that *is* well-defined for
+    # odd c, so it is exempted.
+    from qqa.relaxation import CategoricalRelaxation  # noqa: PLC0415
+
+    if curve_rate % 2 != 0 and not isinstance(
+        getattr(problem, "relaxation", None), CategoricalRelaxation
+    ):
+        raise ValueError(
+            f"curve_rate must be a positive even integer for binary/spin "
+            f"relaxations, got {curve_rate}."
+        )
 
     # Surface a helpful message when CUDA is requested but unavailable,
     # before torch raises its own (cryptic) error deep inside .to().
