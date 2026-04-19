@@ -91,6 +91,7 @@ def train_cra_pi_gnn(
     num_epochs: int = 100_000,
     tol: float = 1e-4,
     patience: int = 1000,
+    early_stop_disc_patience: int | None = None,
     check_interval: int = 1000,
     device: str | torch.device = "cpu",
     seed: int | None = None,
@@ -235,11 +236,13 @@ def train_cra_pi_gnn(
     prev_loss = float("inf")
     prev_pen = float("inf")
     stagnant_steps = 0
+    best_obj_so_far = float("inf")
+    disc_stagnant = 0
 
     runtime_start = time()
     model.train()
     for epoch in range(num_epochs):
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         probs = model(edge_index)  # (N,)
         # ``problem.loss_fn`` expects a leading batch dim of size B; we feed
         # B=1 here because CRA-PI-GNN keeps a single (deterministic given
@@ -280,6 +283,22 @@ def train_cra_pi_gnn(
             stagnant_steps = 0
         prev_loss = loss_v
         prev_pen = pen_v
+
+        # Optional discrete-best early stop. Reflects "the integer answer
+        # has settled" rather than the continuous loss having settled.
+        if early_stop_disc_patience is not None:
+            if best_obj < best_obj_so_far - tol:
+                best_obj_so_far = best_obj
+                disc_stagnant = 0
+            else:
+                disc_stagnant += 1
+                if disc_stagnant >= int(early_stop_disc_patience):
+                    if verbose:
+                        print(
+                            f"[CRA-PI-GNN] Early stop at epoch {epoch} (discrete best "
+                            f"unchanged for {early_stop_disc_patience} epochs)."
+                        )
+                    break
 
         if annealing:
             reg_param += float(annealing_rate)
@@ -363,6 +382,7 @@ def train_cpra_pi_gnn(
     num_epochs: int = 100_000,
     tol: float = 1e-4,
     patience: int = 1000,
+    early_stop_disc_patience: int | None = None,
     check_interval: int = 1000,
     device: str | torch.device = "cpu",
     seed: int | None = None,
@@ -548,6 +568,22 @@ def train_cpra_pi_gnn(
     relax = BinaryRelaxation()
     reg_param = float(init_reg_param if annealing else 0.0)
 
+    # Penalty-diversified CPRA typically passes R copies of the same QUBO
+    # problem with different ``penalty`` coefficients. When every replica
+    # exposes a per-replica ``Q_mat`` of identical shape, we can stack them
+    # into a single ``(R, N, N)`` tensor and replace the Python R-step loop
+    # with one batched einsum — which is several times faster on GPU because
+    # the launch overhead of R small einsums dominates the actual flops.
+    _q_stack: torch.Tensor | None = None
+    if not single_problem:
+        q_mats = [getattr(p, "Q_mat", None) for p in problems_per_replica]
+        if (
+            all(q is not None for q in q_mats)
+            and all(isinstance(q, torch.Tensor) for q in q_mats)
+            and len({tuple(q.shape) for q in q_mats}) == 1
+        ):
+            _q_stack = torch.stack([q.to(device) for q in q_mats], dim=0)
+
     history: dict[str, list] = {
         "loss": [],
         "mean_cost": [],
@@ -562,22 +598,30 @@ def train_cpra_pi_gnn(
     prev_loss = float("inf")
     prev_pen = float("inf")
     stagnant_steps = 0
+    # Optional: stop once the discrete best across all replicas hasn't
+    # improved for ``early_stop_disc_patience`` epochs. Disabled by default
+    # to preserve the historical ``num_epochs``-fixed behaviour.
+    best_overall_so_far = float("inf")
+    disc_stagnant = 0
 
     runtime_start = time()
     model.train()
     for epoch in range(num_epochs):
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         probs = model(edge_index)  # (N, R) when R >= 2
         if probs.dim() == 1:
             # GCNNet squeezes to (N,) when num_replicas == 1.
             probs = probs.unsqueeze(-1)
 
-        # Per-replica continuous cost. When every replica shares the same
-        # problem (variation diversification or R=1) we batch the loss in a
-        # single einsum on (R, N); when each replica has its own problem
-        # (penalty diversification) we evaluate them sequentially.
+        # Per-replica continuous cost. Three paths in order of decreasing
+        # speed: shared single problem (one einsum), per-replica QUBO with
+        # identical Q_mat shape (one batched einsum across R), then the
+        # generic Python loop fallback for non-QUBO problems.
         if single_problem:
             cost = problem.loss_fn(probs.t()).sum()
+        elif _q_stack is not None:
+            p_t = probs.t()  # (R, N)
+            cost = torch.einsum("rn,rnm,rm->", p_t, _q_stack, p_t)
         else:
             per_replica_costs = [
                 problems_per_replica[r].loss_fn(probs[:, r].unsqueeze(0)).sum()
@@ -607,6 +651,11 @@ def train_cpra_pi_gnn(
                 # One batched einsum + one cuda->cpu transfer for the whole
                 # replica vector — much cheaper than the R-step loop below.
                 disc_objs = problem.loss_fn(bits_all.t()).cpu().tolist()
+            elif _q_stack is not None:
+                b = bits_all.t()  # (R, N)
+                disc_objs = (
+                    torch.einsum("rn,rnm,rm->r", b, _q_stack, b).cpu().tolist()
+                )
             else:
                 disc_objs = [
                     float(problems_per_replica[r].loss_fn(bits_all[:, r].unsqueeze(0)).item())
@@ -638,6 +687,24 @@ def train_cpra_pi_gnn(
             stagnant_steps = 0
         prev_loss = loss_v
         prev_pen = pen_v
+
+        # Optional second early-stop on the *discrete* best across replicas.
+        # Useful for problems where the continuous loss keeps drifting after
+        # the integer solution has clearly stabilised.
+        if early_stop_disc_patience is not None:
+            current_best = min(best_obj_per_replica)
+            if current_best < best_overall_so_far - tol:
+                best_overall_so_far = current_best
+                disc_stagnant = 0
+            else:
+                disc_stagnant += 1
+                if disc_stagnant >= int(early_stop_disc_patience):
+                    if verbose:
+                        print(
+                            f"[CPRA] Early stop at epoch {epoch} (discrete best "
+                            f"unchanged for {early_stop_disc_patience} epochs)."
+                        )
+                    break
 
         if annealing:
             reg_param += float(annealing_rate)
