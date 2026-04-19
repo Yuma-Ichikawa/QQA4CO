@@ -893,8 +893,27 @@ def hero_badges() -> None:
     )
 
 
-def render_score_card(score: dict, raw_loss: float | None = None) -> None:
-    """Render the big problem-specific score tile used by the Solve page."""
+def render_score_card(
+    score: dict,
+    raw_loss: float | None = None,
+    *,
+    pre_polish_loss: float | None = None,
+) -> None:
+    """Render the big problem-specific score tile used by the Solve page.
+
+    Parameters
+    ----------
+    score:
+        Output of ``problem.score_summary``.
+    raw_loss:
+        Optional raw ``loss_fn`` value (after polish, since ``anneal``
+        replaces ``best_obj`` with the polished value).
+    pre_polish_loss:
+        Optional ``loss_fn`` value of the *un-polished* annealer winner.
+        Displayed as a small "before polish" badge whenever it is
+        strictly worse than ``raw_loss`` so the user can see how much
+        :func:`qqa.polish.greedy_one_flip` contributed.
+    """
     if not score:
         return
     feas = score.get("feasible", True)
@@ -908,12 +927,25 @@ def render_score_card(score: dict, raw_loss: float | None = None) -> None:
     unit = score.get("unit", "")
     unit_html = f'<span class="unit">{unit}</span>' if unit else ""
     raw_html = f'<div class="raw">raw loss = {raw_loss:.4g}</div>' if raw_loss is not None else ""
+    polish_html = ""
+    if (
+        pre_polish_loss is not None
+        and raw_loss is not None
+        # Only surface the line when polish actually moved the needle.
+        and pre_polish_loss > raw_loss + 1e-9
+    ):
+        delta = pre_polish_loss - raw_loss
+        polish_html = (
+            f'<div class="raw">pre-polish loss = {pre_polish_loss:.4g} '
+            f"(polish improved by {delta:.4g})</div>"
+        )
     value_cls = "value" if feas else "value infeasible"
     st.markdown(
         f'<div class="qqa-score">'
         f'<div class="label">{score.get("label", "score")} · {badge}</div>'
         f'<div class="{value_cls}">{value_s}{unit_html}</div>'
         f"{raw_html}"
+        f"{polish_html}"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -951,7 +983,16 @@ def build_problem(cfg: dict) -> Any:
 
     size = int(cfg["size"])
     seed = cfg["seed"]
-    if kind in {"mis", "maxcut", "maxclique", "coloring", "vertex_cover", "graph_bisection"}:
+    if kind in {
+        "mis",
+        "maxcut",
+        "maxclique",
+        "coloring",
+        "vertex_cover",
+        "graph_bisection",
+        "min_dominating_set",
+        "bgp",
+    }:
         return _build_graph_problem(kind, size, seed, device, extra)
     if kind == "ising1d":
         return _safe_call(qqa.Ising1D, N=size, device=device)
@@ -1052,6 +1093,16 @@ def _build_graph_problem(kind: str, size: int, seed: int, device: str, extra: di
             qqa.GraphBisection,
             g,
             balance_penalty=float(extra.get("balance_penalty", 2.0)),
+            device=device,
+        )
+    if kind == "min_dominating_set":
+        return _safe_call(qqa.MinimumDominatingSet, g, device=device)
+    if kind == "bgp":
+        return _safe_call(
+            qqa.BalancedGraphPartition,
+            g,
+            num_category=int(extra.get("num_category", 3)),
+            penalty=float(extra.get("balance_penalty", 5e-4)),
             device=device,
         )
     raise ValueError(f"Unknown graph-problem kind {kind!r}")
