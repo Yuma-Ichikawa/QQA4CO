@@ -34,6 +34,7 @@ __all__ = [
     "MaxSAT3",
     "VertexCover",
     "GraphBisection",
+    "MinimumDominatingSet",
     "TSP",
     "QAP",
     "NQueens",
@@ -332,6 +333,127 @@ class GraphBisection(COProblem):
                     int(sizes[idx].item()),
                     self.num_nodes - int(sizes[idx].item()),
                 ),
+            },
+        }
+
+
+class MinimumDominatingSet(COProblem):
+    r"""Minimum dominating set on an undirected graph.
+
+    Select a minimum-size vertex subset :math:`S` such that every vertex
+    is either in :math:`S` or adjacent to some vertex in :math:`S`. We
+    minimise
+
+    .. math::
+        H(x) = \sum_v x_v
+             + \lambda \sum_v (1 - x_v)\,\prod_{u \in N(v)} (1 - x_u),
+
+    where :math:`x \in \{0, 1\}^N`. The product factor equals ``1`` exactly
+    when ``v`` is unselected *and* none of its neighbours are selected
+    (i.e. ``v`` is uncovered), so the penalty term counts uncovered
+    vertices.
+
+    During annealing we use the same form on the continuous relaxation
+    :math:`x \in [0, 1]^N`. Because :math:`(1 - x_u) \in [0, 1]`, the
+    product is bounded in :math:`[0, 1]` and matches the discrete
+    indicator at the corners. To keep the cost :math:`O(B \cdot |E|)` per
+    forward pass (no per-vertex Python loop) we evaluate the log-product
+    on the edges:
+
+    .. math::
+        \prod_{u \in N(v)} (1 - x_u) = \exp\!\left(
+            \sum_{u \in N(v)} \log(1 - x_u + \varepsilon)
+        \right).
+    """
+
+    def __init__(
+        self,
+        graph,
+        penalty: float = 4.0,
+        device: str | torch.device = "cpu",
+    ):
+        super().__init__()
+        graph = normalize_graph(graph)
+        self.graph = graph
+        self.num_nodes = graph.number_of_nodes()
+        self.device = device
+        self.penalty = float(penalty)
+
+        # Pre-compute (sender, receiver) edge index lists for both
+        # directions so we can ``scatter_add`` the per-neighbour log
+        # contributions to each vertex in a single vectorised pass.
+        edges = list(graph.edges())
+        if edges:
+            uv = torch.as_tensor(edges, dtype=torch.long, device=device)
+            # Each undirected edge contributes (u -> v) and (v -> u).
+            src = torch.cat([uv[:, 0], uv[:, 1]])
+            dst = torch.cat([uv[:, 1], uv[:, 0]])
+        else:
+            src = torch.zeros((0,), dtype=torch.long, device=device)
+            dst = torch.zeros((0,), dtype=torch.long, device=device)
+        self._nbr_src = src
+        self._nbr_dst = dst
+        self.num_edges = len(edges)
+        self.relaxation = BinaryRelaxation()
+
+    def _uncovered(self, x: torch.Tensor, *, eps: float = 1e-6) -> torch.Tensor:
+        """Return per-vertex uncovered indicator :math:`(1 - x_v) \\Pi_u (1 - x_u)`.
+
+        Shape: ``(B, N)``. Equal to the discrete indicator at the corners
+        and bounded in ``[0, 1]`` on the relaxation.
+        """
+        # log(1 - x_u + eps) is well defined on [0, 1].
+        log1m = torch.log1p(-x.clamp(0.0, 1.0) + eps)
+        # Sum log(1 - x_u) over u in N(v) via scatter_add on the (src->dst)
+        # neighbour list. ``log_prod_nbrs[b, v] = Σ_{u ∈ N(v)} log(1 - x_{b,u}+ε)``
+        log_prod = torch.zeros_like(x)
+        if self._nbr_src.numel() > 0:
+            B = x.shape[0]
+            src = self._nbr_src.unsqueeze(0).expand(B, -1)
+            dst = self._nbr_dst.unsqueeze(0).expand(B, -1)
+            log_prod = log_prod.scatter_add(1, dst, log1m.gather(1, src))
+        prod_nbrs = torch.exp(log_prod)  # (B, N) ∈ [0, 1]
+        return (1 - x.clamp(0.0, 1.0)) * prod_nbrs
+
+    def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
+        size = x.sum(dim=-1)
+        uncovered = self._uncovered(x).sum(dim=-1)
+        return size + self.penalty * uncovered
+
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        x_disc = _ensure_batched(x_disc, 1)
+        with torch.no_grad():
+            xd = x_disc.float()
+            sizes = xd.sum(dim=-1)
+            # Use the exact discrete indicator (no eps) for reporting.
+            if self.num_edges > 0:
+                B = xd.shape[0]
+                src = self._nbr_src.unsqueeze(0).expand(B, -1)
+                dst = self._nbr_dst.unsqueeze(0).expand(B, -1)
+                # ``cover`` accumulates per-vertex 1{some neighbour selected}.
+                nbr_selected = torch.zeros_like(xd)
+                nbr_selected = nbr_selected.scatter_add(1, dst, xd.gather(1, src).clamp_(0.0, 1.0))
+                covered = (xd + nbr_selected) > 0.5
+            else:
+                covered = xd > 0.5
+            uncovered = (~covered).sum(dim=-1).float()
+        feas = uncovered <= 0.5
+        if feas.any():
+            s = sizes.clone()
+            s[~feas] = float("inf")
+            idx = int(torch.argmin(s).item())
+            feasible = True
+        else:
+            idx = int(torch.argmin(uncovered).item())
+            feasible = False
+        return {
+            "label": "dominating set size",
+            "value": int(sizes[idx].item()),
+            "unit": f"/ {self.num_nodes}",
+            "feasible": feasible,
+            "extra": {
+                "uncovered_vertices": int(uncovered[idx].item()),
+                "num_edges": int(self.num_edges),
             },
         }
 
