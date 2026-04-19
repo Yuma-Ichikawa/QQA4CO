@@ -75,9 +75,7 @@ def _build_beta_schedule(
     if schedule not in ("geometric", "linear"):
         raise ValueError(f"schedule must be 'geometric' or 'linear', got {schedule!r}.")
     if beta_start <= 0 or beta_end <= 0:
-        raise ValueError(
-            f"beta_start ({beta_start}) and beta_end ({beta_end}) must be positive."
-        )
+        raise ValueError(f"beta_start ({beta_start}) and beta_end ({beta_end}) must be positive.")
     if num_sweeps <= 0:
         return torch.empty(0)
     if schedule == "geometric":
@@ -183,8 +181,7 @@ def simulated_annealing(
         x = initial_state.to(device).float()
         if x.shape != (sol_size, num_vars):
             raise ValueError(
-                f"initial_state shape {tuple(x.shape)} != expected "
-                f"{(sol_size, num_vars)}."
+                f"initial_state shape {tuple(x.shape)} != expected {(sol_size, num_vars)}."
             )
     else:
         u = torch.rand((sol_size, num_vars), device=device, generator=rng)
@@ -196,9 +193,7 @@ def simulated_annealing(
     # attribute on every QUBOProblem subclass shipped by qqa.
     q_mat = getattr(problem, "Q_mat", None)
     use_qubo_fast = (
-        is_binary
-        and isinstance(q_mat, torch.Tensor)
-        and q_mat.shape == (num_vars, num_vars)
+        is_binary and isinstance(q_mat, torch.Tensor) and q_mat.shape == (num_vars, num_vars)
     )
     if use_qubo_fast:
         q_mat = q_mat.to(device)
