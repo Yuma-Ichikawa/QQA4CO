@@ -15,7 +15,7 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
   <a href="https://yuma-ichikawa.github.io/QQA4CO/"><img src="https://img.shields.io/badge/docs-mkdocs--material-blue?logo=materialformkdocs&logoColor=white" alt="Documentation"></a>
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/discussions"><img src="https://img.shields.io/github/discussions/Yuma-Ichikawa/QQA4CO?logo=github&label=Discussions" alt="GitHub Discussions"></a>
   <a href="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO"><img src="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <a href="https://doi.org/10.5281/zenodo.19648231"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.19648231.svg" alt="DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.19648231"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19648231-1f6feb?logo=doi&logoColor=white" alt="DOI"></a>
 </p>
 
 <p align="center">
