@@ -409,9 +409,7 @@ def test_compare_page_shootout_mode_runs_pqqa_vs_sa_vs_pa():
     # since the v0.5.x rename — match by substring rather than literal.
     radios = [r for r in at.sidebar.radio if "Compare mode" in r.label]
     assert radios, "Compare mode radio missing"
-    shootout_options = [
-        opt for opt in radios[0].options if "shootout" in opt.lower()
-    ]
+    shootout_options = [opt for opt in radios[0].options if "shootout" in opt.lower()]
     assert shootout_options, f"shootout option missing; got {radios[0].options!r}"
     radios[0].set_value(shootout_options[0])
     at.run()

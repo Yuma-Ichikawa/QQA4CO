@@ -180,6 +180,15 @@ def population_annealing(
         raise ValueError(f"history_stride must be >= 1, got {history_stride}.")
     if resample not in ("systematic", "multinomial"):
         raise ValueError(f"resample must be 'systematic' or 'multinomial', got {resample!r}.")
+    # PA is only well-defined for non-decreasing β: reweighting by exp(-Δβ E)
+    # with Δβ < 0 would up-weight high-energy replicas, which is the opposite
+    # of what PA wants. Reject upfront rather than silently skipping resampling.
+    if beta_end < beta_start:
+        raise ValueError(
+            f"Population annealing requires beta_end >= beta_start, got "
+            f"beta_start={beta_start}, beta_end={beta_end}. Use SA if you "
+            "actually want a heating schedule."
+        )
 
     require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
@@ -252,12 +261,14 @@ def population_annealing(
                     x = _qubo_glauber_sweep(x, q_sym, q_diag, beta, rng)
                 else:
                     x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)
-            loss_curr = problem.loss_fn(x)
-
-            min_val, min_idx = torch.min(loss_curr, dim=0)
-            if min_val.item() < best_obj:
-                best_obj = float(min_val.item())
-                best_sol = x[int(min_idx.item())].detach().clone()
+                # Track best after EVERY sweep (matches SA semantics): a low-
+                # energy transient that vanishes by the end of the K-sweep
+                # batch would otherwise be invisible to ``best_obj``.
+                loss_curr = problem.loss_fn(x)
+                min_val, min_idx = torch.min(loss_curr, dim=0)
+                if min_val.item() < best_obj:
+                    best_obj = float(min_val.item())
+                    best_sol = x[int(min_idx.item())].detach().clone()
 
         if record_history and (step % history_stride == 0 or step == num_temps - 1):
             history["loss_mean"].append(float(loss_curr.mean().item()))
