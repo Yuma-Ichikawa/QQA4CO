@@ -64,6 +64,18 @@ NEW_PUBLIC_NAMES = [
     "PopulationTracker",
     "TrajectoryTracker",
     "Relaxation",
+    # Post-0.4.0 additions.
+    "MinimumDominatingSet",
+    "PSpinGlass",
+    "RandomFieldIsing",
+    "SAResult",
+    "enable_tf32",
+    "polish",
+    "simulated_annealing",
+    "warmstart",
+    "MaxCliqueInstance",
+    "MaxCutInstance",
+    "MaximumIndependentSetInstance",
 ]
 
 
@@ -71,6 +83,22 @@ NEW_PUBLIC_NAMES = [
 def test_top_level_export_exists(name: str) -> None:
     assert hasattr(qqa, name), f"qqa.{name} must be importable from the top level"
     assert name in qqa.__all__, f"qqa.{name} must be listed in qqa.__all__"
+
+
+def test_public_api_set_matches_dunder_all() -> None:
+    """``__all__`` must agree with what is reachable as ``qqa.<name>``.
+
+    Catches the common slip of adding a class to ``__all__`` while
+    forgetting to import it (or vice versa).
+    """
+
+    advertised = set(qqa.__all__) - {"__version__"}
+    actually_present = {n for n in advertised if hasattr(qqa, n)}
+    missing = sorted(advertised - actually_present)
+    assert not missing, (
+        f"{missing!r} is listed in qqa.__all__ but not importable from "
+        "the top level — fix the import in src/qqa/__init__.py."
+    )
 
 
 def test_callback_re_export_is_the_same_object() -> None:

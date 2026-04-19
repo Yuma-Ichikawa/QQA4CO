@@ -33,11 +33,31 @@ _THIS = Path(__file__).resolve()
 
 
 def _default_data_dir() -> Path:
+    """Resolve the on-disk benchmark dataset directory.
+
+    Priority order:
+    1. ``$QQA_DATA_DIR`` if set — explicit user override.
+    2. ``<repo_root>/data`` if this module lives inside the source tree
+       (``src/qqa/datasets.py`` => ``parents[2] == repo_root``).
+    3. ``./data`` next to the current working directory — a sensible
+       fallback for wheel installs from PyPI where no source tree exists.
+
+    Loaders raise a clear ``FileNotFoundError`` when the resolved
+    directory does not contain the requested benchmark, so callers always
+    get an actionable message ("set QQA_DATA_DIR or pass path=") rather
+    than an opaque ``listdir`` error.
+    """
+
     env = os.environ.get("QQA_DATA_DIR")
     if env:
         return Path(env).expanduser().resolve()
-    # src/qqa/datasets.py -> repo_root = parents[2]
-    return _THIS.parents[2] / "data"
+    # When installed in editable / source mode, ``parents[2]`` is the
+    # repository root and ``parents[2] / "data"`` ships ``mis/er-small``.
+    repo_data = _THIS.parents[2] / "data"
+    if repo_data.is_dir():
+        return repo_data
+    # Wheel install fallback — let the user opt in via cwd/data.
+    return Path.cwd() / "data"
 
 
 DATA_DIR: Path = _default_data_dir()
@@ -45,8 +65,17 @@ DATA_DIR: Path = _default_data_dir()
 
 def _resolve(path: str | os.PathLike | None, default_subpath: str) -> Path:
     if path is not None:
-        return Path(path).expanduser().resolve()
-    return _default_data_dir() / default_subpath
+        resolved = Path(path).expanduser().resolve()
+    else:
+        resolved = _default_data_dir() / default_subpath
+    if not resolved.is_dir():
+        raise FileNotFoundError(
+            f"Benchmark directory {resolved!s} does not exist. "
+            "Set the QQA_DATA_DIR environment variable to point at the "
+            "QQA4CO repository's ``data/`` directory, or pass an explicit "
+            "``path=`` argument to this loader."
+        )
+    return resolved
 
 
 def _load_pickle(p: Path):
