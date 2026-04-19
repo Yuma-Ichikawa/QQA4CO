@@ -22,7 +22,20 @@ Spin-glass example::
     print("E_0 per spin:", result.best_obj / 100)
 """
 
+from __future__ import annotations
+
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
 from qqa.annealing import AnnealResult, anneal
+from qqa.callbacks import (
+    AutoDivTuner,
+    Callback,
+    CallbackState,
+    HistoryRecorder,
+    PopulationTracker,
+    TrajectoryTracker,
+)
 from qqa.problems import (
     QAP,
     TSP,
@@ -56,26 +69,39 @@ from qqa.relaxation import (
     BinaryInstanceRelaxation,
     BinaryRelaxation,
     CategoricalRelaxation,
+    Relaxation,
     SpinRelaxation,
 )
 from qqa.schedule import LinearBGSchedule
 from qqa.utils import fix_seed, generate_graph
 
-__version__ = "0.3.0"
+# Single-source the version from the wheel metadata so ``__version__`` is
+# always whatever ``pip install qqa`` actually installed. The fallback covers
+# editable installs where the metadata is occasionally absent (e.g. a
+# fresh ``git clone`` before any ``uv sync``); we surface the canonical
+# value of ``pyproject.toml`` so callers always get a real-looking string.
+try:
+    __version__ = _pkg_version("qqa")
+except PackageNotFoundError:  # pragma: no cover - editable install w/o metadata
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "QAP",
     "TSP",
     "AnnealResult",
+    "AutoDivTuner",
     "BalancedGraphPartition",
     "BinaryInstanceRelaxation",
     "BinaryPerceptron",
     "BinaryRelaxation",
-    "CategoricalRelaxation",
     "COProblem",
+    "Callback",
+    "CallbackState",
+    "CategoricalRelaxation",
     "Coloring",
     "EdwardsAnderson",
     "GraphBisection",
+    "HistoryRecorder",
     "HopfieldMemory",
     "Ising1D",
     "Knapsack",
@@ -89,10 +115,13 @@ __all__ = [
     "MaximumIndependentSetInstance",
     "NQueens",
     "NumberPartitioning",
+    "PopulationTracker",
     "QUBOProblem",
+    "Relaxation",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
+    "TrajectoryTracker",
     "UserProblem",
     "VertexCover",
     "__version__",

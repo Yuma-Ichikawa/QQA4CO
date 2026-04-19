@@ -1,6 +1,8 @@
 # API reference
 
-Below is the auto-generated documentation for the public modules.
+Below is the auto-generated documentation for the public modules. The
+[Backends reference](reference/backends.md) page is a hand-curated
+comparison if you only need to pick one entry point.
 
 ## Top-level
 
@@ -42,3 +44,20 @@ Below is the auto-generated documentation for the public modules.
 ## Visualization
 
 ::: qqa.visualization
+
+## Optional PyG backends
+
+The functions below require the `pignn` extra
+(`pip install "qqa[pignn]"`).
+
+::: qqa.pignn
+
+::: qqa.pignn.trainer
+    options:
+      members:
+        - train_cra_pi_gnn
+        - train_cpra_pi_gnn
+
+::: qqa.pignn.model
+
+::: qqa.pignn.graph

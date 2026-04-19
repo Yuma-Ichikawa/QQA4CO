@@ -49,20 +49,50 @@ uv run ruff check src tests scripts app
 uv run ruff format src tests scripts app
 ```
 
-## Adding a new problem
+## Quick commands (Makefile)
 
-1. Add a class to the appropriate file under `src/qqa/problems/`.
-2. Attach a `.relaxation` (Binary / Categorical / Spin) so `qqa.anneal()` can
-   dispatch.
-3. Export it from `src/qqa/problems/__init__.py` and `src/qqa/__init__.py`.
-4. Add a smoke test in `tests/` that solves a small instance and checks the
-   objective.
+The `Makefile` wraps the exact commands CI runs:
+
+```bash
+make install   # uv sync + pre-commit hooks
+make lint      # ruff check + ruff format --check
+make format    # rewrite with ruff format
+make test      # pytest -q
+make docs      # mkdocs build --strict
+make ci        # lint + test + docs (everything CI runs)
+make serve     # live mkdocs preview at http://localhost:8000
+```
+
+## Extending QQA4CO
+
+The full extension guide lives in
+[`docs/develop/extending.md`](docs/develop/extending.md). Short version:
+
+* **New problem** → subclass `qqa.COProblem`, attach a `relaxation`,
+  implement `loss_fn` (and ideally `score_summary`). Register in
+  `src/qqa/problems/__init__.py` and `src/qqa/__init__.py`. Add a smoke
+  test in `tests/`. Add a row to `docs/problems.md`.
+* **New relaxation** → implement the `qqa.Relaxation` `Protocol`.
+* **New schedule** → any `(epoch, T) -> float` callable; pass to
+  `qqa.anneal(schedule=...)`.
+* **New callback** → subclass `qqa.Callback`.
+* **New solver backend** → return `qqa.AnnealResult` from your trainer
+  function. See `qqa.pignn` for the canonical example.
+
+[`docs/develop/internals.md`](docs/develop/internals.md) is the source-tree
+map for new contributors.
 
 ## Submitting a PR
 
-- Ensure `ruff check`, `ruff format --check`, and `pytest` all pass locally.
+- Ensure `make ci` passes locally.
 - Describe what you changed and why in the PR body.
+- Add an entry to `CHANGELOG.md` under *Unreleased*.
 - Link to any relevant issues or papers.
+
+## Releasing
+
+See [`docs/develop/releasing.md`](docs/develop/releasing.md) for the
+full release checklist (versioning, CHANGELOG, tagging, PyPI upload).
 
 ## Reporting issues
 
@@ -70,4 +100,12 @@ Please include:
 
 - `qqa.__version__` and PyTorch version
 - A minimal reproducing snippet
-- Expected vs. observed behavior
+- Expected vs. observed behaviour
+
+For security issues, follow [`SECURITY.md`](SECURITY.md) instead of
+filing a public issue.
+
+## Code of Conduct
+
+This project follows the [Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
+By participating you agree to abide by its terms.
