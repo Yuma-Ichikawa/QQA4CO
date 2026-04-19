@@ -325,6 +325,73 @@ def test_plot_history_plotly_uses_qqa_theme():
     assert layout.title.x == 0.5
 
 
+def test_compare_page_renders_with_default_problem():
+    """The Compare page must render in the default 'sweep' mode without
+    crashing when a problem is already in session_state."""
+    at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=60)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 8,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+    # Top-of-sidebar mode selector must be present.
+    radio_labels = [r.label for r in at.sidebar.radio]
+    assert any("Compare mode" in lab for lab in radio_labels), (
+        f"Mode selector missing; got radios={radio_labels!r}"
+    )
+
+
+def test_compare_page_shootout_mode_runs_pqqa_vs_sa():
+    """Switch to the 'PQQA vs SA shootout' mode, click Run, and confirm
+    that the summary metrics for both backends render."""
+    at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=120)
+    at.session_state["problem_config"] = {
+        "kind": "ising1d",
+        "size": 8,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {},
+    }
+    at.run()
+    assert not at.exception, at.exception
+    # Flip the mode selector to shootout.
+    radios = [r for r in at.sidebar.radio if "Compare mode" in r.label]
+    assert radios, "Compare mode radio missing"
+    radios[0].set_value("PQQA vs SA shootout")
+    at.run()
+    assert not at.exception, at.exception
+
+    # Tighten the budget so the test runs in a few seconds.
+    for label, value in (
+        ("PQQA epochs", 100),
+        ("PQQA sol_size", 8),
+        ("SA num_sweeps", 100),
+        ("SA chains", 8),
+    ):
+        matches = [s for s in at.sidebar.slider if label in s.label]
+        if matches:
+            matches[0].set_value(value)
+    at.run()
+
+    runs = [b for b in at.button if "shootout" in b.label.lower() or "Run" in b.label]
+    assert runs, f"Run shootout button missing; buttons={[b.label for b in at.button]!r}"
+    runs[0].click()
+    at.run()
+    assert not at.exception, at.exception
+
+    metric_labels = [m.label for m in at.metric]
+    assert any("PQQA best_obj" in lab for lab in metric_labels), (
+        f"PQQA metric tile missing; got {metric_labels!r}"
+    )
+    assert any("SA best_obj" in lab for lab in metric_labels), (
+        f"SA metric tile missing; got {metric_labels!r}"
+    )
+
+
 def test_solution_viz_smoke_across_problem_kinds(tmp_path):
     """Every registered renderer in ``_solution_viz`` must accept a real
     ``(problem, result, cfg)`` triple without raising.
