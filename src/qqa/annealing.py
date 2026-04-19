@@ -20,6 +20,7 @@ import numpy as np
 import torch
 
 from qqa.callbacks import Callback, CallbackState, HistoryRecorder
+from qqa.polish import greedy_one_flip
 from qqa.relaxation import _default_penalty_from_forward
 from qqa.schedule import LinearBGSchedule
 from qqa.utils import require_cuda_if_requested, safe_score_summary
@@ -57,6 +58,13 @@ class AnnealResult:
     """Human-readable problem-specific score produced by
     :py:meth:`COProblem.score_summary` (``label``, ``value``, ``unit``,
     ``feasible``, ``extra``). Empty for batched-instance problems."""
+    polished_sol: torch.Tensor | None = None
+    """1-flip-locally-optimal version of :attr:`best_sol`, populated when
+    :func:`anneal` is called with ``polish=True`` (the default) on a QUBO
+    problem. ``None`` for non-QUBO problems or when polishing is disabled.
+    For QUBO problems ``best_sol`` / ``best_obj`` / ``score`` are *replaced*
+    by the polished result whenever it is strictly better, so callers that
+    just read ``best_sol`` automatically benefit from the polish."""
 
 
 def _is_instance_problem(problem) -> bool:
@@ -81,6 +89,8 @@ def anneal(
     record_history: bool = True,
     verbose: bool = True,
     mixed_precision: Literal["fp32", "bf16"] = "fp32",
+    initial_state: torch.Tensor | None = None,
+    polish: bool = True,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -125,6 +135,20 @@ def anneal(
         AdamW state stay in float32 for numerical stability. Defaults to
         ``"fp32"`` so behaviour is bit-for-bit identical to the legacy loop.
         On CPU this option is silently downgraded to ``"fp32"``.
+    initial_state:
+        Optional warm-start bitstring. Shape ``(N,)`` (broadcast to every
+        chain with light Gaussian jitter so the population still
+        diversifies) or ``(sol_size, N)`` (used verbatim). Particularly
+        effective on near-bipartite MaxCut where
+        :func:`qqa.warmstart.bfs_2color` already gives a 0.96+ ApR seed.
+        Ignored for batched-instance problems.
+    polish:
+        If ``True`` (default), run :func:`qqa.polish.greedy_one_flip` on the
+        winning bitstring at the end of training and replace ``best_sol`` /
+        ``best_obj`` / ``score`` with the polished result whenever it is
+        strictly better. The polish costs ``O(N · #flips)`` and is silently
+        skipped for problems without a ``Q_mat`` (Spin / Categorical /
+        batched-instance), so it is safe to leave on globally.
     """
     if sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
@@ -161,11 +185,32 @@ def anneal(
     cb_list.extend(callbacks)
 
     runtime_start = time()
-    x = relax.init(sol_size, problem, device)
+    is_batch = _is_instance_problem(problem)
+    if initial_state is not None and is_batch:
+        # Warm-starting batched-instance problems would require a
+        # per-instance seed tensor and is rarely useful — skip silently
+        # rather than impose a confusing shape contract.
+        initial_state = None
+    if initial_state is None:
+        x = relax.init(sol_size, problem, device)
+    else:
+        seed = initial_state.detach().to(device=device, dtype=torch.float32)
+        if seed.dim() == 1:
+            seed = seed.unsqueeze(0).expand(sol_size, -1).contiguous()
+        if seed.shape[0] != sol_size:
+            raise ValueError(
+                f"initial_state.shape[0]={seed.shape[0]} but sol_size={sol_size}; "
+                "supply either (N,) or (sol_size, N)."
+            )
+        # Inject a tiny Gaussian jitter (σ=0.05) so the chains are not bit-for-bit
+        # identical at t=0 — otherwise the diversity term has nothing to spread
+        # apart and the population collapses immediately. The clamp keeps the
+        # seed inside the [0, 1] cube even when the user passes raw {0,1} bits.
+        x = (seed + 0.05 * torch.randn_like(seed)).clamp_(0.0, 1.0)
+        x.requires_grad_(True)
     optimizer = torch.optim.AdamW([x], lr=learning_rate)
 
     hp = {"div_param": float(div_param)}
-    is_batch = _is_instance_problem(problem)
 
     with torch.no_grad():
         x_disc = relax.project(x)
@@ -298,6 +343,23 @@ def anneal(
     if not is_batch:
         score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
 
+    # Default-on greedy 1-flip polish. Noop for non-QUBO problems (no Q_mat)
+    # and for batched-instance problems (best_sol is 2-D and the polish
+    # contract is undefined). When the polish strictly improves the QUBO
+    # objective, we hot-swap best_sol / best_obj / score so callers reading
+    # ``result.best_sol`` automatically benefit.
+    polished_sol: torch.Tensor | None = None
+    if polish and not is_batch and getattr(problem, "Q_mat", None) is not None:
+        polished_sol = greedy_one_flip(problem, best_sol)
+        with torch.no_grad():
+            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
+        if pol_obj < best_obj:
+            best_sol = polished_sol
+            best_obj = pol_obj
+            score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
+            if verbose:
+                print(f"  POLISH    : 1-flip improved best_obj -> {best_obj}")
+
     return AnnealResult(
         best_sol=best_sol,
         best_obj=best_obj,
@@ -305,6 +367,7 @@ def anneal(
         history=history,
         callbacks=cb_list,
         score=score,
+        polished_sol=polished_sol,
     )
 
 

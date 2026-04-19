@@ -28,6 +28,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from qqa import polish, warmstart
 from qqa.annealing import AnnealResult, anneal
 from qqa.callbacks import (
     AutoDivTuner,
@@ -133,6 +134,8 @@ __all__ = [
     "fix_seed",
     "generate_graph",
     "load_problem_from_file",
+    "polish",
     "simulated_annealing",
     "user_problem_from_source",
+    "warmstart",
 ]
