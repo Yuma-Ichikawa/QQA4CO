@@ -1,8 +1,9 @@
 """Quasi-Quantum Annealing (QQA) for combinatorial and spin-glass optimization.
 
 Reference:
-    Y. Ichikawa, Y. Arai. "Continuous Tensor Relaxation for Finding Diverse
-    Solutions in Combinatorial Optimization." ICLR 2025.
+    Y. Ichikawa, Y. Arai. "Optimization by Parallel Quasi-Quantum Annealing
+    with Gradient-Based Sampling." ICLR 2025.
+    https://openreview.net/forum?id=9EfBeXaXf0  (arXiv:2409.02135)
 
 Typical usage::
 
