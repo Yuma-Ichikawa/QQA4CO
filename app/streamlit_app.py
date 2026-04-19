@@ -190,11 +190,16 @@ with st.sidebar:
             format_func=lambda s: _LABELS[s],
         )
         if _MISSING:
-            st.caption(
-                "ℹ️  The following problems are advertised by the README "
-                f"but not in the installed qqa version ({_qqa.__version__}): "
-                + ", ".join(_MISSING)
-                + ". `pip install -U qqa` to enable them."
+            # Loud, non-dismissable banner — a quiet ``st.caption`` was
+            # easy to miss and users repeatedly asked "where did p-spin /
+            # RFIM go?". Explicit > implicit.
+            st.warning(
+                f"⚠️  Your installed `qqa=={_qqa.__version__}` is missing "
+                f"{len(_MISSING)} problem(s) advertised by this UI: "
+                + ", ".join(f"**{m}**" for m in _MISSING)
+                + ". Run `pip install -U qqa` (or redeploy this app) to "
+                "enable them.",
+                icon="📦",
             )
 
         size_default = {"tsp": 8, "qap": 8, "nqueens": 8, "ea": 6, "rfim": 8, "pspin": 16}.get(
