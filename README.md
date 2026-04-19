@@ -24,7 +24,7 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
 </p>
 
 <p align="center">
-  <img src="data/fig/demo.gif" width="420" alt="QQA dashboard demo">
+  <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/demo.gif" width="420" alt="QQA dashboard demo">
 </p>
 
 ## What's in the box
@@ -55,7 +55,7 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
    runnable `examples/` notebook gallery (Open-in-Colab badges) and a
    `scripts/verify_all_problems.py` correctness sweep that benchmarks every
    problem against ground truth or a strong baseline (29 / 29 instances pass
-   in the latest sweep — see [`docs/verification.md`](docs/verification.md)).
+   in the latest sweep — see [`docs/verification.md`](https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/docs/verification.md)).
 
 ## Reference papers
 
@@ -321,7 +321,7 @@ hyperparameter choice across all three rows.
 Every class implements `score_summary(x_disc) -> dict` so the CLI and GUI can
 report a human-readable metric (`"IS size: 22"`, `"packed value: 358"`,
 `"tour length: 3.28"`) and a feasibility flag alongside the raw loss. Full
-mathematical definitions live in [`docs/problems.md`](docs/problems.md).
+mathematical definitions live in [`docs/problems.md`](https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/docs/problems.md).
 
 ## Command-line interface
 
@@ -369,7 +369,7 @@ The repository ships everything Streamlit Community Cloud needs:
 
 Re-deploys happen automatically on every push to `main`. The full runbook,
 common failure modes, and the health-check endpoint live in
-[`deploy/STREAMLIT_DEPLOY.md`](deploy/STREAMLIT_DEPLOY.md). Verify with:
+[`deploy/STREAMLIT_DEPLOY.md`](https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/deploy/STREAMLIT_DEPLOY.md). Verify with:
 
 ```bash
 uv run python scripts/check_streamlit_deploy.py
@@ -419,10 +419,10 @@ Every helper accepts `backend="matplotlib"` (default) or `backend="plotly"`.
   </thead>
   <tbody>
     <tr>
-      <td><img src="data/fig/gallery/history_sk.png" width="240" alt="SK dynamics"></td>
-      <td><img src="data/fig/gallery/best_sk.png"    width="240" alt="SK best trajectory"></td>
-      <td><img src="data/fig/gallery/solution_sk.png" width="240" alt="SK best solution"></td>
-      <td><img src="data/fig/gallery/population_sk.png" width="240" alt="SK parallel population"></td>
+      <td><img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/history_sk.png" width="240" alt="SK dynamics"></td>
+      <td><img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/best_sk.png"    width="240" alt="SK best trajectory"></td>
+      <td><img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/solution_sk.png" width="240" alt="SK best solution"></td>
+      <td><img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/population_sk.png" width="240" alt="SK parallel population"></td>
     </tr>
   </tbody>
 </table>
@@ -432,7 +432,7 @@ every catalog problem.</sub>
 
 The full per-problem gallery (MIS, Max-Cut, coloring, Ising 1D,
 Edwards–Anderson, SK, binary perceptron, Hopfield) is in
-[`docs/visualization.md`](docs/visualization.md). Regenerate the figures
+[`docs/visualization.md`](https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/docs/visualization.md). Regenerate the figures
 with `uv run python scripts/make_gallery.py`.
 
 ## Verified correctness
@@ -440,7 +440,7 @@ with `uv run python scripts/make_gallery.py`.
 We benchmark QQA against ground truth or a strong baseline for every problem
 in the catalog via `scripts/verify_all_problems.py`. The most recent sweep
 (29 instances across 9 problem families) lives in
-[`docs/verification.md`](docs/verification.md):
+[`docs/verification.md`](https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/docs/verification.md):
 
 | Problem                       | Instances              | Reference                       | QQA                                 |
 | ----------------------------- | ---------------------- | ------------------------------- | ----------------------------------- |
@@ -461,7 +461,7 @@ in place.
 
 ## Notebooks
 
-Nine runnable notebooks live in [`examples/`](examples/). Each carries an
+Nine runnable notebooks live in [`examples/`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/examples). Each carries an
 **Open in Colab** badge in its first cell and auto-installs `qqa`.
 
 | #   | Notebook                                  |

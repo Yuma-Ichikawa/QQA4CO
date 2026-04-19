@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.3.0"
-description = "Quasi-Quantum Annealing (QQA): a general-purpose GPU solver for combinatorial and spin-glass optimization."
+version = "0.4.0"
+description = "Quasi-Quantum Annealing (QQA): a general-purpose GPU solver for combinatorial and spin-glass optimization, with PI-GNN/CPRA and a parallel SA baseline."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENCE.txt" }
