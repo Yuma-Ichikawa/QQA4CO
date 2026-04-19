@@ -95,19 +95,28 @@ with st.sidebar:
             icon=":material/upgrade:",
         )
 
-# Hyper-parameter presets — each tuple is
-# (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
-#  div_param, update_every).
-_PRESETS = {
+# Hyper-parameter presets — backend-aware so the sidebar can scale knobs
+# to whatever solver is selected. Each backend owns its own preset
+# dict + apply function so adding a new solver later is a one-stop edit.
+#
+# PQQA: (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
+#        div_param, update_every).
+_PQQA_PRESETS = {
     "🏃  Fast smoke": (32, 200, 1.0, 0.0, -2.0, 0.1, 2, 0.0, 10),
     "🎯  Default": (64, 1000, 1.0, 0.0, -2.0, 0.1, 2, 0.0, 20),
     "🔬  Thorough": (128, 3000, 0.7, 0.05, -3.0, 0.2, 4, 0.0, 50),
 }
+# PA: (sol_size, num_temps, sweeps_per_temp, beta_start, beta_end,
+#      beta_schedule, resample, update_every_steps).
+_PA_PRESETS = {
+    "🏃  Fast smoke": (32, 30, 4, 0.1, 6.0, "geometric", "systematic", 1),
+    "🎯  Default": (128, 100, 10, 0.1, 10.0, "geometric", "systematic", 5),
+    "🔬  Thorough": (256, 200, 20, 0.05, 20.0, "geometric", "systematic", 10),
+}
 
 
-def _apply_preset(name: str) -> None:
-    """Write preset values into ``st.session_state`` so the widgets pick
-    them up on the next rerun."""
+def _apply_pqqa_preset(name: str) -> None:
+    """Seed PQQA-specific session_state keys from a preset tuple."""
     keys = (
         "sol_size",
         "epochs",
@@ -119,155 +128,194 @@ def _apply_preset(name: str) -> None:
         "div_param",
         "update_every",
     )
-    for k, v in zip(keys, _PRESETS[name], strict=True):
+    for k, v in zip(keys, _PQQA_PRESETS[name], strict=True):
         st.session_state[k] = v
 
 
-with st.sidebar:
-    st.header("3 · QQA hyper-parameters")
-    if backend != "PQQA":
-        st.caption(
-            ":material/info: PQQA controls below are inactive — PA "
-            "uses its own knobs further down the sidebar."
-        )
-    preset_name = st.radio(
-        "Preset",
-        list(_PRESETS),
-        index=1,
-        horizontal=False,
-        help="Quickly seed every slider below. You can still tweak any value.",
+def _apply_pa_preset(name: str) -> None:
+    """Seed PA-specific session_state keys from a preset tuple."""
+    keys = (
+        "pa_sol_size",
+        "pa_num_temps",
+        "pa_sweeps_per_temp",
+        "pa_beta_start",
+        "pa_beta_end",
+        "pa_beta_schedule",
+        "pa_resample",
+        "pa_update_every",
     )
-    if st.button("Apply preset", width="stretch"):
-        _apply_preset(preset_name)
-        st.rerun()
+    for k, v in zip(keys, _PA_PRESETS[name], strict=True):
+        st.session_state[k] = v
 
-    with st.expander("Population & schedule", expanded=True):
-        sol_size = st.slider(
-            "sol_size",
-            4,
-            400,
-            st.session_state.get("sol_size", 64),
-            key="sol_size",
-            help="Number of parallel replicas annealed in lockstep.",
-        )
-        epochs = st.slider(
-            "epochs",
-            100,
-            5000,
-            st.session_state.get("epochs", 1000),
-            step=100,
-            key="epochs",
-            help="Total annealing iterations.",
-        )
-        curve_rate = st.selectbox(
-            "curve rate",
-            (2, 4, 6),
-            index=(2, 4, 6).index(st.session_state.get("curve_rate", 2)),
-            key="curve_rate",
-            help="Steepness of the bias schedule (higher = more abrupt).",
-        )
 
-    with st.expander("Optimiser", expanded=False):
-        learning_rate = st.slider(
-            "learning rate",
-            0.05,
-            3.0,
-            st.session_state.get("learning_rate", 1.0),
-            0.05,
-            key="learning_rate",
-            help="Adam step size for the relaxed variables.",
+# -----------------------------------------------------------------------
+# Backend-conditional sidebar.
+#
+# We render *only* the controls that affect the selected backend. PQQA's
+# learning_rate / Langevin temp / cooling schedule have no PA analogue, and
+# PA's R / num_temps / β grid have no PQQA analogue, so showing both at
+# once made the sidebar long and the "inactive controls" surface area
+# noisy (cf. the screenshot regression that motivated this refactor).
+# -----------------------------------------------------------------------
+if backend == "PQQA":
+    with st.sidebar:
+        st.header("3 · PQQA hyper-parameters")
+        st.caption("Parallel Quasi-Quantum Annealing — gradient-based solver.")
+        preset_name = st.radio(
+            "Preset",
+            list(_PQQA_PRESETS),
+            index=1,
+            horizontal=False,
+            help="Quickly seed every PQQA slider. You can still tweak any value.",
+            key="pqqa_preset",
         )
-        temp = st.slider(
-            "Langevin temperature",
-            0.0,
-            1.0,
-            st.session_state.get("temp", 0.0),
-            0.01,
-            key="temp",
-            help="Magnitude of the stochastic noise injected each step (0 = deterministic).",
-        )
+        if st.button("Apply preset", width="stretch", key="apply_pqqa_preset_btn"):
+            _apply_pqqa_preset(preset_name)
+            st.rerun()
 
-    with st.expander("Cooling / diversity", expanded=False):
-        min_bg = st.slider(
-            "min bg",
-            -5.0,
-            0.0,
-            st.session_state.get("min_bg", -2.0),
-            0.1,
-            key="min_bg",
-            help="Initial bias-gain (smooth, exploratory).",
-        )
-        max_bg = st.slider(
-            "max bg",
-            0.0,
-            2.0,
-            st.session_state.get("max_bg", 0.1),
-            0.1,
-            key="max_bg",
-            help="Final bias-gain (sharp, near-discrete).",
-        )
-        div_param = st.slider(
-            "div_param",
-            0.0,
-            1.0,
-            st.session_state.get("div_param", 0.0),
-            0.01,
-            key="div_param",
-            help="Repulsion strength between replicas (0 = independent runs).",
-        )
+        with st.expander("Population & schedule", expanded=True):
+            sol_size = st.slider(
+                "sol_size",
+                4,
+                400,
+                st.session_state.get("sol_size", 64),
+                key="sol_size",
+                help="Number of parallel replicas annealed in lockstep.",
+            )
+            epochs = st.slider(
+                "epochs",
+                100,
+                5000,
+                st.session_state.get("epochs", 1000),
+                step=100,
+                key="epochs",
+                help="Total annealing iterations.",
+            )
+            curve_rate = st.selectbox(
+                "curve rate",
+                (2, 4, 6),
+                index=(2, 4, 6).index(st.session_state.get("curve_rate", 2)),
+                key="curve_rate",
+                help="Steepness of the bias schedule (higher = more abrupt).",
+            )
 
-    with st.expander("Post-processing & warm-start", expanded=False):
-        polish = st.toggle(
-            "Greedy 1-flip polish (recommended)",
-            value=st.session_state.get("polish", True),
-            key="polish",
-            help=(
-                "Run a deterministic single-bit local search on the "
-                "annealer's winner. Costs O(N · #flips) and is silently "
-                "skipped on non-QUBO problems (Spin / Categorical). "
-                "Typical free improvement of +10 to +90 on hard MaxCut / "
-                "MIS / VertexCover instances."
-            ),
-        )
-        # Warm-start only makes sense when the problem exposes a NetworkX
-        # graph the BFS heuristic can read. We surface the toggle for *any*
-        # graph problem and gate the actual call on the problem object at
-        # runtime — this keeps the sidebar layout stable across kinds.
-        warm_start = st.toggle(
-            "BFS 2-color warm-start (graph QUBOs only)",
-            value=st.session_state.get("warm_start", False),
-            key="warm_start",
-            help=(
-                "Seed every replica with the BFS-tree 2-coloring of the "
-                "graph (a near-optimal cut on bipartite components). "
-                "Particularly effective on near-bipartite Max-Cut "
-                "instances (G-set G70 / G77). Has no effect on non-graph "
-                "problems."
-            ),
-        )
+        with st.expander("Optimiser", expanded=False):
+            learning_rate = st.slider(
+                "learning rate",
+                0.05,
+                3.0,
+                st.session_state.get("learning_rate", 1.0),
+                0.05,
+                key="learning_rate",
+                help="Adam step size for the relaxed variables.",
+            )
+            temp = st.slider(
+                "Langevin temperature",
+                0.0,
+                1.0,
+                st.session_state.get("temp", 0.0),
+                0.01,
+                key="temp",
+                help="Magnitude of stochastic noise per step (0 = deterministic).",
+            )
 
-    with st.expander("Display", expanded=False):
-        update_every = st.slider(
-            "UI update every (epochs)",
-            1,
-            200,
-            st.session_state.get("update_every", 20),
-            key="update_every",
-            help="Lower = smoother animation but slower wall-clock; higher = faster.",
-        )
+        with st.expander("Cooling / diversity", expanded=False):
+            min_bg = st.slider(
+                "min bg",
+                -5.0,
+                0.0,
+                st.session_state.get("min_bg", -2.0),
+                0.1,
+                key="min_bg",
+                help="Initial bias-gain (smooth, exploratory).",
+            )
+            max_bg = st.slider(
+                "max bg",
+                0.0,
+                2.0,
+                st.session_state.get("max_bg", 0.1),
+                0.1,
+                key="max_bg",
+                help="Final bias-gain (sharp, near-discrete).",
+            )
+            div_param = st.slider(
+                "div_param",
+                0.0,
+                1.0,
+                st.session_state.get("div_param", 0.0),
+                0.01,
+                key="div_param",
+                help="Repulsion strength between replicas (0 = independent runs).",
+            )
 
-    if backend != "PQQA":
-        st.divider()
-        st.header("3′ · PA hyper-parameters")
+        with st.expander("Post-processing & warm-start", expanded=False):
+            polish = st.toggle(
+                "Greedy 1-flip polish (recommended)",
+                value=st.session_state.get("polish", True),
+                key="polish",
+                help=(
+                    "Run a deterministic single-bit local search on the "
+                    "annealer's winner. Skipped on non-QUBO problems."
+                ),
+            )
+            # Warm-start only makes sense when the problem exposes a
+            # NetworkX graph the BFS heuristic can read. We surface the
+            # toggle for any graph problem and gate the call at runtime.
+            warm_start = st.toggle(
+                "BFS 2-color warm-start (graph QUBOs only)",
+                value=st.session_state.get("warm_start", False),
+                key="warm_start",
+                help="Seed each replica with the BFS-tree 2-coloring.",
+            )
+
+        with st.expander("Display", expanded=False):
+            update_every = st.slider(
+                "UI update every (epochs)",
+                1,
+                200,
+                st.session_state.get("update_every", 20),
+                key="update_every",
+                help="Lower = smoother animation but slower wall-clock.",
+            )
+else:
+    # PA mode: render *only* PA's knobs. The PQQA-only variables below
+    # are bound to safe defaults so the rest of this file (which still
+    # references them inside the `if backend == "PQQA"` run block) stays
+    # syntactically valid.
+    sol_size = st.session_state.get("sol_size", 64)
+    epochs = st.session_state.get("epochs", 1000)
+    curve_rate = st.session_state.get("curve_rate", 2)
+    learning_rate = st.session_state.get("learning_rate", 1.0)
+    temp = st.session_state.get("temp", 0.0)
+    min_bg = st.session_state.get("min_bg", -2.0)
+    max_bg = st.session_state.get("max_bg", 0.1)
+    div_param = st.session_state.get("div_param", 0.0)
+    polish = st.session_state.get("polish", True)
+    warm_start = st.session_state.get("warm_start", False)
+    update_every = st.session_state.get("update_every", 20)
+
+    with st.sidebar:
+        st.header("3 · PA hyper-parameters")
         st.caption(
-            "Population Annealing with resampling. PA records its full "
-            "genealogy and an equilibrium population at β_end so the "
-            "Visualize page can show a resampling family tree and a "
-            "free-energy density curve."
+            "Hukushima–Iba Population Annealing with resampling. Returns "
+            "an equilibrium population, free-energy estimate, and a full "
+            "resampling genealogy."
         )
+        pa_preset_name = st.radio(
+            "Preset",
+            list(_PA_PRESETS),
+            index=1,
+            horizontal=False,
+            help="Seed every PA slider in one click.",
+            key="pa_preset",
+        )
+        if st.button("Apply preset", width="stretch", key="apply_pa_preset_btn"):
+            _apply_pa_preset(pa_preset_name)
+            st.rerun()
+
         with st.expander("Population & schedule", expanded=True):
             pa_sol_size = st.slider(
-                "PA population (sol_size)",
+                "PA population (R)",
                 4,
                 512,
                 st.session_state.get("pa_sol_size", 128),
@@ -275,22 +323,24 @@ with st.sidebar:
                 help="Number of replicas carried through resampling.",
             )
             pa_num_temps = st.slider(
-                "num_temps",
+                "num_temps (T)",
                 10,
                 500,
                 st.session_state.get("pa_num_temps", 100),
                 step=10,
                 key="pa_num_temps",
-                help="Number of inverse-temperature steps in the schedule.",
+                help="Number of inverse-temperature steps.",
             )
             pa_sweeps_per_temp = st.slider(
-                "sweeps_per_temp",
+                "sweeps_per_temp (K)",
                 1,
                 50,
                 st.session_state.get("pa_sweeps_per_temp", 10),
                 key="pa_sweeps_per_temp",
-                help="MCMC sweeps after each resampling step (K in the textbook).",
+                help="MCMC sweeps after each resampling step.",
             )
+
+        with st.expander("β schedule", expanded=False):
             pa_beta_start = st.slider(
                 "β_start",
                 0.01,
@@ -298,6 +348,7 @@ with st.sidebar:
                 st.session_state.get("pa_beta_start", 0.1),
                 step=0.01,
                 key="pa_beta_start",
+                help="Initial inverse temperature.",
             )
             pa_beta_end = st.slider(
                 "β_end",
@@ -306,22 +357,40 @@ with st.sidebar:
                 st.session_state.get("pa_beta_end", 10.0),
                 step=0.5,
                 key="pa_beta_end",
+                help="Final inverse temperature (= 1/T_min).",
             )
             pa_beta_schedule = st.selectbox(
                 "β schedule",
                 ["geometric", "linear"],
-                index=0,
+                index=["geometric", "linear"].index(
+                    st.session_state.get("pa_beta_schedule", "geometric")
+                ),
                 key="pa_beta_schedule",
+                help="Geometric (recommended for spin-glass) or linear.",
             )
+
+        with st.expander("Resampling", expanded=False):
             pa_resample = st.selectbox(
                 "Resampling rule",
                 ["systematic", "multinomial"],
-                index=0,
+                index=["systematic", "multinomial"].index(
+                    st.session_state.get("pa_resample", "systematic")
+                ),
                 key="pa_resample",
                 help=(
-                    "Systematic = low-variance (Doucet & Johansen, "
-                    "2008). Multinomial = standard SMC baseline."
+                    "Systematic = low-variance (Doucet & Johansen, 2008). "
+                    "Multinomial = textbook baseline (higher variance)."
                 ),
+            )
+
+        with st.expander("Display", expanded=False):
+            pa_update_every = st.slider(
+                "UI update every (steps)",
+                1,
+                25,
+                st.session_state.get("pa_update_every", 5),
+                key="pa_update_every",
+                help="Lower = smoother live charts but slower wall-clock.",
             )
 
 
@@ -739,7 +808,7 @@ if run and backend != "PQQA":
     pa_steps: list[int] = []
 
     pa_total_steps = int(pa_num_temps)
-    pa_update_every = max(1, pa_total_steps // 50)
+    pa_update_every = max(1, int(st.session_state.get("pa_update_every", 5)))
     pa_t0 = time.time()
 
     def _pa_callback(step: int, mean_loss: float, best_obj: float, ess: float) -> None:
@@ -762,9 +831,21 @@ if run and backend != "PQQA":
             r6.metric("R", f"{int(pa_sol_size)}")
             r7.metric("K", f"{int(pa_sweeps_per_temp)}")
             r8.metric("backend", "PA")
-        # Live convergence plot
+        # Live convergence plot. Two stacked sub-plots so the loss and ESS
+        # curves do not fight for the same y-axis (the screenshot regression
+        # had the legend, "best so far" line and "ESS" line all overlapping
+        # in the corner because they shared the plot area).
         p = palette()
-        fig = go.Figure()
+        from plotly.subplots import make_subplots  # noqa: PLC0415
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            row_heights=[0.65, 0.35],
+            vertical_spacing=0.06,
+            subplot_titles=("Loss vs temperature step", "Effective Sample Size"),
+        )
         fig.add_trace(
             go.Scatter(
                 x=pa_steps,
@@ -772,7 +853,9 @@ if run and backend != "PQQA":
                 mode="lines",
                 name="mean / replica",
                 line={"color": p["palette"][0], "width": 2},
-            )
+            ),
+            row=1,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
@@ -781,26 +864,51 @@ if run and backend != "PQQA":
                 mode="lines",
                 name="best so far",
                 line={"color": p["palette"][1], "width": 2.4},
-            )
+            ),
+            row=1,
+            col=1,
         )
         fig.add_trace(
             go.Scatter(
                 x=pa_steps,
                 y=pa_ess,
                 mode="lines",
-                yaxis="y2",
                 name="ESS",
-                line={"color": p["palette"][2], "width": 1.5, "dash": "dot"},
-            )
+                line={"color": p["palette"][2], "width": 1.8},
+                fill="tozeroy",
+                fillcolor=hex_to_rgba(p["palette"][2], 0.18),
+            ),
+            row=2,
+            col=1,
         )
+        # ESS ceiling = R guideline (Kish: ESS ∈ [1, R]).
+        fig.add_trace(
+            go.Scatter(
+                x=[pa_steps[0] if pa_steps else 0, pa_steps[-1] if pa_steps else 1],
+                y=[int(pa_sol_size), int(pa_sol_size)],
+                mode="lines",
+                name=f"R = {int(pa_sol_size)}",
+                line={"color": p["muted"], "width": 1, "dash": "dash"},
+                showlegend=True,
+                hoverinfo="skip",
+            ),
+            row=2,
+            col=1,
+        )
+        fig.update_xaxes(title_text="Temperature step", row=2, col=1)
+        fig.update_yaxes(title_text="Loss", row=1, col=1)
+        fig.update_yaxes(title_text="ESS", row=2, col=1, range=[0, int(pa_sol_size) * 1.05])
         fig.update_layout(
             **plotly_layout(
-                height=360,
-                title={"text": "PA dynamics (loss + ESS)"},
-                xaxis_title="Temperature step",
-                yaxis_title="Loss",
-                yaxis2={"overlaying": "y", "side": "right", "title": "ESS"},
-                legend={"x": 0.01, "y": 0.99},
+                height=460,
+                legend={
+                    "orientation": "h",
+                    "x": 0.0,
+                    "y": 1.10,
+                    "xanchor": "left",
+                    "yanchor": "bottom",
+                },
+                margin={"t": 70, "b": 50, "l": 60, "r": 40},
             )
         )
         chart.plotly_chart(fig, width="stretch", theme=None, config={"displayModeBar": False})

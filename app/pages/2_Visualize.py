@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import math
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ import streamlit as st  # noqa: E402
 from _common import (  # noqa: E402
     apply_theme,
     empty_state_card,
+    hex_to_rgba,
     palette,
     paper_link_footer,
     plotly_layout,
@@ -81,6 +83,11 @@ if is_pa:
         f"{result.final_x.shape[0]}" if result.final_x is not None else "—",
     )
 
+# "Family tree" is now backend-agnostic and always present:
+#   * PA → Muller plot of resampling-induced founder takeover
+#   * PQQA → hierarchical-clustering dendrogram + per-clade energy evolution
+# That answers the user request to have a tree-style view that *adapts*
+# to the selected backend rather than hiding behind a "PA-only" label.
 base_tabs = [
     "Solution",
     "Dynamics",
@@ -92,8 +99,9 @@ base_tabs = [
     "Loss spectrogram",
     "Ridgeline",
     "Replica fate",
+    "Family tree",
 ]
-pa_extra_tabs = ["PA: ESS / β", "PA: Free energy", "PA: Equilibrium pop.", "PA: Family tree"]
+pa_extra_tabs = ["PA: ESS / β", "PA: Free energy", "PA: Equilibrium pop."]
 all_tabs = base_tabs + (pa_extra_tabs if is_pa else [])
 _tabs = st.tabs(all_tabs)
 (
@@ -107,9 +115,10 @@ _tabs = st.tabs(all_tabs)
     tab_spec,
     tab_ridge,
     tab_fate,
-) = _tabs[:10]
+    tab_tree,
+) = _tabs[:11]
 if is_pa:
-    tab_pa_ess, tab_pa_fe, tab_pa_eq, tab_pa_tree = _tabs[10:14]
+    tab_pa_ess, tab_pa_fe, tab_pa_eq = _tabs[11:14]
 
 
 def _retheme(fig):
@@ -698,171 +707,333 @@ if is_pa:
         else:
             st.info("No equilibrium population stored.")
 
-    with tab_pa_tree:
-        if pa.genealogy is None:
+with tab_tree:
+    # Backend-aware family tree.
+    #   * PA → resampling-induced founder takeover (Muller plot etc).
+    #   * PQQA → hierarchical clustering of the final population (true
+    #     dendrogram) + per-clade energy trajectory showing mode formation.
+    import plotly.graph_objects as go  # noqa: PLC0415
+
+    p = palette()
+    _pa = result if is_pa else None
+    if is_pa and _pa is not None and _pa.genealogy is not None:
+        import math as _math  # noqa: PLC0415
+
+        pa = _pa
+
+        st.markdown(
+            "##### PA family tree — resampling-driven genealogy\n"
+            "Each replica's lineage is reconstructed by composing parent "
+            "indices step-by-step. Bands appearing / expanding / going "
+            "extinct are *clonal sweeps* in real time."
+        )
+
+        parents = pa.genealogy["parents"]
+        ancestors = pa.genealogy["ancestors"]
+        betas_g = pa.genealogy.get("betas", list(range(len(parents) + 1)))
+
+        R = ancestors.shape[0]
+        T = len(parents)
+
+        # Compose parent maps to recover ``mat[t, r]`` = founder of slot
+        # ``r`` at step ``t``. ``parents[t][i]`` is the slot copied
+        # forward into ``i`` at time ``t+1``; chained composition gives
+        # each survivor's root founder.
+        current = np.arange(R)
+        anc_through_time = [current]
+        for t in range(T):
+            current = current[parents[t].cpu().numpy()]
+            anc_through_time.append(current)
+        mat = np.stack(anc_through_time, axis=0)  # (T+1, R)
+        n_surv = np.array([len(np.unique(mat[t])) for t in range(T + 1)])
+
+        shares = np.zeros((T + 1, R), dtype=float)
+        for t in range(T + 1):
+            shares[t] = np.bincount(mat[t], minlength=R) / R
+
+        betas_arr = np.asarray(betas_g, dtype=float)
+        x_axis = (
+            np.concatenate([[0.5 * float(betas_arr.min())], betas_arr])
+            if betas_arr.size == T
+            else np.arange(T + 1)
+        )
+
+        # ----- Muller plot (stacked area founder shares) -----------------
+        # Sort founders so dominant ones cluster near the bottom of the
+        # stack — strongest "selective sweeps" rise like a wave. Sort by
+        # total area under the curve.
+        order = np.argsort(shares.sum(axis=0))[::-1]  # large → small
+        shares_sorted = shares[:, order]
+        colorscale = "Turbo"
+        cum = np.zeros_like(x_axis, dtype=float)
+        fig_muller = go.Figure()
+        for k in range(R):
+            share = shares_sorted[:, k]
+            if share.max() == 0.0:
+                continue
+            upper = cum + share
+            colour_t = float(order[k]) / max(1.0, R - 1.0)
+            rgb = [
+                int(255 * v)
+                for v in [
+                    0.18 + 0.82 * abs(_math.sin(3.0 * colour_t + 0.3)),
+                    0.30 + 0.55 * abs(_math.sin(2.0 * colour_t + 1.7)),
+                    0.40 + 0.55 * abs(_math.sin(1.5 * colour_t + 3.3)),
+                ]
+            ]
+            rgba = f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.92)"
+            fig_muller.add_trace(
+                go.Scatter(
+                    x=np.concatenate([x_axis, x_axis[::-1]]),
+                    y=np.concatenate([upper, cum[::-1]]),
+                    fill="toself",
+                    fillcolor=rgba,
+                    line={"color": "rgba(0,0,0,0)"},
+                    hoverinfo="skip",
+                    showlegend=False,
+                    mode="lines",
+                )
+            )
+            cum = upper
+
+        fig_muller.update_layout(
+            **plotly_layout(
+                title={
+                    "text": (
+                        f"PA Muller plot — founder shares vs β "
+                        f"(R = {R}; final founders = {int(n_surv[-1])})"
+                    )
+                },
+                xaxis_title="β (anneal progress, log)" if betas_arr.size == T else "step",
+                yaxis_title="Population share",
+                xaxis={"type": "log"} if betas_arr.size == T else None,
+                yaxis={"range": [0, 1], "tickvals": [0, 0.25, 0.5, 0.75, 1.0]},
+                height=420,
+            )
+        )
+        st.plotly_chart(fig_muller, width="stretch")
+
+        # ----- Sorted ancestry matrix (heatmap) --------------------------
+        sorted_mat = np.sort(mat, axis=1)
+        fig_mat = go.Figure(
+            go.Heatmap(
+                z=sorted_mat.T,
+                x=np.arange(T + 1),
+                colorscale=colorscale,
+                zmin=0,
+                zmax=R - 1,
+                showscale=True,
+                colorbar={"title": "founder id", "thickness": 12, "len": 0.85},
+                hovertemplate=("step %{x}<br>sorted-replica %{y}<br>founder %{z}<extra></extra>"),
+            )
+        )
+        fig_mat.update_layout(
+            **plotly_layout(
+                title={"text": "Sorted ancestry matrix — clades widen / pinch off"},
+                xaxis_title="Temperature step",
+                yaxis_title="Replica (sorted by founder per step)",
+                height=380,
+            )
+        )
+        st.plotly_chart(fig_mat, width="stretch")
+
+        # ----- Survivor curve --------------------------------------------
+        fig_n = go.Figure()
+        fig_n.add_trace(
+            go.Scatter(
+                x=x_axis,
+                y=n_surv.tolist(),
+                mode="lines+markers",
+                line={"color": p["palette"][1], "width": 2.4},
+                name="distinct surviving founders",
+            )
+        )
+        fig_n.add_trace(
+            go.Scatter(
+                x=[float(x_axis.min()), float(x_axis.max())],
+                y=[R / _math.e, R / _math.e],
+                mode="lines",
+                line={"color": p["muted"], "width": 1, "dash": "dash"},
+                name=f"R/e ≈ {R / _math.e:.0f}",
+            )
+        )
+        fig_n.update_layout(
+            **plotly_layout(
+                title={
+                    "text": "Population collapse — surviving founders vs β "
+                    f"(R = {R}; final = {int(n_surv[-1])})"
+                },
+                xaxis_title="β" if betas_arr.size == T else "step",
+                yaxis_title="distinct ancestors",
+                xaxis={"type": "log"} if betas_arr.size == T else None,
+                height=300,
+            )
+        )
+        st.plotly_chart(fig_n, width="stretch")
+
+        st.caption(
+            "**Muller plot** *(top)* shows each founder's lineage as a "
+            "coloured band — bands appearing/expanding/going extinct "
+            "are clonal sweeps in real time. **Sorted ancestry matrix** "
+            "*(middle)* puts the same data on a heatmap with replicas "
+            "sorted by founder, so clades read off as horizontal stripes. "
+            "**Survivor curve** *(bottom)* tracks distinct founders vs β "
+            "with the R/e bottleneck guideline."
+        )
+
+    elif (not is_pa) and pop_tracker is not None and pop_tracker.x:
+        # PQQA pseudo-genealogy: replicas never resample, but they collapse
+        # into a small number of *modes* via the gradient. We expose this
+        # collapse with two complementary views:
+        #   1. Hierarchical-clustering dendrogram of the final population
+        #      (literal tree — answers "which final basins are siblings").
+        #   2. Per-clade mean-energy trajectory across epochs (shows when
+        #      the clades diverged from a common ancestor distribution).
+        st.markdown(
+            "##### PQQA family tree — mode-collapse pseudo-genealogy\n"
+            "PQQA has no resampling, so we cluster the *final* population "
+            "by Hamming distance and trace each cluster's mean energy "
+            "back through time. The dendrogram shows which basins are "
+            "siblings; the trajectory plot shows when they diverged."
+        )
+
+        try:
+            from scipy.cluster.hierarchy import dendrogram, fcluster, linkage  # noqa: PLC0415
+            from scipy.spatial.distance import pdist  # noqa: PLC0415
+        except Exception:  # pragma: no cover
+            st.warning(
+                "scipy is required for the PQQA dendrogram. Install with `pip install scipy`."
+            )
+        else:
+            x_final = np.asarray(pop_tracker.x[-1])
+            x_flat = x_final.reshape(x_final.shape[0], -1).astype(np.float32)
+            B = x_flat.shape[0]
+            # Hamming distance for binary {0,1}/{-1,+1} states; falls back
+            # to Euclidean for floating-point relaxations.
+            uniq = np.unique(x_flat)
+            metric = "hamming" if uniq.size <= 4 and B >= 2 else "euclidean"
+            try:
+                dist_vec = pdist(x_flat, metric=metric)
+                Z = linkage(dist_vec, method="average")
+            except Exception as exc:
+                st.info(f"Could not build dendrogram: {exc}")
+                Z = None
+
+            if Z is not None:
+                # ---- Dendrogram (literal phylogenetic tree) ------------
+                # ``no_plot=True`` runs the layout without matplotlib so we
+                # can rebuild it in Plotly (matches the rest of the page).
+                ddata = dendrogram(Z, no_plot=True, color_threshold=None)
+                fig_dend = go.Figure()
+                for xs, ys in zip(ddata["icoord"], ddata["dcoord"], strict=True):
+                    fig_dend.add_trace(
+                        go.Scatter(
+                            x=xs,
+                            y=ys,
+                            mode="lines",
+                            line={"color": p["palette"][0], "width": 1.6},
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
+                fig_dend.update_layout(
+                    **plotly_layout(
+                        title={
+                            "text": (
+                                "PQQA dendrogram — average-linkage hierarchical "
+                                f"clustering of the final population (B = {B}, "
+                                f"metric = {metric})"
+                            )
+                        },
+                        xaxis_title="Replica (re-ordered by clustering)",
+                        yaxis_title=f"Linkage distance ({metric})",
+                        xaxis={"showticklabels": False},
+                        height=380,
+                    )
+                )
+                st.plotly_chart(fig_dend, width="stretch")
+
+                # ---- Per-clade energy trajectory -----------------------
+                # Cut the tree at √B clusters (capped at 8) — small enough
+                # to be readable, large enough to capture multi-modality.
+                k_clusters = max(2, min(8, int(round(math.sqrt(B)))))
+                labels = fcluster(Z, t=k_clusters, criterion="maxclust")
+                # Map labels to dense 0..k-1 ordered by cluster size.
+                _, counts = np.unique(labels, return_counts=True)
+                order_by_size = np.argsort(-counts)  # largest first
+                relabel = {old + 1: new for new, old in enumerate(order_by_size)}
+                clade = np.array([relabel[int(lbl)] for lbl in labels])
+
+                epochs_pqqa = np.asarray(pop_tracker.epochs)
+                loss_mat = np.stack(pop_tracker.loss, axis=0)  # (T, B)
+                fig_clade = go.Figure()
+                for k in range(k_clusters):
+                    mask = clade == k
+                    if not mask.any():
+                        continue
+                    mean_loss = loss_mat[:, mask].mean(axis=1)
+                    band_lo = loss_mat[:, mask].min(axis=1)
+                    band_hi = loss_mat[:, mask].max(axis=1)
+                    colour = p["palette"][k % len(p["palette"])]
+                    fig_clade.add_trace(
+                        go.Scatter(
+                            x=np.concatenate([epochs_pqqa, epochs_pqqa[::-1]]),
+                            y=np.concatenate([band_hi, band_lo[::-1]]),
+                            fill="toself",
+                            fillcolor=hex_to_rgba(colour, 0.12),
+                            line={"color": "rgba(0,0,0,0)"},
+                            showlegend=False,
+                            hoverinfo="skip",
+                        )
+                    )
+                    fig_clade.add_trace(
+                        go.Scatter(
+                            x=epochs_pqqa,
+                            y=mean_loss,
+                            mode="lines",
+                            name=f"clade {k} (n={int(mask.sum())})",
+                            line={"color": colour, "width": 2},
+                        )
+                    )
+                fig_clade.update_layout(
+                    **plotly_layout(
+                        title={
+                            "text": (
+                                f"Per-clade energy trajectory — {k_clusters} "
+                                f"final modes traced back through training"
+                            )
+                        },
+                        xaxis_title="Epoch",
+                        yaxis_title="Loss",
+                        height=380,
+                        legend={"orientation": "h", "y": -0.18},
+                    )
+                )
+                st.plotly_chart(fig_clade, width="stretch")
+
+                st.caption(
+                    "**Dendrogram** *(top)* clusters the final population "
+                    "by Hamming/Euclidean distance — short branches are "
+                    "near-duplicate solutions, long branches are distinct "
+                    "basins. **Per-clade energy trajectory** *(bottom)* "
+                    "follows each final clade's mean loss back through "
+                    "epochs, with the shaded band giving min–max spread. "
+                    "Bifurcating bands mark when the population committed "
+                    "to different basins."
+                )
+
+    else:
+        if is_pa:
             st.info(
                 "Family tree unavailable — re-run from the **Solve** page "
                 "with the PA backend (genealogy is recorded by default in "
                 "this UI). PA's API also accepts ``record_genealogy=True``."
             )
         else:
-            import math as _math  # noqa: PLC0415
-
-            parents = pa.genealogy["parents"]
-            ancestors = pa.genealogy["ancestors"]
-            betas_g = pa.genealogy.get("betas", list(range(len(parents) + 1)))
-
-            R = ancestors.shape[0]
-            T = len(parents)
-
-            # Compose parent maps to recover ``mat[t, r]`` = founder of slot
-            # ``r`` at step ``t``. ``parents[t][i]`` is the slot copied
-            # forward into ``i`` at time ``t+1``; chained composition gives
-            # each survivor's root founder.
-            current = np.arange(R)
-            anc_through_time = [current]
-            for t in range(T):
-                current = current[parents[t].cpu().numpy()]
-                anc_through_time.append(current)
-            mat = np.stack(anc_through_time, axis=0)  # (T+1, R)
-            n_surv = np.array([len(np.unique(mat[t])) for t in range(T + 1)])
-
-            # Per-step founder shares for the Muller plot.
-            shares = np.zeros((T + 1, R), dtype=float)
-            for t in range(T + 1):
-                shares[t] = np.bincount(mat[t], minlength=R) / R
-
-            betas_arr = np.asarray(betas_g, dtype=float)
-            x_axis = (
-                np.concatenate([[0.5 * float(betas_arr.min())], betas_arr])
-                if betas_arr.size == T
-                else np.arange(T + 1)
-            )
-
-            # ----- Muller plot (stacked area founder shares) -------------
-            # Sort founders so the dominant ones cluster near the bottom of
-            # the stack — visually the strongest "selective sweeps" rise
-            # like a wave. We sort by total area under the curve.
-            order = np.argsort(shares.sum(axis=0))[::-1]  # large → small
-            shares_sorted = shares[:, order]
-            colorscale = "Turbo"
-            cum = np.zeros_like(x_axis, dtype=float)
-            fig_muller = go.Figure()
-            for k in range(R):
-                share = shares_sorted[:, k]
-                if share.max() == 0.0:
-                    continue
-                upper = cum + share
-                colour_t = float(order[k]) / max(1.0, R - 1.0)
-                # Use Plotly's built-in turbo colormap by sampling from a fixed grid.
-                rgb = [
-                    int(255 * v)
-                    for v in [
-                        0.18 + 0.82 * abs(_math.sin(3.0 * colour_t + 0.3)),
-                        0.30 + 0.55 * abs(_math.sin(2.0 * colour_t + 1.7)),
-                        0.40 + 0.55 * abs(_math.sin(1.5 * colour_t + 3.3)),
-                    ]
-                ]
-                rgba = f"rgba({rgb[0]},{rgb[1]},{rgb[2]},0.92)"
-                fig_muller.add_trace(
-                    go.Scatter(
-                        x=np.concatenate([x_axis, x_axis[::-1]]),
-                        y=np.concatenate([upper, cum[::-1]]),
-                        fill="toself",
-                        fillcolor=rgba,
-                        line={"color": "rgba(0,0,0,0)"},
-                        hoverinfo="skip",
-                        showlegend=False,
-                        mode="lines",
-                    )
-                )
-                cum = upper
-
-            fig_muller.update_layout(
-                **plotly_layout(
-                    title={
-                        "text": (
-                            f"PA Muller plot — founder shares vs β "
-                            f"(R = {R}; final founders = {int(n_surv[-1])})"
-                        )
-                    },
-                    xaxis_title="β (anneal progress, log)" if betas_arr.size == T else "step",
-                    yaxis_title="Population share",
-                    xaxis={"type": "log"} if betas_arr.size == T else None,
-                    yaxis={"range": [0, 1], "tickvals": [0, 0.25, 0.5, 0.75, 1.0]},
-                    height=420,
-                )
-            )
-            st.plotly_chart(fig_muller, width="stretch")
-
-            # ----- Sorted ancestry matrix (heatmap) ----------------------
-            sorted_mat = np.sort(mat, axis=1)
-            fig_mat = go.Figure(
-                go.Heatmap(
-                    z=sorted_mat.T,
-                    x=np.arange(T + 1),
-                    colorscale=colorscale,
-                    zmin=0,
-                    zmax=R - 1,
-                    showscale=True,
-                    colorbar={"title": "founder id", "thickness": 12, "len": 0.85},
-                    hovertemplate=(
-                        "step %{x}<br>sorted-replica %{y}<br>founder %{z}<extra></extra>"
-                    ),
-                )
-            )
-            fig_mat.update_layout(
-                **plotly_layout(
-                    title={"text": "Sorted ancestry matrix — clades widen / pinch off"},
-                    xaxis_title="Temperature step",
-                    yaxis_title="Replica (sorted by founder per step)",
-                    height=380,
-                )
-            )
-            st.plotly_chart(fig_mat, width="stretch")
-
-            # ----- Survivor curve ---------------------------------------
-            fig_n = go.Figure()
-            fig_n.add_trace(
-                go.Scatter(
-                    x=x_axis,
-                    y=n_surv.tolist(),
-                    mode="lines+markers",
-                    line={"color": p["palette"][1], "width": 2.4},
-                    name="distinct surviving founders",
-                )
-            )
-            fig_n.add_trace(
-                go.Scatter(
-                    x=[float(x_axis.min()), float(x_axis.max())],
-                    y=[R / _math.e, R / _math.e],
-                    mode="lines",
-                    line={"color": p["muted"], "width": 1, "dash": "dash"},
-                    name=f"R/e ≈ {R / _math.e:.0f}",
-                )
-            )
-            fig_n.update_layout(
-                **plotly_layout(
-                    title={
-                        "text": "Population collapse — surviving founders vs β "
-                        f"(R = {R}; final = {int(n_surv[-1])})"
-                    },
-                    xaxis_title="β" if betas_arr.size == T else "step",
-                    yaxis_title="distinct ancestors",
-                    xaxis={"type": "log"} if betas_arr.size == T else None,
-                    height=300,
-                )
-            )
-            st.plotly_chart(fig_n, width="stretch")
-
-            st.caption(
-                "**Muller plot** *(top)* shows each founder's lineage as a "
-                "coloured band — bands appearing/expanding/going extinct "
-                "are clonal sweeps in real time. **Sorted ancestry matrix** "
-                "*(middle)* puts the same data on a heatmap with replicas "
-                "sorted by founder, so clades read off as horizontal stripes. "
-                "**Survivor curve** *(bottom)* tracks distinct founders vs β "
-                "with the R/e bottleneck guideline."
+            st.info(
+                "Family tree unavailable — run a problem from the "
+                "**Solve** page first; this view needs per-epoch "
+                "population snapshots (PQQA records them automatically)."
             )
 
 
