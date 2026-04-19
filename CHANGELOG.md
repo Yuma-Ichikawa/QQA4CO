@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Streamlit Compare page now offers a **PQQA vs SA shootout** mode that
+  runs both backends on the same problem instance and reports the
+  per-backend best objective, runtime and a "SA time to PQQA best"
+  speed-up factor side-by-side, including a convergence plot.
+
+### Changed
+
+- Internal refactor: `qqa.utils` now exposes
+  `require_cuda_if_requested(device)` and
+  `safe_score_summary(problem, sol, fallback_obj)` helpers. The QQA,
+  SA and PI-GNN/CPRA trainers now route their CUDA-availability check
+  and `problem.score_summary` fallback through these shared helpers,
+  removing duplicated inline `try/except` blocks while preserving the
+  exact user-facing error messages and result dictionaries.
+- Marked the legacy graph-evaluation helpers in `qqa.utils`
+  (`approximate_mis`, `mis_stats`, `max_cut_stats`, `_gen_combinations`)
+  as superseded by `problem.score_summary`. They are kept for backward
+  compatibility but are no longer used internally.
+
+### Infrastructure
+
+- `publish.yml` Trusted Publishing wired up end-to-end on PyPI:
+  GitHub Actions environment `pypi` is now connected to the registered
+  Trusted Publisher, so future tagged releases upload automatically
+  without manual `twine` invocations.
+
 ## [0.4.0] - 2026-04-19
 
 ### Added
