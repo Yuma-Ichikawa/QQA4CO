@@ -38,6 +38,7 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
+from qqa.pa import PAResult, population_annealing
 from qqa.problems import (
     QAP,
     TSP,
@@ -122,6 +123,7 @@ __all__ = [
     "MinimumDominatingSet",
     "NQueens",
     "NumberPartitioning",
+    "PAResult",
     "PSpinGlass",
     "PopulationTracker",
     "QUBOProblem",
@@ -141,6 +143,7 @@ __all__ = [
     "generate_graph",
     "load_problem_from_file",
     "polish",
+    "population_annealing",
     "simulated_annealing",
     "user_problem_from_source",
     "warmstart",

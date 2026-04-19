@@ -392,10 +392,10 @@ def test_compare_page_renders_with_default_problem():
     )
 
 
-def test_compare_page_shootout_mode_runs_pqqa_vs_sa():
-    """Switch to the 'PQQA vs SA shootout' mode, click Run, and confirm
-    that the summary metrics for both backends render."""
-    at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=120)
+def test_compare_page_shootout_mode_runs_pqqa_vs_sa_vs_pa():
+    """Switch to the shootout mode, click Run, and confirm that the
+    summary metrics for all three backends (PQQA, SA, PA) render."""
+    at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=180)
     at.session_state["problem_config"] = {
         "kind": "ising1d",
         "size": 8,
@@ -405,19 +405,26 @@ def test_compare_page_shootout_mode_runs_pqqa_vs_sa():
     }
     at.run()
     assert not at.exception, at.exception
-    # Flip the mode selector to shootout.
+    # Flip the mode selector to shootout. The radio label includes "PA"
+    # since the v0.5.x rename — match by substring rather than literal.
     radios = [r for r in at.sidebar.radio if "Compare mode" in r.label]
     assert radios, "Compare mode radio missing"
-    radios[0].set_value("PQQA vs SA shootout")
+    shootout_options = [
+        opt for opt in radios[0].options if "shootout" in opt.lower()
+    ]
+    assert shootout_options, f"shootout option missing; got {radios[0].options!r}"
+    radios[0].set_value(shootout_options[0])
     at.run()
     assert not at.exception, at.exception
 
-    # Tighten the budget so the test runs in a few seconds.
     for label, value in (
         ("PQQA epochs", 100),
         ("PQQA sol_size", 8),
         ("SA num_sweeps", 100),
         ("SA chains", 8),
+        ("PA num_temps", 10),
+        ("PA sweeps_per_temp", 2),
+        ("PA population", 8),
     ):
         matches = [s for s in at.sidebar.slider if label in s.label]
         if matches:
@@ -431,12 +438,10 @@ def test_compare_page_shootout_mode_runs_pqqa_vs_sa():
     assert not at.exception, at.exception
 
     metric_labels = [m.label for m in at.metric]
-    assert any("PQQA best_obj" in lab for lab in metric_labels), (
-        f"PQQA metric tile missing; got {metric_labels!r}"
-    )
-    assert any("SA best_obj" in lab for lab in metric_labels), (
-        f"SA metric tile missing; got {metric_labels!r}"
-    )
+    for needle in ("PQQA best_obj", "SA best_obj", "PA best_obj"):
+        assert any(needle in lab for lab in metric_labels), (
+            f"{needle} metric tile missing; got {metric_labels!r}"
+        )
 
 
 def test_solve_page_exposes_polish_and_warmstart_toggles():

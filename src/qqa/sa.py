@@ -87,6 +87,94 @@ def _build_beta_schedule(
     return torch.linspace(beta_start, beta_end, num_sweeps, dtype=torch.float32)
 
 
+# ---------------------------------------------------------------------------
+# Single-sweep MCMC primitives, shared with qqa.pa.population_annealing.
+# Both routines mutate ``x`` out-of-place and return the new tensor; using
+# them keeps SA / PA in lock-step on the per-sweep dynamics so any future
+# ΔE bug-fix automatically lands on both.
+# ---------------------------------------------------------------------------
+
+
+def _qubo_glauber_sweep(
+    x: torch.Tensor,
+    q_sym: torch.Tensor,
+    q_diag: torch.Tensor,
+    beta: float,
+    rng: torch.Generator,
+) -> torch.Tensor:
+    """One Glauber-like parallel sweep on a QUBO with symmetric ``q_sym``.
+
+    Implements the exact single-bit-flip ΔE for ``L(x) = x^T Q x`` with
+    binary ``x``: flipping bit ``i`` changes the loss by
+    ``(1 - 2 x_i) * (2 (Q x)_i - 2 x_i Q_ii + Q_ii)``. Every bit is proposed
+    in parallel against the *same* pre-sweep ``x``; this is the standard
+    parallel-tempered classical SA baseline used in the QQA papers.
+    """
+    qx = x @ q_sym
+    delta_e = (1.0 - 2.0 * x) * (2.0 * qx - 2.0 * x * q_diag + q_diag)
+    accept_p = torch.exp(torch.clamp(-beta * delta_e, max=0.0))
+    u = torch.rand(x.shape, device=x.device, generator=rng)
+    return torch.where(u < accept_p, 1.0 - x, x)
+
+
+def _seq_mh_sweep(
+    x: torch.Tensor,
+    problem,
+    beta: float,
+    num_vars: int,
+    is_spin: bool,
+    rng: torch.Generator,
+) -> torch.Tensor:
+    """Sequential single-spin Metropolis-Hastings sweep.
+
+    Correct for *any* ``problem`` exposing ``loss_fn(x)`` — N+1 loss
+    evaluations per sweep, far slower than the QUBO fast path but
+    relaxation-agnostic.
+    """
+    perm = torch.randperm(num_vars, generator=rng, device=x.device)
+    sol_size = x.shape[0]
+    for j in perm.tolist():
+        x_new = x.clone()
+        if is_spin:
+            x_new[:, j] = -x_new[:, j]
+        else:
+            x_new[:, j] = 1.0 - x_new[:, j]
+        delta = problem.loss_fn(x_new) - problem.loss_fn(x)
+        accept_p = torch.exp(torch.clamp(-beta * delta, max=0.0))
+        u = torch.rand(sol_size, device=x.device, generator=rng)
+        x = torch.where((u < accept_p).unsqueeze(-1), x_new, x)
+    return x
+
+
+def _validate_chain_problem(problem) -> tuple[bool, bool, int]:
+    """Shared validation for SA / PA — returns ``(is_spin, is_binary, num_vars)``.
+
+    Raises ``NotImplementedError`` for categorical / batched-instance
+    problems (the chain backends only handle single-instance binary or spin
+    relaxations) and ``TypeError`` for any other unsupported relaxation.
+    """
+    relax = getattr(problem, "relaxation", None)
+    if isinstance(relax, CategoricalRelaxation):
+        raise NotImplementedError(
+            f"{type(problem).__name__} uses a CategoricalRelaxation, which the "
+            "chain-based backends (SA / PA) do not support. Use qqa.anneal."
+        )
+    if hasattr(problem, "num_instance"):
+        raise NotImplementedError(
+            "Chain-based backends (SA / PA) do not support batched-instance "
+            f"problems ({type(problem).__name__}); iterate over instances or "
+            "use qqa.anneal which handles batched instances natively."
+        )
+    is_spin = isinstance(relax, SpinRelaxation)
+    is_binary = isinstance(relax, BinaryRelaxation) and not is_spin
+    if not (is_spin or is_binary):
+        raise TypeError(
+            f"Unsupported relaxation {type(relax).__name__}; expected "
+            "BinaryRelaxation or SpinRelaxation."
+        )
+    return is_spin, is_binary, _resolve_num_vars(problem)
+
+
 def simulated_annealing(
     problem,
     *,
@@ -161,33 +249,7 @@ def simulated_annealing(
     require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
-    relax = getattr(problem, "relaxation", None)
-    if isinstance(relax, CategoricalRelaxation):
-        raise NotImplementedError(
-            "simulated_annealing does not support CategoricalRelaxation problems "
-            "(e.g. Coloring, GraphBisection). Use qqa.anneal for those."
-        )
-    # Batched-instance problems (MaximumIndependentSetInstance, ...) carry a
-    # 3-D state ``(B, I, N)`` and a ``loss_fn`` that expects the instance
-    # axis. The single-instance SA loop below would either silently misuse
-    # the einsum or crash deep inside the per-sweep matmul; surface a clear
-    # message at the API boundary instead.
-    if hasattr(problem, "num_instance"):
-        raise NotImplementedError(
-            "simulated_annealing does not support batched-instance problems "
-            f"({type(problem).__name__}); SA needs a single-instance "
-            "problem. Iterate over instances and call simulated_annealing "
-            "on each, or use qqa.anneal which handles batched instances."
-        )
-    is_spin = isinstance(relax, SpinRelaxation)
-    is_binary = isinstance(relax, BinaryRelaxation) and not is_spin
-    if not (is_spin or is_binary):
-        raise TypeError(
-            f"Unsupported relaxation {type(relax).__name__}; expected "
-            "BinaryRelaxation or SpinRelaxation."
-        )
-
-    num_vars = _resolve_num_vars(problem)
+    is_spin, is_binary, num_vars = _validate_chain_problem(problem)
     rng = torch.Generator(device=device)
     if seed is not None:
         rng.manual_seed(int(seed))
@@ -238,34 +300,11 @@ def simulated_annealing(
     for sweep in range(num_sweeps):
         beta = float(betas[sweep].item())
 
-        if use_qubo_fast:
-            # Glauber-like parallel update: ΔE_i = (1 - 2 x_i) * (2 Q_sym x)_i
-            # ignoring the diagonal self-interaction.
-            with torch.no_grad():
-                qx = x @ q_sym  # (B, N)
-                # Subtract the self term so ΔE matches "flip bit i and
-                # recompute x^T Q x exactly" rather than "flip in a Q with
-                # diag suppressed".
-                delta_e = (1.0 - 2.0 * x) * (2.0 * qx - 2.0 * x * q_diag + q_diag)
-                accept_p = torch.exp(torch.clamp(-beta * delta_e, max=0.0))
-                u = torch.rand(x.shape, device=device, generator=rng)
-                accept = u < accept_p
-                x = torch.where(accept, 1.0 - x, x)
-        else:
-            # Sequential single-spin Metropolis. Correct for any problem.
-            perm = torch.randperm(num_vars, generator=rng, device=device)
-            for j in perm.tolist():
-                x_new = x.clone()
-                if is_spin:
-                    x_new[:, j] = -x_new[:, j]
-                else:
-                    x_new[:, j] = 1.0 - x_new[:, j]
-                with torch.no_grad():
-                    delta = problem.loss_fn(x_new) - problem.loss_fn(x)
-                    accept_p = torch.exp(torch.clamp(-beta * delta, max=0.0))
-                    u = torch.rand(sol_size, device=device, generator=rng)
-                    accept = u < accept_p
-                x = torch.where(accept.unsqueeze(-1), x_new, x)
+        with torch.no_grad():
+            if use_qubo_fast:
+                x = _qubo_glauber_sweep(x, q_sym, q_diag, beta, rng)
+            else:
+                x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)
 
         with torch.no_grad():
             loss_curr = problem.loss_fn(x)

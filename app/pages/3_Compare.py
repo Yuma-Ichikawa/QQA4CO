@@ -69,12 +69,12 @@ cfg = st.session_state["problem_config"]
 with st.sidebar:
     mode = st.radio(
         "Compare mode",
-        ["QQA hyper-parameter sweep", "PQQA vs SA shootout"],
+        ["QQA hyper-parameter sweep", "PQQA vs SA vs PA shootout"],
         index=0,
         help=(
             "Sweep: grid-search QQA hyper-parameters on the current problem. "
-            "Shootout: race PQQA against the SA baseline at a matched compute "
-            "budget — useful for showing how much the relaxation buys you."
+            "Shootout: race PQQA against the SA and Population-Annealing "
+            "baselines at a matched compute budget."
         ),
     )
 
@@ -151,25 +151,27 @@ if mode == "QQA hyper-parameter sweep":
 
 
 # =============================================================================
-# Mode 2 — PQQA vs SA shootout (new)
+# Mode 2 — PQQA vs SA vs PA shootout
 # =============================================================================
-elif mode == "PQQA vs SA shootout":
-    # SA only supports binary / spin relaxations; refuse upfront on Categorical.
+elif mode == "PQQA vs SA vs PA shootout":
+    # SA / PA only support binary / spin relaxations; refuse on Categorical.
     probe_problem = build_problem(cfg)
-    sa_supported = not isinstance(getattr(probe_problem, "relaxation", None), CategoricalRelaxation)
-
-    st.markdown(
-        "Race **Parallel QQA** against a textbook **Simulated Annealing** "
-        "baseline on the same problem. Both run on the device you picked on "
-        "Home, with a comparable compute budget — the convergence plot below "
-        "exposes the wall-clock gap directly."
+    chain_supported = not isinstance(
+        getattr(probe_problem, "relaxation", None), CategoricalRelaxation
     )
 
-    if not sa_supported:
+    st.markdown(
+        "Race **Parallel QQA** against two textbook MCMC baselines — "
+        "**Simulated Annealing (SA)** and **Population Annealing (PA, with "
+        "resampling)** — on the same problem. Total compute is matched: "
+        "PA's ``num_temps × sweeps_per_temp`` ≈ SA's ``num_sweeps``."
+    )
+
+    if not chain_supported:
         st.warning(
-            "SA is not supported for this problem (categorical relaxation). "
-            "Switch the problem on Home to a QUBO / Ising / spin family "
-            "(e.g. MIS, Max-Cut, SK) to use the shootout."
+            "SA / PA do not support categorical-relaxation problems. "
+            "Pick a QUBO / Ising / spin family (e.g. MIS, Max-Cut, SK) on "
+            "**Home** to use the shootout."
         )
 
     with st.sidebar:
@@ -187,9 +189,17 @@ elif mode == "PQQA vs SA shootout":
         sa_beta_end = st.slider("SA β_end", 1.0, 100.0, 10.0, step=1.0, key="sa_b1")
         sa_schedule = st.selectbox("SA schedule", ["geometric", "linear"], key="sa_sched")
 
-        run_shootout = st.button("▶ Run shootout", type="primary", disabled=not sa_supported)
+        st.caption("Population Annealing baseline")
+        pa_temps = st.slider("PA num_temps", 10, 500, 100, step=10, key="pa_temps")
+        pa_sweeps = st.slider("PA sweeps_per_temp", 1, 50, 10, key="pa_sweeps")
+        pa_chains = st.slider("PA population (sol_size)", 4, 256, 64, key="pa_chains")
+        pa_beta_start = st.slider("PA β_start", 0.01, 1.0, 0.1, step=0.01, key="pa_b0")
+        pa_beta_end = st.slider("PA β_end", 1.0, 100.0, 10.0, step=1.0, key="pa_b1")
+        pa_resample = st.selectbox("PA resample", ["systematic", "multinomial"], key="pa_resample")
 
-    if sa_supported and run_shootout:
+        run_shootout = st.button("▶ Run shootout", type="primary", disabled=not chain_supported)
+
+    if chain_supported and run_shootout:
         with st.spinner("Running PQQA…"):
             problem_pqqa = build_problem(cfg)
             res_pqqa = qqa.anneal(
@@ -215,11 +225,25 @@ elif mode == "PQQA vs SA shootout":
                 verbose=False,
             )
 
+        with st.spinner("Running Population Annealing baseline…"):
+            problem_pa = build_problem(cfg)
+            res_pa = qqa.population_annealing(
+                problem_pa,
+                sol_size=int(pa_chains),
+                num_temps=int(pa_temps),
+                sweeps_per_temp=int(pa_sweeps),
+                beta_start=float(pa_beta_start),
+                beta_end=float(pa_beta_end),
+                resample=pa_resample,
+                device=cfg["device"],
+                verbose=False,
+            )
+
         pqqa_best = _scalar_best(res_pqqa.best_obj)
         sa_best = _scalar_best(res_sa.best_obj)
+        pa_best = _scalar_best(res_pa.best_obj)
 
-        # Side-by-side summary cards.
-        col_p, col_s = st.columns(2)
+        col_p, col_s, col_pa = st.columns(3)
         col_p.metric(
             "PQQA best_obj",
             f"{pqqa_best:.4f}",
@@ -232,60 +256,66 @@ elif mode == "PQQA vs SA shootout":
             delta=f"runtime {res_sa.runtime:.2f} s",
             delta_color="off",
         )
+        col_pa.metric(
+            "PA best_obj",
+            f"{pa_best:.4f}",
+            delta=f"runtime {res_pa.runtime:.2f} s",
+            delta_color="off",
+        )
 
-        # "How much faster did PQQA reach SA's best?" by walking the SA history.
-        sa_history = res_sa.history.get("best_obj", []) or [sa_best]
-        # Time per SA sweep (rough), so we can map sweep index -> wall-clock.
-        sa_dt = float(res_sa.runtime) / max(1, len(sa_history))
-        # Find the first sweep at which SA reached the PQQA best.
-        sa_reach_idx = next(
-            (i for i, v in enumerate(sa_history) if float(v) <= pqqa_best),
+        # "How much faster did PQQA reach the best baseline's best?"
+        baseline_best = min(sa_best, pa_best)
+        baseline_label = "SA" if sa_best <= pa_best else "PA"
+        baseline_res = res_sa if sa_best <= pa_best else res_pa
+        baseline_history = baseline_res.history.get("best_obj", []) or [baseline_best]
+        baseline_dt = float(baseline_res.runtime) / max(1, len(baseline_history))
+        baseline_reach = next(
+            (i for i, v in enumerate(baseline_history) if float(v) <= pqqa_best),
             None,
         )
 
-        if sa_reach_idx is None:
+        if baseline_reach is None:
             st.warning(
-                f"SA never matched PQQA's best ({pqqa_best:.4f}). "
-                f"SA stalled at {sa_best:.4f} after {res_sa.runtime:.2f}s. "
-                "Increase `SA num_sweeps` or `β_end` to give SA more room."
+                f"Neither SA nor PA matched PQQA's best ({pqqa_best:.4f}). "
+                f"Best baseline = {baseline_label} at {baseline_best:.4f} "
+                "after the chosen budget. Increase the baseline's compute or "
+                "tune β to give it more room."
             )
         else:
-            sa_time_to_pqqa = sa_dt * (sa_reach_idx + 1)
-            speedup = sa_time_to_pqqa / max(res_pqqa.runtime, 1e-6)
+            baseline_t = baseline_dt * (baseline_reach + 1)
+            speedup = baseline_t / max(res_pqqa.runtime, 1e-6)
             st.success(
                 f"PQQA reached `best_obj = {pqqa_best:.4f}` in "
-                f"**{res_pqqa.runtime:.2f}s**, while SA needed "
-                f"~**{sa_time_to_pqqa:.2f}s** to match it "
-                f"(speedup ≈ **{speedup:.1f}×**)."
+                f"**{res_pqqa.runtime:.2f}s**, while {baseline_label} "
+                f"(the stronger baseline) needed ~**{baseline_t:.2f}s** to "
+                f"match it (speedup ≈ **{speedup:.1f}×**)."
             )
 
-        # Convergence overlay: x = epoch / sweep index, y = best_obj.
         try:
             import plotly.graph_objects as go
 
             fig = go.Figure()
-            pqqa_hist = res_pqqa.history.get("best_obj", []) or [pqqa_best]
-            fig.add_trace(
-                go.Scatter(
-                    x=list(range(len(pqqa_hist))),
-                    y=[float(v) for v in pqqa_hist],
-                    name="PQQA",
-                    mode="lines",
-                    line={"width": 3},
+            for name, hist, fallback, dash in (
+                ("PQQA", res_pqqa.history.get("best_obj", []), pqqa_best, None),
+                ("SA", res_sa.history.get("best_obj", []), sa_best, "dash"),
+                ("PA", res_pa.history.get("best_obj", []), pa_best, "dot"),
+            ):
+                hist = hist or [fallback]
+                line = {"width": 3}
+                if dash:
+                    line["dash"] = dash
+                fig.add_trace(
+                    go.Scatter(
+                        x=list(range(len(hist))),
+                        y=[float(v) for v in hist],
+                        name=name,
+                        mode="lines",
+                        line=line,
+                    )
                 )
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=list(range(len(sa_history))),
-                    y=[float(v) for v in sa_history],
-                    name="SA",
-                    mode="lines",
-                    line={"width": 3, "dash": "dash"},
-                )
-            )
             fig.update_layout(
                 title="Best-objective trajectory",
-                xaxis_title="iteration (PQQA epoch / SA sweep)",
+                xaxis_title="iteration (PQQA epoch / SA sweep / PA temperature step)",
                 yaxis_title="best_obj (lower is better)",
                 **plotly_layout(),
             )
@@ -294,7 +324,6 @@ elif mode == "PQQA vs SA shootout":
         except Exception as e:
             st.info(f"Plot unavailable: {e}")
 
-        # Final results table for export.
         st.subheader("Summary table")
         st.dataframe(
             [
@@ -311,6 +340,13 @@ elif mode == "PQQA vs SA shootout":
                     "runtime_s": float(res_sa.runtime),
                     "iterations": int(sa_sweeps),
                     "sol_size": int(sa_chains),
+                },
+                {
+                    "backend": "PA",
+                    "best_obj": pa_best,
+                    "runtime_s": float(res_pa.runtime),
+                    "iterations": int(pa_temps) * int(pa_sweeps),
+                    "sol_size": int(pa_chains),
                 },
             ],
             width="stretch",
