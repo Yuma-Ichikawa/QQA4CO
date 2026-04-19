@@ -39,8 +39,17 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check src tests scripts app
 
-      - name: Run tests
-        run: uv run pytest -q
+      - name: Run tests with coverage
+        run: uv run pytest -q --cov=src/qqa --cov-report=xml --cov-report=term
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: MkDocs strict build
         run: uv run mkdocs build --clean --strict

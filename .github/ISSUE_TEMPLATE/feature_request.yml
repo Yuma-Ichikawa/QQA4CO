@@ -1,0 +1,55 @@
+name: Feature request
+description: Suggest a new feature, problem class, or solver enhancement.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing a new feature. The clearer you can describe
+        the use case the better — it helps us decide between adding the
+        feature, exposing an extension point, or pointing you to an
+        existing knob.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What can you not do today, or what is awkward to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        How would the API / CLI / dashboard look? Concrete signatures
+        or screenshots are very welcome.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, related libraries, prior art.
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which part of the project does this touch?
+      multiple: true
+      options:
+        - "QQA solver (qqa.anneal / annealing.py)"
+        - "Simulated Annealing (qqa.simulated_annealing / sa.py)"
+        - "PI-GNN / CPRA trainers (qqa.pignn)"
+        - "Problem catalogue (qqa.problems.*)"
+        - "CLI (qqa.cli)"
+        - "Streamlit dashboard (app/)"
+        - "Documentation (docs/)"
+        - "Build / packaging / CI"
+        - "Other"
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context

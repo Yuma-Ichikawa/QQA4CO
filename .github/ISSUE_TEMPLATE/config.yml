@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / discussion
+    url: https://github.com/Yuma-Ichikawa/QQA4CO/discussions
+    about: |
+      For usage questions, ideas, and "is this the right tool for X?"
+      please open a discussion instead of an issue.
+  - name: Security advisory
+    url: https://github.com/Yuma-Ichikawa/QQA4CO/security/advisories/new
+    about: |
+      Privately report security vulnerabilities. See SECURITY.md for
+      the full disclosure policy.
