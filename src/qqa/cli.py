@@ -116,7 +116,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     solve.add_argument(
         "--backend",
-        choices=["qqa", "pignn", "cpra"],
+        choices=["qqa", "pignn", "cpra", "sa"],
         default="qqa",
         help=(
             "Solver backend. 'qqa' (default) uses the parallel-replica "
@@ -124,8 +124,37 @@ def build_parser() -> argparse.ArgumentParser:
             "(PyTorch Geometric) trainer — graph problems only "
             "(mis/maxcut/maxclique/vertex_cover/graph_bisection); "
             "'cpra' uses the multi-head CPRA extension that produces "
-            "diverse solutions in one run (same graph problems)."
+            "diverse solutions in one run (same graph problems); "
+            "'sa' is the GPU-parallel Simulated Annealing baseline used in "
+            "the QQA papers — no learning, pure Metropolis on the same problem."
         ),
+    )
+    solve.add_argument(
+        "--sa-num-sweeps",
+        type=int,
+        default=None,
+        help=(
+            "Number of SA sweeps (only used when --backend sa). Defaults to "
+            "--epochs so SA and QQA can be compared on equal compute budgets."
+        ),
+    )
+    solve.add_argument(
+        "--sa-beta-start",
+        type=float,
+        default=0.1,
+        help="SA initial inverse temperature (only used when --backend sa).",
+    )
+    solve.add_argument(
+        "--sa-beta-end",
+        type=float,
+        default=10.0,
+        help="SA final inverse temperature (only used when --backend sa).",
+    )
+    solve.add_argument(
+        "--sa-schedule",
+        choices=["geometric", "linear"],
+        default="geometric",
+        help="SA beta schedule shape (only used when --backend sa).",
     )
     solve.add_argument(
         "--pignn-init-reg-param",
@@ -417,6 +446,20 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                 seed=args.seed,
                 verbose=not args.quiet,
             )
+    elif backend == "sa":
+        # SA shares no hyper-parameters with QQA — keep its own knobs.
+        sa_sweeps = args.sa_num_sweeps if args.sa_num_sweeps is not None else args.epochs
+        result = qqa.simulated_annealing(
+            problem,
+            sol_size=args.sol_size,
+            num_sweeps=sa_sweeps,
+            beta_schedule=args.sa_schedule,
+            beta_start=args.sa_beta_start,
+            beta_end=args.sa_beta_end,
+            seed=args.seed,
+            device=args.device,
+            verbose=not args.quiet,
+        )
     else:
         qqa_lr = args.learning_rate if args.learning_rate is not None else 1.0
         result = qqa.anneal(
