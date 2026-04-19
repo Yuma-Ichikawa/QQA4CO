@@ -12,6 +12,8 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
   <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/pyversions/qqa.svg?logo=python&logoColor=white" alt="Python versions"></a>
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/LICENCE.txt"><img src="https://img.shields.io/pypi/l/qqa.svg" alt="License"></a>
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/actions/workflows/ci.yml"><img src="https://github.com/Yuma-Ichikawa/QQA4CO/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://yuma-ichikawa.github.io/QQA4CO/"><img src="https://img.shields.io/badge/docs-mkdocs--material-blue?logo=materialformkdocs&logoColor=white" alt="Documentation"></a>
+  <a href="https://github.com/Yuma-Ichikawa/QQA4CO/discussions"><img src="https://img.shields.io/github/discussions/Yuma-Ichikawa/QQA4CO?logo=github&label=Discussions" alt="GitHub Discussions"></a>
 </p>
 
 <p align="center">
