@@ -15,8 +15,7 @@ methods, a 17-class problem catalogue, a Streamlit dashboard and a CLI.
   <a href="https://yuma-ichikawa.github.io/QQA4CO/"><img src="https://img.shields.io/badge/docs-mkdocs--material-blue?logo=materialformkdocs&logoColor=white" alt="Documentation"></a>
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/discussions"><img src="https://img.shields.io/github/discussions/Yuma-Ichikawa/QQA4CO?logo=github&label=Discussions" alt="GitHub Discussions"></a>
   <a href="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO"><img src="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO/branch/main/graph/badge.svg" alt="Coverage"></a>
-  <!-- Zenodo DOI badge: replace ZENODO_RECORD_ID once the first DOI is minted (see tasks/test/oss_followups_after_zenodo_codecov.md) -->
-  <!-- <a href="https://doi.org/10.5281/zenodo.ZENODO_RECORD_ID"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.ZENODO_RECORD_ID.svg" alt="DOI"></a> -->
+  <a href="https://doi.org/10.5281/zenodo.19648231"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.19648231.svg" alt="DOI"></a>
 </p>
 
 <p align="center">
@@ -544,12 +543,27 @@ BSD-3-Clause — see [`LICENCE.txt`](LICENCE.txt).
 
 ## Cite
 
-If you use the **PQQA** solver (`qqa.anneal`), please cite:
+If you use the **QQA4CO software** in your research (regardless of which
+backend), please cite the software via its concept DOI alongside the
+companion paper:
+
+```bibtex
+@software{qqa4co_software,
+  title   = {QQA4CO: Quasi-Quantum Annealing for Combinatorial Optimization},
+  author  = {Ichikawa, Yuma and Arai, Yamato},
+  year    = {2026},
+  version = {0.5.0},
+  doi     = {10.5281/zenodo.19648231},
+  url     = {https://github.com/Yuma-Ichikawa/QQA4CO}
+}
+```
+
+If you use the **PQQA** solver (`qqa.anneal`), please also cite:
 
 ```bibtex
 @inproceedings{ichikawa2025pqqa,
   title     = {Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling},
-  author    = {Ichikawa, Yuma},
+  author    = {Ichikawa, Yuma and Arai, Yamato},
   booktitle = {International Conference on Learning Representations (ICLR)},
   year      = {2025},
   url       = {https://openreview.net/forum?id=9EfBeXaXf0}
