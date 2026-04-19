@@ -129,37 +129,57 @@ with st.sidebar:
         size = extra["num_vars"]
         st.success("Edit & validate the snippet in the main panel →", icon="📝")
     else:
-        _FAMILIES = {
+        # Catalog. Each entry is (kind, label, required qqa attribute).
+        # The ``required`` field lets us prune problems whose underlying
+        # class is not present in the installed qqa module — for example
+        # when a Streamlit Cloud build is still on the previous release
+        # while the README catalog already advertises the new ones.
+        # Without the prune, the user would pick "RFIM" from the menu,
+        # hit Run, and see ``module 'qqa' has no attribute ...`` with no
+        # way to recover. With the prune, the option simply doesn't
+        # appear until the deployment catches up.
+        import qqa as _qqa  # noqa: PLC0415
+
+        _CATALOG: dict[str, list[tuple[str, str, str]]] = {
             "Graph (binary QUBO)": [
-                ("mis", "Maximum Independent Set"),
-                ("maxcut", "Max-Cut"),
-                ("maxclique", "Max Clique"),
-                ("vertex_cover", "Vertex Cover"),
-                ("graph_bisection", "Graph bisection"),
-                ("min_dominating_set", "Minimum Dominating Set"),
+                ("mis", "Maximum Independent Set", "MaximumIndependentSet"),
+                ("maxcut", "Max-Cut", "MaxCut"),
+                ("maxclique", "Max Clique", "MaxClique"),
+                ("vertex_cover", "Vertex Cover", "VertexCover"),
+                ("graph_bisection", "Graph bisection", "GraphBisection"),
+                ("min_dominating_set", "Minimum Dominating Set", "MinimumDominatingSet"),
             ],
             "Categorical / assignment": [
-                ("coloring", "Graph coloring"),
-                ("bgp", "Balanced graph partition (K-way)"),
-                ("tsp", "Travelling Salesman (TSP)"),
-                ("qap", "Quadratic Assignment (QAP)"),
-                ("nqueens", "N-Queens"),
+                ("coloring", "Graph coloring", "Coloring"),
+                ("bgp", "Balanced graph partition (K-way)", "BalancedGraphPartition"),
+                ("tsp", "Travelling Salesman (TSP)", "TSP"),
+                ("qap", "Quadratic Assignment (QAP)", "QAP"),
+                ("nqueens", "N-Queens", "NQueens"),
             ],
             "Classic CO": [
-                ("knapsack", "0/1 Knapsack"),
-                ("number_partition", "Number partitioning"),
-                ("maxsat3", "MaxSAT (random 3-SAT)"),
+                ("knapsack", "0/1 Knapsack", "Knapsack"),
+                ("number_partition", "Number partitioning", "NumberPartitioning"),
+                ("maxsat3", "MaxSAT (random 3-SAT)", "MaxSAT3"),
             ],
             "Physics / spin": [
-                ("ising1d", "1D Ising model"),
-                ("ea", "Edwards–Anderson spin glass"),
-                ("sk", "Sherrington–Kirkpatrick spin glass"),
-                ("pspin", "p-spin glass (dense, p ≥ 2)"),
-                ("rfim", "Random Field Ising Model (RFIM)"),
-                ("perceptron", "Binary perceptron"),
-                ("hopfield", "Hopfield memory"),
+                ("ising1d", "1D Ising model", "Ising1D"),
+                ("ea", "Edwards–Anderson spin glass", "EdwardsAnderson"),
+                ("sk", "Sherrington–Kirkpatrick spin glass", "SherringtonKirkpatrick"),
+                ("pspin", "p-spin glass (dense, p ≥ 2)", "PSpinGlass"),
+                ("rfim", "Random Field Ising Model (RFIM)", "RandomFieldIsing"),
+                ("perceptron", "Binary perceptron", "BinaryPerceptron"),
+                ("hopfield", "Hopfield memory", "HopfieldMemory"),
             ],
         }
+
+        _FAMILIES: dict[str, list[tuple[str, str]]] = {}
+        _MISSING: list[str] = []
+        for fam, entries in _CATALOG.items():
+            keep = [(k, lab) for (k, lab, attr) in entries if hasattr(_qqa, attr)]
+            if keep:
+                _FAMILIES[fam] = keep
+            _MISSING.extend(f"{lab}" for (_, lab, attr) in entries if not hasattr(_qqa, attr))
+
         _ALL_OPTS = [(k, label) for group in _FAMILIES.values() for (k, label) in group]
         _LABELS = {k: label for k, label in _ALL_OPTS}
 
@@ -169,6 +189,13 @@ with st.sidebar:
             [k for k, _ in _FAMILIES[family]],
             format_func=lambda s: _LABELS[s],
         )
+        if _MISSING:
+            st.caption(
+                "ℹ️  The following problems are advertised by the README "
+                f"but not in the installed qqa version ({_qqa.__version__}): "
+                + ", ".join(_MISSING)
+                + ". `pip install -U qqa` to enable them."
+            )
 
         size_default = {"tsp": 8, "qap": 8, "nqueens": 8, "ea": 6, "rfim": 8, "pspin": 16}.get(
             problem_kind, 32
