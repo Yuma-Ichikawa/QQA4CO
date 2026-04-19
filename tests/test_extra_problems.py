@@ -34,6 +34,7 @@ def _deterministic_seed() -> None:
         lambda: qqa.QAP(N=4, seed=0),
         lambda: qqa.NQueens(N=5),
         lambda: qqa.BalancedGraphPartition(nx.cycle_graph(6), num_category=2),
+        lambda: qqa.MinimumDominatingSet(nx.path_graph(8)),
     ],
 )
 def test_phase_a_problem_runs(factory):
@@ -502,3 +503,41 @@ def test_anneal_cuda_requested_but_unavailable_raises():
     prob = qqa.MaximumIndependentSet(nx.path_graph(4))
     with pytest.raises(RuntimeError, match="torch.cuda.is_available"):
         qqa.anneal(prob, sol_size=4, num_epochs=1, device="cuda", verbose=False)
+
+
+# ---------------------------------------------------------------------------
+# MinimumDominatingSet — focused correctness checks
+# ---------------------------------------------------------------------------
+
+
+def test_min_dominating_set_path_graph_optimum_within_reach():
+    """For a path P_n, γ(P_n) = ceil(n/3). On P_9 the minimum is 3.
+
+    QQA does not have to *prove* the optimum, but on a small instance
+    with the polish-on-by-default loop it should reliably hit it.
+    """
+    qqa.fix_seed(0)
+    prob = qqa.MinimumDominatingSet(nx.path_graph(9), penalty=4.0)
+    res = qqa.anneal(prob, sol_size=64, num_epochs=400, verbose=False)
+    score = res.score
+    assert score["feasible"], f"Expected a feasible dominating set, got {score}"
+    assert score["value"] <= 3, f"Expected |S| <= 3 on P_9 (γ=3), got {score['value']}"
+
+
+def test_min_dominating_set_loss_matches_discrete_definition():
+    """The relaxed ``loss_fn`` must equal ``|S| + λ * #uncovered`` exactly
+    when evaluated on a {0,1} bitstring (relaxation is tight at corners)."""
+    g = nx.cycle_graph(6)
+    prob = qqa.MinimumDominatingSet(g, penalty=4.0)
+    # Pick a non-dominating set: {0} alone covers {0, 1, 5}, leaving
+    # {2, 3, 4} uncovered → loss = 1 + 4 * 3 = 13.
+    x = torch.zeros(1, 6)
+    x[0, 0] = 1.0
+    val = float(prob.loss_fn(x).item())
+    assert val == pytest.approx(13.0, abs=1e-4)
+    # And a true dominating set: {0, 3} covers everything → loss = 2.
+    x = torch.zeros(1, 6)
+    x[0, 0] = 1.0
+    x[0, 3] = 1.0
+    val = float(prob.loss_fn(x).item())
+    assert val == pytest.approx(2.0, abs=1e-4)
