@@ -256,6 +256,42 @@ def test_visualize_tab_order_solution_first(tmp_path):
     assert tab_labels[0] == "Solution", f"Solution must be the first tab (got order: {tab_labels})"
 
 
+def test_visualize_renders_3d_pca_and_diversity_with_population(tmp_path):
+    """The new "3D PCA flow", "Diversity" and "Loss spectrogram" tabs must
+    render without exception when a PopulationTracker is attached."""
+    import sys
+
+    sys.path.insert(0, str(APP.parent))
+    from _common import build_problem as _build  # noqa: F811
+
+    import qqa  # noqa: F811
+    from qqa.callbacks import PopulationTracker  # noqa: F811
+
+    cfg = {"kind": "mis", "size": 16, "seed": 0, "device": "cpu", "extra": {}}
+    problem = _build(cfg)
+    tracker = PopulationTracker(stride=2, record_x=True)
+    result = qqa.anneal(
+        problem,
+        sol_size=8,
+        num_epochs=12,
+        learning_rate=0.1,
+        device="cpu",
+        verbose=False,
+        callbacks=[tracker],
+    )
+
+    at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=60)
+    at.session_state["last_result"] = result
+    at.session_state["last_problem"] = problem
+    at.session_state["last_pop_tracker"] = tracker
+    at.session_state["problem_config"] = cfg
+    at.run()
+    assert not at.exception, at.exception
+    labels = [t.label for t in at.tabs]
+    for required in ("3D PCA flow", "Diversity", "Loss spectrogram"):
+        assert required in labels, f"missing tab {required!r} (got {labels})"
+
+
 def test_solve_dynamics_separates_discrete_and_relaxed_best():
     """Regression: the per-replica chart used to plot the running discrete
     best (``state.best_obj``) on the same y-axis as the relaxed mean.  For
