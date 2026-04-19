@@ -653,9 +653,7 @@ def train_cpra_pi_gnn(
                 disc_objs = problem.loss_fn(bits_all.t()).cpu().tolist()
             elif _q_stack is not None:
                 b = bits_all.t()  # (R, N)
-                disc_objs = (
-                    torch.einsum("rn,rnm,rm->r", b, _q_stack, b).cpu().tolist()
-                )
+                disc_objs = torch.einsum("rn,rnm,rm->r", b, _q_stack, b).cpu().tolist()
             else:
                 disc_objs = [
                     float(problems_per_replica[r].loss_fn(bits_all[:, r].unsqueeze(0)).item())

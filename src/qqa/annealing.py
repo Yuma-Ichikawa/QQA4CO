@@ -145,9 +145,7 @@ def anneal(
     )
     use_amp = mixed_precision == "bf16" and _is_cuda
     amp_ctx = (
-        torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
-        if use_amp
-        else nullcontext()
+        torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
     )
 
     if schedule is None:
@@ -231,9 +229,7 @@ def anneal(
                 penalties = _default_penalty_from_forward(relax, x, x_fwd, curve_rate)
             else:
                 penalties = pfwd(x, x_fwd, curve_rate)  # matching shape
-            diversity = (
-                relax.diversity(x) if sol_size > 1 else torch.tensor(0.0, device=x.device)
-            )
+            diversity = relax.diversity(x) if sol_size > 1 else torch.tensor(0.0, device=x.device)
             div_term = -diversity * sol_size
 
             # Unified weighted objective: uses sums so that (B, I) problems
