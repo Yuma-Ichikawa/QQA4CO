@@ -1095,7 +1095,7 @@ def build_problem(cfg: dict) -> Any:
         return _safe_call(qqa.SherringtonKirkpatrick, N=size, seed=seed, device=device)
     if kind == "pspin":
         return _safe_call(
-            qqa.PSpinGlass,
+            _require(qqa, "PSpinGlass"),
             N=size,
             p=int(extra.get("p_order", 3)),
             seed=seed,
@@ -1103,7 +1103,7 @@ def build_problem(cfg: dict) -> Any:
         )
     if kind == "rfim":
         return _safe_call(
-            qqa.RandomFieldIsing,
+            _require(qqa, "RandomFieldIsing"),
             L=size,
             dim=int(extra.get("dim", 2)),
             J=float(extra.get("coupling_J", 1.0)),
@@ -1201,10 +1201,10 @@ def _build_graph_problem(kind: str, size: int, seed: int, device: str, extra: di
             device=device,
         )
     if kind == "min_dominating_set":
-        return _safe_call(qqa.MinimumDominatingSet, g, device=device)
+        return _safe_call(_require(qqa, "MinimumDominatingSet"), g, device=device)
     if kind == "bgp":
         return _safe_call(
-            qqa.BalancedGraphPartition,
+            _require(qqa, "BalancedGraphPartition"),
             g,
             num_category=int(extra.get("num_category", 3)),
             penalty=float(extra.get("balance_penalty", 5e-4)),
@@ -1217,6 +1217,25 @@ def _build_graph_problem(kind: str, size: int, seed: int, device: str, extra: di
 # Constructor dispatch helpers — keep ``build_problem`` and the saved-config
 # format decoupled from individual class signatures.
 # ---------------------------------------------------------------------------
+
+
+def _require(module: object, attr: str):
+    """Return ``getattr(module, attr)`` or raise a friendly ``RuntimeError``.
+
+    The deployed qqa version on Streamlit Cloud sometimes lags behind the
+    catalog the UI advertises. When that happens we want a clear, actionable
+    message at Run-time instead of an opaque ``AttributeError``.
+    """
+
+    obj = getattr(module, attr, None)
+    if obj is None:
+        version = getattr(module, "__version__", "unknown")
+        name = getattr(module, "__name__", "module")
+        raise RuntimeError(
+            f"{attr!r} is not available in the installed {name} {version}. "
+            f"Run `pip install -U {name}` to enable it."
+        )
+    return obj
 
 
 def _safe_call(cls, *args, **kwargs):
