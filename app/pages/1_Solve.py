@@ -40,6 +40,14 @@ from _solution_viz import render_solution_view  # noqa: E402
 import qqa  # noqa: E402
 from qqa.callbacks import Callback, CallbackState, PopulationTracker  # noqa: E402
 
+# Capability detection — the deployed ``qqa`` wheel is occasionally older
+# than the app source (e.g. Streamlit Community Cloud caches the previous
+# build, or pip resolves ``qqa`` from PyPI when ``.`` install fails). We
+# probe instead of relying on the symbol being present, so the page never
+# crashes with a cryptic ``module 'qqa' has no attribute …`` error.
+PA_AVAILABLE = hasattr(qqa, "population_annealing") and hasattr(qqa, "PAResult")
+QQA_VERSION = getattr(qqa, "__version__", "unknown")
+
 st.set_page_config(page_title="Solve — QQA", page_icon="⚛️", layout="wide")
 sidebar_brand()
 theme_toggle_in_sidebar()
@@ -65,9 +73,10 @@ render_config_chips(cfg)
 
 with st.sidebar:
     st.header("2 · Backend")
+    _backend_options = ["PQQA"] + (["PA (Population Annealing)"] if PA_AVAILABLE else [])
     backend = st.radio(
         "Solver backend",
-        ["PQQA", "PA (Population Annealing)"],
+        _backend_options,
         index=0,
         help=(
             "PQQA = Parallel Quasi-Quantum Annealing (gradient-based, the "
@@ -77,6 +86,14 @@ with st.sidebar:
         ),
         key="solve_backend",
     )
+    if not PA_AVAILABLE:
+        st.warning(
+            f"PA backend not available in this build (qqa = `{QQA_VERSION}`). "
+            "PA needs `qqa.population_annealing`, added in 0.5.1+. "
+            "Re-deploy with the latest source (`pip install -e .` from the "
+            "repo root) or pull a newer wheel.",
+            icon=":material/upgrade:",
+        )
 
 # Hyper-parameter presets — each tuple is
 # (sol_size, epochs, learning_rate, temp, min_bg, max_bg, curve_rate,
@@ -696,6 +713,14 @@ if run and backend == "PQQA":
 # Population Annealing (PA) backend
 # =============================================================================
 if run and backend != "PQQA":
+    if not PA_AVAILABLE:
+        st.error(
+            f"Population Annealing is not exposed by the installed `qqa` "
+            f"(version `{QQA_VERSION}`). The deployed wheel is older than this "
+            "Streamlit app — re-deploy with the latest source so "
+            "`qqa.population_annealing` is importable."
+        )
+        st.stop()
     try:
         problem = build_problem(cfg)
     except Exception as e:

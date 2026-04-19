@@ -28,4 +28,12 @@ pandas>=2.0
 streamlit>=1.30
 
 # Install this repository so ``import qqa`` works inside the app.
+# IMPORTANT: must be the LAST line. We bump pyproject.toml's ``version``
+# field on every release that adds a public symbol (e.g. PA was added in
+# 0.5.1, equilibrium-sample/genealogy/Muller-plot in 0.5.2). Without a
+# version bump pip's resolver short-circuits when the previously
+# installed ``qqa`` already matches the pinned spec — Streamlit
+# Community Cloud has been observed to keep ``qqa==0.5.0`` from a stale
+# build and silently skip reinstalling, which then makes
+# ``qqa.population_annealing`` missing at runtime.
 .

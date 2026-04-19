@@ -22,8 +22,19 @@ from _common import (  # noqa: E402
 )
 from _solution_viz import render_solution_view  # noqa: E402
 
-from qqa import PAResult  # noqa: E402
 from qqa import visualization as viz  # noqa: E402
+
+# Capability detection — see comment in 1_Solve.py. PAResult only exists
+# from qqa 0.5.1 onwards; older deployed wheels would crash this page on
+# import. We fall back to a sentinel class so ``isinstance`` is False
+# everywhere and the PA-specific tabs simply don't render.
+try:
+    from qqa import PAResult  # noqa: E402
+except ImportError:
+
+    class PAResult:  # type: ignore[no-redef]
+        """Stand-in used when the deployed qqa is too old to expose PAResult."""
+
 
 st.set_page_config(page_title="Visualize — QQA", page_icon="⚛️", layout="wide")
 sidebar_brand()
