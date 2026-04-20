@@ -186,17 +186,26 @@ def test_load_report_label_default(payload_path: Path):
 # --------------------------------------------------------------------------- #
 
 
-def test_render_produces_four_panels(payload_path: Path):
+def test_render_produces_expected_panels(payload_path: Path):
     rep = plot.load_report(payload_path)
     fig = plot.render([rep])
     try:
-        # 4 panels: radar + per-subset bar + feasibility bar + box.
-        assert len(fig.axes) == 4
-        # The radar is a polar axes, the others are Cartesian.
+        # Polished layout: header strip + KPI band + 4 data panels + footer.
+        # The exact number of chrome axes may evolve; what matters is:
+        #   * there is exactly one polar (radar) axes, and
+        #   * there are at least 4 data panels (radar + 3 cartesian data).
         polar_axes = [ax for ax in fig.axes if ax.name == "polar"]
         assert len(polar_axes) == 1
-        # At least one line on the radar.
         assert len(polar_axes[0].lines) >= 1
+
+        # At least four total panels once chrome is counted.
+        assert len(fig.axes) >= 4
+
+        # A cartesian panel drawing bars should carry legend handles.
+        bar_axes = [
+            ax for ax in fig.axes if ax.name != "polar" and any(p.get_label() for p in ax.patches)
+        ]
+        assert bar_axes, "no bar-style panel found"
     finally:
         plt.close(fig)
 
@@ -221,10 +230,13 @@ def test_render_ab_comparison_preserves_both_labels(payload_path: Path, tmp_path
 
     fig = plot.render([r1, r2])
     try:
-        # Both series should appear in the subset-bar legend.
-        legend = next((ax.get_legend() for ax in fig.axes if ax.get_legend()), None)
-        assert legend is not None
-        labels = {t.get_text() for t in legend.get_texts()}
+        # Either axis-level legend or a figure-level legend is fine — the
+        # contract is that *both* method labels are wired somewhere.
+        legends = [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
+        legends += list(fig.legends)
+        labels: set[str] = set()
+        for leg in legends:
+            labels.update(t.get_text() for t in leg.get_texts())
         assert {"method", "baseline"} <= labels
     finally:
         plt.close(fig)

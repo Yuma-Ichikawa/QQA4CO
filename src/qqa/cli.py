@@ -265,6 +265,62 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("--device", type=str, default="cpu")
     bench.add_argument("--seed", type=int, default=0)
 
+    # Suite-level benchmark commands (delegate to scripts/bench_discs.py
+    # and scripts/plot_benchmarks.py via ``qqa.bench``). These expose the
+    # same one-command setup + run + visualise flow recommended for
+    # third-party comparisons.
+    bench_list = sub.add_parser(
+        "bench-list",
+        help="List every benchmark suite reachable from the current ./data tree.",
+    )
+    bench_list.add_argument(
+        "--as-suites",
+        action="store_true",
+        help="Print resolved suite ids (e.g. 'mis-satlib-uf') instead of a nested tree.",
+    )
+
+    bench_run = sub.add_parser(
+        "bench-run",
+        help="Run a benchmark suite and write JSON results.",
+        description=(
+            "Wrapper around scripts/bench_discs.py. Unknown options (e.g. "
+            "--learning-rate / --temp / --curve-rate ...) are forwarded "
+            "verbatim so every PQQA hyperparameter remains tunable."
+        ),
+    )
+    bench_run.add_argument("--suite", default="all", help="suite identifier")
+    bench_run.add_argument("--backend", default="qqa", choices=("qqa", "sa", "pa"))
+    bench_run.add_argument("--instances", type=int, default=None)
+    bench_run.add_argument("--sol-size", type=int, default=20)
+    bench_run.add_argument("--num-epochs", type=int, default=500)
+    bench_run.add_argument("--device", default="auto")
+    bench_run.add_argument("--seed", type=int, default=0)
+    bench_run.add_argument(
+        "--output",
+        type=str,
+        default="results.json",
+        help="JSON output. Relative paths are resolved under ./bench_results/.",
+    )
+    bench_run.add_argument("--parallel", action="store_true")
+    bench_run.add_argument("--penalty", type=float, default=None)
+
+    bench_plot = sub.add_parser(
+        "bench-plot",
+        help="Render a polished benchmark-report image from results JSON.",
+    )
+    bench_plot.add_argument("results", nargs="+")
+    bench_plot.add_argument("--labels", nargs="+", default=None)
+    bench_plot.add_argument(
+        "--output",
+        type=str,
+        default="report.png",
+        help="output image path. Relative paths go under ./bench_results/.",
+    )
+    bench_plot.add_argument("--title", default=None)
+    bench_plot.add_argument("--theme", default="light", choices=("light", "dark"))
+    bench_plot.add_argument("--dpi", type=int, default=160)
+    bench_plot.add_argument("--format", default=None, dest="fmt")
+
     gui = sub.add_parser("gui", help="Launch the Streamlit GUI.")
     gui.add_argument("--port", type=int, default=8501)
     gui.add_argument("--host", type=str, default="localhost")
@@ -625,6 +681,108 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     return 1
 
 
+# --------------------------------------------------------------------------- #
+# Suite-level bench commands (delegate to qqa.bench)                          #
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_bench_list(args: argparse.Namespace) -> int:
+    from qqa import bench as _b
+
+    try:
+        catalog = _b.list_suites()
+    except SystemExit as exc:
+        print(f"[qqa bench-list] {exc}", file=sys.stderr)
+        return 2
+
+    if not catalog:
+        print("[qqa bench-list] no benchmark data on disk. Run:")
+        print("    ./scripts/setup_benchmarks.sh")
+        return 2
+
+    if args.as_suites:
+        for fam in sorted(catalog):
+            for gt, subs in catalog[fam].items():
+                for sub in subs:
+                    parts = [fam]
+                    if gt:
+                        parts.append(gt)
+                    if sub:
+                        parts.append(sub)
+                    print("-".join(parts))
+        return 0
+
+    for fam in sorted(catalog):
+        types = catalog[fam]
+        n = sum(len(s) for s in types.values())
+        print(f"{fam}  ({n} subsets)")
+        for gt in sorted(types):
+            subs = types[gt]
+            head = f"  {gt}/" if gt else "  "
+            print(f"{head}  " + ", ".join(sorted(subs)) if subs else head)
+    return 0
+
+
+def _cmd_bench_run(args: argparse.Namespace) -> int:
+    from qqa import bench as _b
+
+    output = Path(args.output)
+    if not output.is_absolute() and not str(output).startswith((".", "~")):
+        output = _b.DEFAULT_RESULTS_DIR / output
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    argv = [
+        "--suite",
+        args.suite,
+        "--backend",
+        args.backend,
+        "--sol-size",
+        str(args.sol_size),
+        "--num-epochs",
+        str(args.num_epochs),
+        "--device",
+        args.device,
+        "--seed",
+        str(args.seed),
+        "--output",
+        str(output),
+    ]
+    if args.instances is not None:
+        argv += ["--instances", str(args.instances)]
+    if args.parallel:
+        argv += ["--parallel"]
+    if args.penalty is not None:
+        argv += ["--penalty", str(args.penalty)]
+
+    rc = _b.bench_discs_main(argv)
+    if rc == 0:
+        print(f"[qqa bench-run] wrote {output}")
+    return rc
+
+
+def _cmd_bench_plot(args: argparse.Namespace) -> int:
+    from qqa import bench as _b
+
+    out = Path(args.output)
+    if not out.is_absolute() and not str(out).startswith((".", "~")):
+        out = _b.DEFAULT_RESULTS_DIR / out
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    argv: list[str] = list(args.results)
+    if args.labels:
+        argv += ["--labels", *args.labels]
+    argv += ["--output", str(out), "--theme", args.theme, "--dpi", str(args.dpi)]
+    if args.title:
+        argv += ["--title", args.title]
+    if args.fmt:
+        argv += ["--format", args.fmt]
+
+    rc = _b.plot_benchmarks_main(argv)
+    if rc == 0:
+        print(f"[qqa bench-plot] wrote {out}")
+    return rc
+
+
 def _resolve_streamlit_app() -> Path | None:
     """Locate ``app/streamlit_app.py`` for both wheel and source installs.
 
@@ -700,6 +858,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_solve(args)
     if args.command == "bench":
         return _cmd_bench(args)
+    if args.command == "bench-list":
+        return _cmd_bench_list(args)
+    if args.command == "bench-run":
+        return _cmd_bench_run(args)
+    if args.command == "bench-plot":
+        return _cmd_bench_plot(args)
     if args.command == "gui":
         return _cmd_gui(args)
     parser.error(f"Unknown command {args.command!r}")

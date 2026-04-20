@@ -38,6 +38,7 @@ nav:
     - Run on GPU: how-to/gpu.md
     - Tune hyper-parameters: how-to/tuning.md
     - Integrate into a pipeline: how-to/integrate.md
+    - Benchmark your method: how-to/benchmark.md
   - Reference:
     - Problem catalog: problems.md
     - CLI: reference/cli.md

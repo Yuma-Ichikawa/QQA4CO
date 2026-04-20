@@ -39,6 +39,11 @@ site/
 # Local task planning (not versioned)
 tasks/
 
+# Benchmark runner output (qqa.bench default directory).
+# Keep the directory so `make bench-all-smoke` can write into a clean
+# default location, but never commit individual result JSONs / plots.
+bench_results/
+
 # Streamlit cache
 .streamlit/secrets.toml
 
