@@ -34,7 +34,7 @@ SOURCE="hf"
 PROBLEM="all"
 SUBSETS=""
 LIMIT=""
-HF_REPO_ID="${DISCS_HF_REPO_ID:-yuma-ichikawa/discs-co-bench}"
+HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/discs-co-bench}"
 # The published DISCS Drive folder (1nEppx...) contains exactly two files:
 #   * 2dtsp.zip                    (TSP data, NOT used by us)
 #   * DISCS-DATA.tar.gz  ID=1lbpdEqs_rDqaLmS3YkFrbn7iK8z1K1it (~6.7 GB)
@@ -69,15 +69,19 @@ echo "[setup_discs_data] source=${SOURCE}  problem=${PROBLEM}  subsets=${SUBSETS
 # fetch                                                                       #
 # --------------------------------------------------------------------------- #
 fetch_hf() {
-    echo "[setup_discs_data] fetching from Hugging Face Hub: ${HF_REPO_ID}"
+    # The HF dataset hosts the *converted* `.gpickle` + `manifest.jsonl`
+    # tree directly (~3.9 GB). We snapshot it straight into ${DST} and
+    # skip the `convert_discs_to_qqa.py` step entirely.
+    echo "[setup_discs_data] fetching pre-converted dataset from Hugging Face Hub: ${HF_REPO_ID}"
     python - <<PY
 from huggingface_hub import snapshot_download
 import os
+allow = ["maxcut/**", "mis/**", "maxclique/**", "normcut/**", "**/manifest.jsonl", "README.md"]
 local = snapshot_download(
     repo_id=os.environ["HF_REPO_ID"],
     repo_type="dataset",
-    local_dir=os.environ["RAW"],
-    local_dir_use_symlinks=False,
+    local_dir=os.environ["DST"],
+    allow_patterns=allow,
 )
 print("[setup_discs_data] HF snapshot at:", local)
 PY
@@ -116,8 +120,13 @@ case "${SOURCE}" in
             echo "[setup_discs_data] huggingface_hub not installed; run: pip install huggingface_hub" >&2
             exit 3
         fi
-        export HF_REPO_ID RAW
-        if ! fetch_hf; then
+        export HF_REPO_ID DST
+        if fetch_hf; then
+            echo "[setup_discs_data] done. HF snapshot is already in the unified gpickle+manifest format."
+            echo "[setup_discs_data] Try:"
+            echo "    python scripts/bench_discs.py --suite mis-satlib --backend qqa --instances 3"
+            exit 0
+        else
             echo "[setup_discs_data] HF download failed, falling back to gdrive..." >&2
             SOURCE="gdrive"
         fi
