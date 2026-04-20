@@ -395,22 +395,52 @@ qqa gui                                  # opens http://localhost:8501
 
 Run `qqa <command> --help` for the full option list.
 
-### DISCS combinatorial-optimization benchmark suite
+### All CO benchmarks in one command (DISCS + PQQA + EA3D)
 
-The DISCS NeurIPS-2023 benchmarks (MaxCut, MIS, MaxClique, NormCut) are
-wired in as a one-command suite. The data lives under `data/discs/` and is
-git-ignored; pull it once with the setup script, then run any number of
-benchmarks against it.
+Every benchmark family QQA4CO ships — DISCS (MaxCut/MIS/MaxClique/NormCut),
+Graph Coloring (COLOR), MIS on d-regular Random Graphs (PQQA §5.1),
+3D Edwards-Anderson spin glass, and Balanced k-way partition — lives on
+the Hugging Face Hub as a single dataset
+(`Yuma-Ichikawsa/discs-co-bench`). Fetching and solving the whole suite
+is **one command each**:
 
 ```bash
 pip install -e ".[discs,dev]"
-make bench-discs-setup        # ~6.7 GB Drive download → unified .gpickle layout
-make bench-discs-smoke        # 3 instances per problem on CPU (~30 s)
-make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
-
-# Solve all 500 SATLIB MIS instances in ONE GPU anneal call (~80s on B200).
-make bench-discs SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1
+make bench-all-setup                     # pull every family from HF Hub (~4 GB)
+make bench-all-smoke                     # 3 instances per suite on CPU + render chart
 ```
+
+`bench-all-smoke` drops `bench_all_smoke.json` and `bench_all_smoke.png`
+(radar + per-subset bars + feasibility + per-instance box plot) in the
+repo root so you can eyeball improvements to your solver across families
+at a glance. See [**Visualising benchmark results**](#visualising-benchmark-results)
+below.
+
+To benchmark a single family or a single subset:
+
+```bash
+# DISCS
+make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
+make bench-discs SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1
+
+# Other families (same SUITE=... syntax, no new Make target needed):
+python scripts/bench_discs.py --suite coloring-myciel            --instances 3
+python scripts/bench_discs.py --suite coloring-queen             --instances 3
+python scripts/bench_discs.py --suite mis-rrg-rrg-d20_n10000     --instances 1
+python scripts/bench_discs.py --suite mis-rrg-rrg-d100_n10000    --instances 1
+python scripts/bench_discs.py --suite ea3d-gaussian-L4           --instances 3
+python scripts/bench_discs.py --suite ea3d-bimodal-L6            --instances 3
+python scripts/bench_discs.py --suite balanced-partition-nets-MNIST --instances 1
+```
+
+Third parties only need `pip install -e ".[discs,dev]"` + `make
+bench-all-setup` to reproduce the benchmark — no GoogleDrive auth, no
+local conversion step. The setup script (`scripts/setup_benchmarks.sh`)
+also takes `--source local` to re-generate the procedural families
+offline, and `--only coloring,ea3d` / `--skip discs` to cherry-pick.
+
+The original DISCS-only path (`make bench-discs-setup`,
+`make bench-discs-smoke`, etc.) is still available and unchanged.
 
 **Reproducing the PQQA paper (Ichikawa, NeurIPS 2024 — arXiv:2409.02135).**
 The bench CLI exposes every paper-relevant hyper-parameter
@@ -459,6 +489,39 @@ uv run python scripts/bench_factorization.py --bits 4 --instances 5
 
 See [`data/factorization/README.md`](data/factorization/README.md) for
 the construction details, scaling table, and the citation.
+
+### Visualising benchmark results
+
+`scripts/plot_benchmarks.py` turns any `bench_discs.py --output *.json`
+payload into a 2×2 report image:
+
+```bash
+# one run, default 2x2 report
+python scripts/plot_benchmarks.py results.json --output report.png
+
+# A/B comparison (e.g. baseline vs. your new method)
+python scripts/plot_benchmarks.py baseline.json tuned.json \
+    --labels baseline my-method --output ab.png
+
+# Makefile shortcut
+make bench-plot JSON=results.json OUTPUT=report.png
+```
+
+The image has four panels — chosen so each one exposes a *different*
+failure mode so that improvements (or regressions) to your method are
+impossible to miss:
+
+| panel                 | what it shows                                                                 |
+|-----------------------|-------------------------------------------------------------------------------|
+| **Radar chart**       | mean approximation ratio on one axis per family. Spokes that don't cover an axis reveal families where the solver has no signal. |
+| **Per-subset bar**    | mean ratio per `<family>/<subset>`, grouped by family. Catches subset-level regressions that the radar would average out.         |
+| **Feasibility bar**   | share of replicas satisfying constraints per subset — lets a penalised QUBO admit a high objective while flagging its infeasibility. |
+| **Per-instance box**  | distribution (median + IQR + outliers) of approximation ratios per family. Reveals variance / skew / per-instance outliers.       |
+
+The script only depends on matplotlib + numpy (already core deps) and
+takes any number of JSON files so A/B/C... comparisons stay a one-liner.
+
+![Benchmark report example](data/fig/gallery/bench_report_example.png)
 
 ## Streamlit dashboard
 
