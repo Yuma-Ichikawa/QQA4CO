@@ -21,6 +21,7 @@ import torch
 
 from qqa.callbacks import Callback, CallbackState, HistoryRecorder
 from qqa.polish import greedy_one_flip
+from qqa.problems.base import COProblem
 from qqa.relaxation import _default_penalty_from_forward
 from qqa.schedule import LinearBGSchedule
 from qqa.utils import require_cuda_if_requested, safe_score_summary
@@ -56,8 +57,15 @@ class AnnealResult:
     callbacks: list[Callback] = field(default_factory=list)
     score: dict = field(default_factory=dict)
     """Human-readable problem-specific score produced by
-    :py:meth:`COProblem.score_summary` (``label``, ``value``, ``unit``,
-    ``feasible``, ``extra``). Empty for batched-instance problems."""
+    :py:meth:`COProblem.score_summary`.
+
+    * **Single-instance**: standard dict
+      ``{label, value, unit, feasible, extra}`` with scalar fields.
+    * **Batched-instance** (``problem.num_instance > 1``): same keys, but
+      ``value`` and ``feasible`` are ``np.ndarray`` of length
+      ``num_instance``, and ``extra`` carries arrays plus a
+      ``feasible_count`` tally. ``score`` is empty for batched problems
+      whose class did not override :py:meth:`COProblem.score_summary`."""
     polished_sol: torch.Tensor | None = None
     """1-flip-locally-optimal version of :attr:`best_sol`, populated when
     :func:`anneal` is called with ``polish=True`` (the default) on a QUBO
@@ -351,11 +359,21 @@ def anneal(
 
     history = recorder.history if recorder is not None else {}
 
-    # Human-readable score. Only meaningful for single-instance problems,
-    # where ``best_sol`` is a single solution tensor.
+    # Human-readable score.
+    # * Single-instance: ``best_obj`` is a Python float and ``score`` is the
+    #   per-solution metric.
+    # * Batched-instance: if the problem provides a per-instance
+    #   ``score_summary`` (the ``*Instance`` classes do), call it so callers
+    #   get per-instance feasibility / value arrays. If not (legacy custom
+    #   problems), leave ``score`` empty rather than silently mis-formatting.
     score: dict = {}
     if not is_batch:
         score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
+    elif type(problem).score_summary is not COProblem.score_summary:
+        try:
+            score = problem.score_summary(best_sol)
+        except Exception as exc:  # noqa: BLE001 - surface but never abort
+            score = {"label": "loss", "feasible": False, "extra": {"error": str(exc)}}
 
     # Default-on greedy 1-flip polish. Noop for non-QUBO problems (no Q_mat)
     # and for batched-instance problems (best_sol is 2-D and the polish

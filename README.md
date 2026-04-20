@@ -395,6 +395,46 @@ qqa gui                                  # opens http://localhost:8501
 
 Run `qqa <command> --help` for the full option list.
 
+### DISCS combinatorial-optimization benchmark suite
+
+The DISCS NeurIPS-2023 benchmarks (MaxCut, MIS, MaxClique, NormCut) are
+wired in as a one-command suite. The data lives under `data/discs/` and is
+git-ignored; pull it once with the setup script, then run any number of
+benchmarks against it.
+
+```bash
+pip install -e ".[discs,dev]"
+make bench-discs-setup        # ~6.7 GB Drive download → unified .gpickle layout
+make bench-discs-smoke        # 3 instances per problem on CPU (~30 s)
+make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
+
+# Solve all 500 SATLIB MIS instances in ONE GPU anneal call (~80s on B200).
+make bench-discs SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1
+```
+
+**Reproducing the PQQA paper (Ichikawa, NeurIPS 2024 — arXiv:2409.02135).**
+The bench CLI exposes every paper-relevant hyper-parameter
+(`--learning-rate`, `--temp`, `--curve-rate`, `--gamma-min/max`,
+`--div-param`, `--penalty`). A preset target wires them to the PQQA
+"fewer / S=100" recipe (Table 1, SATLIB MIS):
+
+```bash
+make bench-discs-paper SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1
+# Override SOL_SIZE / NUM_EPOCHS / LEARNING_RATE for other paper rows:
+make bench-discs-paper SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1 \
+    SOL_SIZE=1000 NUM_EPOCHS=30000      # "more steps, S=1000" row
+```
+
+The `best_known` field for SATLIB MIS is the optimum independent set
+size derived from the underlying 3-SAT clause count (mean = 425.96 over
+500 instances), which matches the **KaMIS** baseline reported in Table 1.
+NormCut is *not* a benchmark in the PQQA paper — it is an additional
+DISCS suite included for completeness.
+
+See [`data/discs/README.md`](data/discs/README.md) for the full layout,
+optional Hugging Face source, the `qqa.datasets.discs_*` Python loaders,
+and the batched-instance (`parallel=True`) API.
+
 ## Streamlit dashboard
 
 ```bash
@@ -653,3 +693,26 @@ from:
 ```
 
 Reference implementation: <https://github.com/Yuma-Ichikawa/CRA4CO>.
+
+If you use the **DISCS combinatorial-optimization benchmark suite**
+(`make bench-discs`, `qqa.datasets.discs_*`, `data/discs/`), please cite the
+original DISCS paper that defined the problem instances and provided the
+raw graph data:
+
+```bibtex
+@inproceedings{goshvadi2023discs,
+  title     = {{DISCS}: A Benchmark for Discrete Sampling},
+  author    = {Goshvadi, Katayoon and Sun, Haoran and Liu, Xingchao
+               and Nova, Azade and Zhang, Ruqi and Grathwohl, Will
+               and Schuurmans, Dale and Dai, Hanjun},
+  booktitle = {Advances in Neural Information Processing Systems
+               (NeurIPS Datasets and Benchmarks Track)},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=oi1MUMk5NF}
+}
+```
+
+Reference implementation: <https://github.com/google-research/discs>.
+The unified ``data/discs/`` layout (one ``.gpickle`` per instance plus a
+``manifest.jsonl`` sidecar) is QQA4CO-specific and described in
+[`data/discs/README.md`](data/discs/README.md).

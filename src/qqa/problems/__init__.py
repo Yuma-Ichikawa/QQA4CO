@@ -28,6 +28,7 @@ from qqa.problems.extras import (
     NumberPartitioning,
     VertexCover,
 )
+from qqa.problems.normcut import NormalizedCut, NormCut
 from qqa.problems.qubo import (
     MaxClique,
     MaxCliqueInstance,
@@ -64,6 +65,8 @@ __all__ = [
     "MaxCutInstance",
     "BalancedGraphPartition",
     "Coloring",
+    "NormalizedCut",
+    "NormCut",
     "Ising1D",
     "EdwardsAnderson",
     "SherringtonKirkpatrick",

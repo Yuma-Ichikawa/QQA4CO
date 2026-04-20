@@ -176,12 +176,16 @@ class AutoDivTuner(Callback):
         if sol_size <= 1:
             return
         num_vars = state.relaxation.num_variables(state.problem)
+        # diversity is summed across all non-batch axes, so for batched-instance
+        # problems (shape (B, I, N)) the denominator must include I to keep
+        # ``ratio`` in roughly the same range as the single-instance path.
+        num_inst = int(getattr(state.problem, "num_instance", 1) or 1)
         div_val = (
             float(state.diversity.item())
             if torch.is_tensor(state.diversity)
             else float(state.diversity)
         )
-        ratio = div_val / (sol_size * num_vars)
+        ratio = div_val / (sol_size * num_vars * num_inst)
         diff = ratio - self.target
         dp = state.hyperparams.get("div_param", 0.0)
         dp = max(0.0, min(1.0, dp + self.lr * diff))
