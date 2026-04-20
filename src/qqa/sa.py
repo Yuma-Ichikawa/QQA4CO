@@ -231,9 +231,11 @@ def _seq_mh_sweep(
 def _validate_chain_problem(problem) -> tuple[bool, bool, int]:
     """Shared validation for SA / PA — returns ``(is_spin, is_binary, num_vars)``.
 
-    Raises ``NotImplementedError`` for categorical / batched-instance
-    problems (the chain backends only handle single-instance binary or spin
-    relaxations) and ``TypeError`` for any other unsupported relaxation.
+    Raises ``NotImplementedError`` for categorical / batched-instance /
+    structured-shape binary problems (the chain backends only handle
+    single-instance binary or spin relaxations whose latent is a flat
+    ``(B, N)`` tensor) and ``TypeError`` for any other unsupported
+    relaxation.
     """
     relax = getattr(problem, "relaxation", None)
     if isinstance(relax, CategoricalRelaxation):
@@ -246,6 +248,20 @@ def _validate_chain_problem(problem) -> tuple[bool, bool, int]:
             "Chain-based backends (SA / PA) do not support batched-instance "
             f"problems ({type(problem).__name__}); iterate over instances or "
             "use qqa.anneal which handles batched instances natively."
+        )
+    # Some binary problems (TSP's penalty-method formulation) override the
+    # latent shape via ``BinaryRelaxation(shape_fn=...)`` to lift a flat
+    # ``(B, N*N)`` latent into a position×city grid. ``loss_fn`` then uses
+    # einsum / masked sums that only accept the multi-axis layout, so the
+    # chain primitives (which sample a flat ``(B, N)`` state) would blow up
+    # inside ``loss_fn`` with an opaque einsum error. Reject at the API
+    # boundary so users see an actionable message instead.
+    if isinstance(relax, BinaryRelaxation) and getattr(relax, "_shape_fn", None) is not None:
+        raise NotImplementedError(
+            f"{type(problem).__name__} uses a structured BinaryRelaxation "
+            "(non-flat latent shape), which the chain-based backends "
+            "(SA / PA) cannot sample into. Use qqa.anneal, which honours "
+            "the relaxation's ``shape_fn`` natively."
         )
     is_spin = isinstance(relax, SpinRelaxation)
     is_binary = isinstance(relax, BinaryRelaxation) and not is_spin

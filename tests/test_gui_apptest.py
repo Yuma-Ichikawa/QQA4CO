@@ -350,6 +350,57 @@ def test_solve_page_pa_backend_smoke_run():
     )
 
 
+def test_solve_page_blocks_pa_run_on_categorical_problem():
+    """Regression: when the user picks PA and a categorical-relaxation
+    problem (Coloring / QAP / NQueens / TSP / BGP) the Solve page must
+    warn upfront and disable the "Run Population Annealing" button —
+    never let them click Run only to eat a NotImplementedError traceback.
+
+    Uses ``Coloring`` which uses a CategoricalRelaxation and is supported
+    by PQQA. The assertion is two-fold: (a) the warning banner mentions
+    PA being unavailable, (b) the Run button is disabled.
+    """
+    at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
+    at.session_state["problem_config"] = {
+        "kind": "coloring",
+        "size": 10,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {"num_category": 3, "degree": 3},
+    }
+    at.run()
+    assert not at.exception, at.exception
+
+    # Switch backend to PA.
+    backend_radios = [r for r in at.sidebar.radio if "backend" in r.label.lower()]
+    assert backend_radios, "Backend radio missing"
+    pa_options = [opt for opt in backend_radios[0].options if "PA" in opt]
+    if not pa_options:
+        pytest.skip("PA backend not available in this build")
+    backend_radios[0].set_value(pa_options[0])
+    at.run()
+    assert not at.exception, at.exception
+
+    # A warning banner must explicitly mention PA being unavailable for
+    # this problem. We look for the telltale phrase we added to the
+    # capability probe; if the text shifts in future, update this match.
+    warn_texts = [w.value for w in at.warning]
+    matched = any(
+        "Population Annealing is not available" in t
+        or "Population Annealing is not available for this problem" in t
+        for t in warn_texts
+    )
+    assert matched, (
+        "PA capability warning banner missing on categorical problem + PA "
+        f"backend; got warnings = {warn_texts!r}"
+    )
+
+    # The Run button is still rendered but must be disabled.
+    runs = [b for b in at.button if "Population Annealing" in b.label]
+    assert runs, "Run PA button missing entirely"
+    assert runs[0].disabled, "Run PA button should be disabled on unsupported problem"
+
+
 def test_solve_page_survives_old_qqa_without_population_annealing(monkeypatch):
     """Regression for ``module 'qqa' has no attribute 'population_annealing'``.
 

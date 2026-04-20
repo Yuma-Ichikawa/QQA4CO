@@ -671,8 +671,52 @@ else:
         },
     )
 
+# ---------------------------------------------------------------------------
+# PA capability probe — build the problem once and ask the chain-backend
+# validator whether PA can actually sample it. Gives users a friendly,
+# actionable warning BEFORE they click Run instead of the opaque
+# ``NotImplementedError: ... uses a CategoricalRelaxation`` stacktrace they
+# used to get on TSP / QAP / Coloring / NQueens / BGP (categorical) and on
+# TSP (structured BinaryRelaxation). The probe is cheap — it only imports
+# the validator and the built problem, never starts MCMC.
+# ---------------------------------------------------------------------------
+pa_capability_error: str | None = None
+if backend != "PQQA":
+    try:
+        _probe_problem = build_problem(cfg)
+    except Exception as _e:  # noqa: BLE001
+        pa_capability_error = f"Could not build problem: {_e}"
+    else:
+        try:
+            from qqa.sa import _validate_chain_problem as _pa_validate  # noqa: PLC0415
+
+            _pa_validate(_probe_problem)
+        except NotImplementedError as _e:
+            pa_capability_error = str(_e)
+        except Exception:  # noqa: BLE001
+            # Other TypeErrors are surfaced by the actual run; don't block.
+            pa_capability_error = None
+
+    if pa_capability_error:
+        st.warning(
+            "**Population Annealing is not available for this problem.** "
+            f"{pa_capability_error}  \n\n"
+            "Switch **Backend → PQQA** in the sidebar — PQQA handles "
+            "categorical (TSP / QAP / Coloring / NQueens) and structured "
+            "binary relaxations natively. Or pick a QUBO / Ising / spin "
+            "family on **Home** (MIS, MaxCut, MaxClique, VertexCover, "
+            "GraphBisection, MDS, Knapsack, NumberPartition, Ising, SK, EA, "
+            "RFIM, p-spin, Hopfield, Perceptron) to keep PA.",
+            icon=":material/warning:",
+        )
+
 run_label = "▶  Run QQA" if backend == "PQQA" else "▶  Run Population Annealing"
-run = st.button(run_label, type="primary", width="stretch")
+run = st.button(
+    run_label,
+    type="primary",
+    width="stretch",
+    disabled=(backend != "PQQA" and pa_capability_error is not None),
+)
 if run and backend == "PQQA":
     try:
         problem = build_problem(cfg)
@@ -949,7 +993,16 @@ if run and backend != "PQQA":
         if "polish" in inspect.signature(qqa.population_annealing).parameters:
             pa_kwargs["polish"] = bool(pa_polish)
         pa_result = qqa.population_annealing(**pa_kwargs)
-    except Exception as e:
+    except NotImplementedError as e:
+        # Specific to "PA does not support this problem class" — give the
+        # user a clear next step instead of a generic traceback string.
+        st.error(
+            f"**Population Annealing cannot solve this problem.**\n\n{e}\n\n"
+            "Switch to **Backend → PQQA** in the sidebar; PQQA handles all "
+            "problem families this UI exposes."
+        )
+        st.stop()
+    except Exception as e:  # noqa: BLE001
         st.error(f"PA run failed: {e}")
         st.stop()
 
@@ -957,6 +1010,21 @@ if run and backend != "PQQA":
     raw = float(pa_result.best_obj)
     with score_holder.container():
         render_score_card(pa_result.score, raw_loss=raw)
+
+    # If the post-run polish strictly improved the MCMC's best, tell the
+    # user: otherwise the live chart ends at ``mcmc_best`` while the score
+    # card shows the strictly-better ``polished best_obj`` and the gap
+    # looks like a reporting bug.
+    polished = getattr(pa_result, "polished_sol", None)
+    if polished is not None and pa_best:
+        mcmc_best = float(pa_best[-1])
+        if raw < mcmc_best - 1e-9:
+            st.caption(
+                f"Post-run greedy 1-flip polish improved the MCMC best "
+                f"from ``{mcmc_best:.4g}`` to ``{raw:.4g}`` — the score "
+                "card reflects the polished value (PAResult.best_sol "
+                "is automatically overwritten when polish strictly wins)."
+            )
 
     # Free-energy density curve
     if pa_result.history.get("beta") and pa_result.history.get("free_energy_density"):

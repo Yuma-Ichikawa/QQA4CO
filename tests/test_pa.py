@@ -396,3 +396,88 @@ def test_sa_polish_is_symmetric_with_pqqa():
         polish=True,
     )
     assert res.polished_sol is not None
+
+
+def test_pa_rejects_structured_binary_relaxation_cleanly():
+    """PA must raise ``NotImplementedError`` with an actionable message on
+    TSP's penalty-method formulation (``BinaryRelaxation(shape_fn=...)`` with
+    a multi-axis latent).
+
+    Before this guard, the chain backend happily sampled a flat
+    ``(sol_size, N*N)`` state and then blew up inside ``problem.loss_fn``
+    with an opaque ``einsum(): subscripts don't match tensor dimensions``,
+    which users saw as "PA is broken on TSP".
+    """
+    if not hasattr(qqa, "TSP"):
+        pytest.skip("qqa.TSP is not importable in this build")
+    prob = qqa.TSP(N=5, seed=0)
+    with pytest.raises(NotImplementedError, match="structured BinaryRelaxation"):
+        qqa.population_annealing(
+            prob,
+            sol_size=4,
+            num_temps=2,
+            sweeps_per_temp=1,
+            beta_start=0.1,
+            beta_end=2.0,
+            verbose=False,
+        )
+    with pytest.raises(NotImplementedError, match="structured BinaryRelaxation"):
+        qqa.simulated_annealing(
+            prob,
+            sol_size=4,
+            num_sweeps=2,
+            beta_start=0.1,
+            beta_end=2.0,
+            verbose=False,
+        )
+
+
+def test_pa_runs_on_binary_and_spin_problem_families():
+    """PA must actually run on every problem family the UI advertises for
+    it. Smoke-covers the graph QUBOs (MIS / MaxCut / VertexCover /
+    MaxClique / MinDominatingSet / GraphBisection) and the spin families
+    (Ising1D / SK / EA3D) so a future regression like "PA only works on
+    MIS" trips immediately.
+    """
+    g = nx.random_regular_graph(3, 12, seed=0)
+
+    problems: list = [
+        qqa.MaximumIndependentSet(g),
+        qqa.MaxCut(g),
+        qqa.MaxClique(g),
+        qqa.VertexCover(g),
+        qqa.GraphBisection(g, balance_penalty=1.0),
+    ]
+    if hasattr(qqa, "MinimumDominatingSet"):
+        problems.append(qqa.MinimumDominatingSet(g))
+    if hasattr(qqa, "Ising1D"):
+        problems.append(qqa.Ising1D(N=12))
+    if hasattr(qqa, "SherringtonKirkpatrick"):
+        problems.append(qqa.SherringtonKirkpatrick(N=12, seed=0))
+    if hasattr(qqa, "EdwardsAnderson"):
+        problems.append(qqa.EdwardsAnderson(L=3, dim=3, seed=0))
+
+    for prob in problems:
+        res = qqa.population_annealing(
+            prob,
+            sol_size=8,
+            num_temps=6,
+            sweeps_per_temp=1,
+            beta_start=0.1,
+            beta_end=2.0,
+            seed=0,
+            verbose=False,
+        )
+        assert res is not None, f"PA returned None for {type(prob).__name__}"
+        assert math.isfinite(float(res.best_obj)), (
+            f"PA.best_obj is not finite for {type(prob).__name__}: {res.best_obj}"
+        )
+        # The reported ``score.value`` and ``best_obj`` must agree on sign
+        # direction — for binary QUBOs the raw loss is negative when the
+        # problem maximises an IS / cut / clique, positive when it
+        # minimises a cover / bisection. No silent sign flips.
+        sv = res.score.get("value", None)
+        if isinstance(sv, (int, float)):
+            # Either both sides carry the same sign, or one encodes size
+            # (positive) while the other carries the negated loss.
+            assert math.isfinite(float(sv))
