@@ -137,9 +137,6 @@ class SpinRelaxation(BinaryRelaxation):
     ``temp == 0``.
     """
 
-    def __init__(self, shape_fn=None):
-        super().__init__(shape_fn=shape_fn)
-
     def forward(self, x):
         return 2 * x.clamp(0.0, 1.0) - 1
 
@@ -153,12 +150,9 @@ class SpinRelaxation(BinaryRelaxation):
         # on large batches).
         return torch.where(x.clamp(0.0, 1.0) >= 0.5, 1.0, -1.0).to(x.dtype)
 
-    def perturb_(self, x, learning_rate, temp):
-        with torch.no_grad():
-            if temp > 0:
-                noise = torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5)
-                x.add_(noise)
-            x.clamp_(0.0, 1.0)
+    # ``perturb_`` is inherited from :class:`BinaryRelaxation` — the
+    # latent ``x`` lives in ``[0, 1]`` for both relaxations so the noise
+    # schedule and ``clamp_(0, 1)`` rule are identical.
 
     def num_variables(self, problem):
         n = getattr(problem, "num_spins", getattr(problem, "num_nodes", None))

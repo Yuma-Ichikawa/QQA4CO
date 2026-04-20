@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.5.3"
+version = "0.6.0"
 description = "Quasi-Quantum Annealing (QQA): a general-purpose GPU solver for combinatorial and spin-glass optimization, with PI-GNN/CPRA and a parallel SA baseline."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -144,6 +144,10 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Add tests/ to sys.path so test modules can ``from conftest import ...``
+# for the helpers exposed in tests/conftest.py (APP, PAGE_DIR,
+# make_problem_config, set_slider).
+pythonpath = ["tests"]
 addopts = "-ra"
 filterwarnings = [
     "ignore::DeprecationWarning:qqa.legacy",

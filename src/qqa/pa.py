@@ -41,7 +41,7 @@ from typing import Any, Literal
 
 import torch
 
-from qqa.polish import greedy_one_flip
+from qqa.polish import apply_polish_if_improves
 from qqa.sa import (
     _build_beta_schedule,
     _qubo_seq_glauber_sweep,
@@ -422,18 +422,12 @@ def population_annealing(
     best_sol_disc = best_sol.detach()
 
     # Default-on greedy 1-flip polish. Shared with :func:`qqa.anneal` via
-    # ``qqa.polish.greedy_one_flip``; noop when ``Q_mat`` is absent (spin
-    # / categorical / batched problems). The polish strictly improves
-    # ``best_obj`` on QUBO landscapes where the MCMC stopped short of a
-    # 1-flip local minimum, so PA matches PQQA's post-processing contract.
-    polished_sol: torch.Tensor | None = None
-    if polish and getattr(problem, "Q_mat", None) is not None:
-        polished_sol = greedy_one_flip(problem, best_sol_disc)
-        with torch.no_grad():
-            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
-        if pol_obj < best_obj:
-            best_obj = pol_obj
-            best_sol_disc = polished_sol.detach()
+    # ``qqa.polish.apply_polish_if_improves``; noop when ``Q_mat`` is absent
+    # (spin / categorical / batched problems). PA therefore matches PQQA's
+    # post-processing contract by construction.
+    best_sol_disc, best_obj, polished_sol = apply_polish_if_improves(
+        problem, best_sol_disc, best_obj, polish=polish
+    )
 
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 

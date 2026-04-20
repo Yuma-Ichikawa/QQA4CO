@@ -6,6 +6,108 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-20
+
+### Added
+
+- **`qqa.polish.apply_polish_if_improves`**: single entry point for the
+  greedy 1-flip QUBO polish post-processing. `qqa.anneal`,
+  `qqa.simulated_annealing`, `qqa.population_annealing` and both
+  PI-GNN trainers now route through this helper so every backend has
+  the same "monotone free improvement" contract without five copies of
+  the same `if polish and Q_mat is not None: …` block.
+- **Shared test fixtures** at `tests/conftest.py`: `APP`, `PAGE_DIR`
+  path constants, a `make_problem_config(kind, size, **extra)` factory
+  and a `set_slider` helper. Test modules now import these directly,
+  eliminating twelve copies of the same ``problem_config`` literal in
+  `test_gui_apptest.py`.
+- **`app/_common.retheme_plotly(fig)`**: replaces the ``_retheme`` clone
+  previously defined once per Streamlit page. Import it alongside
+  `plotly_layout` so every chart stays in step with the active theme.
+- **`app/_common.as_numpy(x)`** (public alias of the former `_as_np`):
+  imported by `_solution_viz.py` so the two modules share a single
+  tensor-to-numpy conversion path.
+
+### Changed
+
+- **Benchmark suite refreshed**: the project version now tracks the
+  "qqa4co-bench" HF dataset (coloring / mis-rrg / ea3d /
+  balanced-partition / MaxCut G-set families), wired through the
+  `qqa.bench` public API and `qqa bench run|plot|list|setup` CLI.
+- `SpinRelaxation.perturb_` now inherits from `BinaryRelaxation` —
+  both relaxations share the same latent cube `[0, 1]` and therefore
+  the same noise + ``clamp_`` schedule. Removes a silent copy-paste
+  drift risk.
+- `qqa.bench` collapsed `_load_bench_discs` and `_load_plot_benchmarks`
+  onto a shared `_load_scripts_module(name)` helper so the two
+  ``sys.path`` / ``importlib`` call sites no longer drift.
+- ``tests/`` directory is now on the pytest ``pythonpath`` so test
+  modules can ``from conftest import …`` the shared helpers.
+
+### Removed
+
+- **`qqa.sa._qubo_glauber_sweep` deprecated alias** dropped — it
+  forwarded to `_qubo_seq_glauber_sweep` and was only referenced by an
+  in-tree diagnostic script (updated). The buggy parallel-update
+  semantics it warned about have been gone since 0.4.0.
+
+## [0.5.3] - 2026-04-20
+
+### Added
+
+- **Backend-aware Visualize layout**: the Streamlit Visualize page now
+  shows PQQA-only tabs for PQQA runs (family tree, PCA embedding,
+  diversity, parallel coordinates) and PA-only tabs for PA runs
+  (ESS, free-energy trajectory, equilibration diagnostic,
+  Thermodynamics, Lineage vs energy, Ancestry Sankey). Empty
+  "No snapshots recorded" placeholders are gone.
+- **Up-front PA capability probe** in the Solve page: problems that
+  PA cannot sample (categorical / structured binary, e.g. TSP, QAP,
+  Coloring, NQueens) now trigger a clear warning banner and disable
+  the Run button, instead of surfacing a cryptic ``einsum`` /
+  ``NotImplementedError`` mid-run.
+- **Three PA-specific visualisation tabs**: Thermodynamics (Q vs β,
+  internal energy, specific heat), Lineage vs energy, Ancestry
+  Sankey.
+
+### Changed
+
+- `qqa.simulated_annealing` / `qqa.population_annealing` now accept
+  `polish=True/False` and expose a `polished_sol` field, matching the
+  contract `qqa.anneal` has always had. The 1-flip polish is default-on
+  across all backends so the "best_obj" score card reflects the same
+  post-processing everywhere.
+- `_validate_chain_problem` (used by both SA and PA) now rejects
+  structured `BinaryRelaxation` (non-flat `shape_fn`, e.g. TSP)
+  with an actionable error steering users to `qqa.anneal`.
+
+## [0.5.2] - 2026-04-20
+
+### Added
+
+- **`qqa.bench` public Python API** (`run`, `plot`, `list_suites`,
+  `resolve_suite`) mirroring the `qqa bench` CLI so notebooks can
+  dispatch a benchmark without subprocess boilerplate.
+- **Polished benchmark report figure** (`scripts/plot_benchmarks.py`)
+  and the corresponding `qqa bench plot` CLI flow.
+
+### Changed
+
+- HF Hub dataset renamed to `qqa4co-bench` (was `discs-benchmarks`);
+  `scripts/setup_discs_data.sh` and all docs follow suit.
+
+## [0.5.1] - 2026-04-19
+
+### Added
+
+- **`qqa.population_annealing`**: Population Annealing backend with
+  parallel chain sampling, importance resampling between inverse
+  temperatures, full free-energy / log-Z estimates and an optional
+  genealogy / ancestry record. `PAResult` dataclass and
+  `qqa solve --backend pa` CLI expose the new path.
+- **MaxCut G-set benchmark family** via
+  `scripts/fetch_gset_data.py` + `scripts/maxcut_gset_g70.py`.
+
 ## [0.5.0] - 2026-04-19
 
 ### Added

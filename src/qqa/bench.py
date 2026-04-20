@@ -71,18 +71,25 @@ def _scripts_dir() -> Path:
     )
 
 
-def _load_bench_discs():
+def _load_scripts_module(name: str):
+    """Import a module from ``scripts/`` (``bench_discs`` / ``plot_benchmarks``).
+
+    Both runners live as plain ``.py`` files next to the repo and are *not*
+    shipped in the wheel, so we splice ``scripts/`` into ``sys.path`` once
+    per call and let :mod:`importlib` do the rest.
+    """
     sd = _scripts_dir()
     if str(sd) not in sys.path:
         sys.path.insert(0, str(sd))
-    return importlib.import_module("bench_discs")
+    return importlib.import_module(name)
+
+
+def _load_bench_discs():
+    return _load_scripts_module("bench_discs")
 
 
 def _load_plot_benchmarks():
-    sd = _scripts_dir()
-    if str(sd) not in sys.path:
-        sys.path.insert(0, str(sd))
-    return importlib.import_module("plot_benchmarks")
+    return _load_scripts_module("plot_benchmarks")
 
 
 # --------------------------------------------------------------------------- #

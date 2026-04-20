@@ -28,18 +28,12 @@ import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
+from _common import as_numpy as _as_numpy
 from _common import hex_to_rgba, palette, plotly_layout
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _as_numpy(x) -> np.ndarray:
-    """Return a CPU ``numpy`` view of a torch tensor / array / scalar."""
-    if hasattr(x, "detach"):
-        x = x.detach().cpu()
-    return np.asarray(x)
 
 
 def _graph_layout(g: nx.Graph, seed: int = 0) -> dict:

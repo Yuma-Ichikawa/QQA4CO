@@ -22,6 +22,9 @@ from _common import (  # noqa: E402
     sidebar_brand,
     theme_toggle_in_sidebar,
 )
+from _common import (
+    retheme_plotly as _retheme,
+)
 from _solution_viz import render_solution_view  # noqa: E402
 
 from qqa import visualization as viz  # noqa: E402
@@ -203,13 +206,6 @@ tab_pa_eq = _tab_or_noop("pa_eq")
 tab_pa_thermo = _tab_or_noop("pa_thermo")
 tab_pa_lineage = _tab_or_noop("pa_lineage")
 tab_pa_sankey = _tab_or_noop("pa_sankey")
-
-
-def _retheme(fig):
-    """Reskin a Plotly figure produced by ``viz`` to the current theme."""
-    with contextlib.suppress(Exception):
-        fig.update_layout(**plotly_layout())
-    return fig
 
 
 with tab_hist:

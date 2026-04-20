@@ -15,7 +15,6 @@ versions.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -26,10 +25,10 @@ os.environ["QQA_ALLOW_CUSTOM"] = "1"
 
 pytest.importorskip("streamlit", minversion="1.29.0")
 
+# Shared helpers — see ``tests/conftest.py``.
+from conftest import APP, PAGE_DIR, make_problem_config  # noqa: E402
+from conftest import set_slider as _set_slider
 from streamlit.testing.v1 import AppTest  # noqa: E402
-
-APP = Path(__file__).resolve().parents[1] / "app" / "streamlit_app.py"
-PAGE_DIR = APP.parent / "pages"
 
 
 def test_home_page_renders_default_problem():
@@ -95,13 +94,7 @@ def test_home_page_custom_problem_flow():
 def test_solve_page_widgets_present():
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
     # Seed the shared session state as if the user came from Home.
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 8)
     at.run()
     assert not at.exception
     labels = [s.label for s in at.sidebar.slider]
@@ -125,13 +118,6 @@ def test_visualize_page_handles_missing_run():
     )
 
 
-def _set_slider(at, label_fragment: str, value) -> None:
-    """Set the slider whose label contains ``label_fragment`` to ``value``."""
-    matches = [s for s in at.sidebar.slider if label_fragment in s.label]
-    assert matches, f"No slider whose label contains {label_fragment!r}"
-    matches[0].set_value(value)
-
-
 def test_solve_page_end_to_end_run():
     """Full Solve flow: wire up a tiny problem and click Run.
 
@@ -141,13 +127,7 @@ def test_solve_page_end_to_end_run():
     surfaced at runtime; this test pins the contract.
     """
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=90)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 8)
     at.run()
     assert not at.exception, at.exception
 
@@ -196,13 +176,7 @@ def test_visualize_page_renders_pa_result():
     at.session_state["last_result"] = res
     at.session_state["last_problem"] = prob
     at.session_state["last_pop_tracker"] = None
-    at.session_state["problem_config"] = {
-        "kind": "maxcut",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("maxcut", 8)
     at.run()
     assert not at.exception, at.exception
     # PA metric tiles populate (free-energy density + ln Z + R).
@@ -327,13 +301,7 @@ def test_solve_page_pa_backend_smoke_run():
     or a free-energy plot that breaks on a tiny problem.
     """
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 6,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 6)
     at.run()
     assert not at.exception, at.exception
 
@@ -406,13 +374,9 @@ def test_solve_page_blocks_pa_run_on_categorical_problem():
     PA being unavailable, (b) the Run button is disabled.
     """
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
-    at.session_state["problem_config"] = {
-        "kind": "coloring",
-        "size": 10,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {"num_category": 3, "degree": 3},
-    }
+    at.session_state["problem_config"] = make_problem_config(
+        "coloring", 10, num_category=3, degree=3
+    )
     at.run()
     assert not at.exception, at.exception
 
@@ -464,13 +428,7 @@ def test_solve_page_survives_old_qqa_without_population_annealing(monkeypatch):
     monkeypatch.delattr(_qqa, "PAResult", raising=False)
 
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 6,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 6)
     at.run()
     assert not at.exception, at.exception
 
@@ -519,13 +477,7 @@ def test_solve_runs_with_default_mis():
     """
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
     # Mirror the Home page's default seeded session state.
-    at.session_state["problem_config"] = {
-        "kind": "mis",
-        "size": 32,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {"graph_d": 3},
-    }
+    at.session_state["problem_config"] = make_problem_config("mis", 32, graph_d=3)
     at.run()
     assert not at.exception, at.exception
 
@@ -648,13 +600,7 @@ def test_solve_dynamics_separates_discrete_and_relaxed_best():
     metric tile.  This test asserts that both metric tiles are rendered
     after a tiny anneal run."""
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 8)
     at.run()
     assert not at.exception, at.exception
 
@@ -712,13 +658,7 @@ def test_compare_page_renders_with_default_problem():
     """The Compare page must render in the default 'sweep' mode without
     crashing when a problem is already in session_state."""
     at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=60)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 8)
     at.run()
     assert not at.exception, at.exception
     # Top-of-sidebar mode selector must be present.
@@ -732,13 +672,7 @@ def test_compare_page_shootout_mode_runs_pqqa_vs_sa_vs_pa():
     """Switch to the shootout mode, click Run, and confirm that the
     summary metrics for all three backends (PQQA, SA, PA) render."""
     at = AppTest.from_file(str(PAGE_DIR / "3_Compare.py"), default_timeout=180)
-    at.session_state["problem_config"] = {
-        "kind": "ising1d",
-        "size": 8,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {},
-    }
+    at.session_state["problem_config"] = make_problem_config("ising1d", 8)
     at.run()
     assert not at.exception, at.exception
     # Flip the mode selector to shootout. The radio label includes "PA"
@@ -783,13 +717,7 @@ def test_solve_page_exposes_polish_and_warmstart_toggles():
     introduced in the v0.5 release. Polish defaults to ON; warm-start
     defaults to OFF (only useful for graph problems)."""
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
-    at.session_state["problem_config"] = {
-        "kind": "maxcut",
-        "size": 16,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {"graph_d": 3},
-    }
+    at.session_state["problem_config"] = make_problem_config("maxcut", 16, graph_d=3)
     at.run()
     assert not at.exception, at.exception
     toggle_labels = [t.label for t in at.sidebar.toggle]
@@ -856,13 +784,7 @@ def test_solve_runs_with_min_dominating_set_default():
     """End-to-end smoke for the new MinimumDominatingSet problem under
     the same UI flow used by every other graph QUBO."""
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=120)
-    at.session_state["problem_config"] = {
-        "kind": "min_dominating_set",
-        "size": 16,
-        "seed": 0,
-        "device": "cpu",
-        "extra": {"graph_d": 3},
-    }
+    at.session_state["problem_config"] = make_problem_config("min_dominating_set", 16, graph_d=3)
     at.run()
     assert not at.exception, at.exception
     _set_slider(at, "sol_size", 8)

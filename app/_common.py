@@ -294,6 +294,21 @@ def plotly_layout(theme: str | None = None, **overrides) -> dict:
     return base
 
 
+def retheme_plotly(fig):
+    """Reskin a Plotly figure so its palette matches the active theme.
+
+    Every page mirrors this pattern — wrap any ``viz`` figure in
+    ``retheme_plotly(...)`` before ``st.plotly_chart``. Errors from older
+    figure objects that don't expose ``update_layout`` are intentionally
+    swallowed so a single bad chart never breaks the whole page.
+    """
+    import contextlib  # noqa: PLC0415 - keep optional import local
+
+    with contextlib.suppress(Exception):
+        fig.update_layout(**plotly_layout())
+    return fig
+
+
 def apply_theme() -> None:
     """Inject the active theme's CSS, professional-academic in light mode."""
     theme = get_theme()
@@ -1955,10 +1970,22 @@ def _hopfield_preview(problem: Any) -> None:
     )
 
 
-def _as_np(x) -> np.ndarray:
+def as_numpy(x) -> np.ndarray:
+    """Return a CPU ``numpy`` view of a torch tensor / array / scalar.
+
+    Shared across the app (problem previews, solution viz). Lives here
+    rather than at each import site so behaviour stays consistent if we
+    ever need to e.g. detach non-leaf autograd graphs or handle BF16.
+    """
     if hasattr(x, "detach"):
         return x.detach().cpu().numpy()
     return np.asarray(x)
+
+
+# Backwards-compatible alias — callers inside ``_common.py`` still use
+# ``_as_np``. Keeping the alias avoids a large patch and preserves the
+# "private helper" reading for module-internal call sites.
+_as_np = as_numpy
 
 
 _DEDICATED_PREVIEWS: dict[str, callable] = {
