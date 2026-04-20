@@ -216,6 +216,18 @@ def test_visualize_page_renders_pa_result():
     assert "Family tree" in tab_labels, (
         f"Family tree tab must always be present; got {tab_labels!r}"
     )
+    # New PA-only analytic tabs must all render alongside the legacy trio.
+    for extra_tab in (
+        "PA: ESS / β",
+        "PA: Free energy",
+        "PA: Equilibrium pop.",
+        "PA: Thermodynamics",
+        "PA: Lineage vs energy",
+        "PA: Ancestry Sankey",
+    ):
+        assert extra_tab in tab_labels, (
+            f"PA-specific visualize tab {extra_tab!r} missing; got {tab_labels!r}"
+        )
 
 
 def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
@@ -307,6 +319,17 @@ def test_solve_page_pa_backend_smoke_run():
     assert not leaked, (
         f"PQQA-only sliders leaked into PA sidebar: {leaked!r}; "
         f"all sidebar sliders = {sidebar_labels!r}"
+    )
+    # Greedy 1-flip polish is the symmetric knob to PQQA's post-processing;
+    # the checkbox must be present and default ON so PA's reported quality
+    # matches PQQA without the user having to remember.
+    polish_boxes = [cb for cb in at.sidebar.checkbox if "polish" in cb.label.lower()]
+    assert polish_boxes, (
+        f"PA 'Greedy 1-flip polish' checkbox missing; "
+        f"sidebar checkboxes = {[cb.label for cb in at.sidebar.checkbox]!r}"
+    )
+    assert polish_boxes[0].value is True, (
+        "PA polish checkbox must default to True (symmetric with PQQA)"
     )
 
     _set_slider(at, "PA population", 8)

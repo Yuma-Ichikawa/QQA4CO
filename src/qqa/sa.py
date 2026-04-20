@@ -43,6 +43,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
+from qqa.polish import greedy_one_flip
 from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
 from qqa.utils import require_cuda_if_requested, safe_score_summary
 
@@ -60,6 +61,7 @@ class SAResult:
     runtime: float
     history: dict = field(default_factory=dict)
     score: dict = field(default_factory=dict)
+    polished_sol: torch.Tensor | None = None
 
 
 def _resolve_num_vars(problem) -> int:
@@ -271,6 +273,7 @@ def simulated_annealing(
     verbose: bool = True,
     check_interval: int = 100,
     callback: Callable[[int, float, float], None] | None = None,
+    polish: bool = True,
 ) -> SAResult:
     """Run GPU-parallel Simulated Annealing on ``problem``.
 
@@ -422,6 +425,17 @@ def simulated_annealing(
     # problems want {0,1} (which is what we already track).
     best_sol_disc = best_sol.detach()
 
+    # Default-on greedy 1-flip polish — mirrors ``qqa.anneal`` / ``population_annealing``
+    # so every QQA4CO backend exposes the same post-processing contract.
+    polished_sol: torch.Tensor | None = None
+    if polish and getattr(problem, "Q_mat", None) is not None:
+        polished_sol = greedy_one_flip(problem, best_sol_disc)
+        with torch.no_grad():
+            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
+        if pol_obj < best_obj:
+            best_obj = pol_obj
+            best_sol_disc = polished_sol.detach()
+
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 
     return SAResult(
@@ -430,4 +444,5 @@ def simulated_annealing(
         runtime=runtime,
         history=history,
         score=score,
+        polished_sol=polished_sol,
     )
