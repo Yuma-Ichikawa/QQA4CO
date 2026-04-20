@@ -49,6 +49,17 @@ uv run ruff check src tests scripts app
 uv run ruff format src tests scripts app
 ```
 
+## Secrets
+
+- **Never commit API tokens, private keys, or `.env` files.** The
+  pre-commit config runs [`gitleaks`](https://github.com/gitleaks/gitleaks)
+  and [`nbstripout`](https://github.com/kynan/nbstripout) on every
+  commit, and the `Secret scan` GitHub Actions workflow re-runs
+  `gitleaks` on every PR plus weekly against the full history.
+- Hugging Face tokens belong in the `HUGGINGFACE_HUB_TOKEN` (or
+  `HF_TOKEN`) environment variable, not in source files or notebook
+  cells. `scripts/setup_benchmarks.sh` already expects this.
+
 ## Quick commands (Makefile)
 
 The `Makefile` wraps the exact commands CI runs:

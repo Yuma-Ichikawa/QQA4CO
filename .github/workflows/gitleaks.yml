@@ -1,0 +1,34 @@
+name: Secret scan
+
+# Defence-in-depth secret scanning. pre-commit runs gitleaks locally, this
+# workflow re-runs it on the server so a PR from a contributor who skipped
+# pre-commit (or disabled the hook) is still caught before merge.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly full-history scan, catches secrets accidentally committed on
+    # an out-of-band branch that never hit a PR.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so we scan the entire commit graph, not just the
+          # pushed-diff.
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
