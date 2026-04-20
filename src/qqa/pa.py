@@ -43,7 +43,7 @@ import torch
 
 from qqa.sa import (
     _build_beta_schedule,
-    _qubo_glauber_sweep,
+    _qubo_seq_glauber_sweep,
     _seq_mh_sweep,
     _validate_chain_problem,
 )
@@ -351,7 +351,7 @@ def population_annealing(
         with torch.no_grad():
             for _ in range(sweeps_per_temp):
                 if use_qubo_fast:
-                    x = _qubo_glauber_sweep(x, q_sym, q_diag, beta, rng)
+                    x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
                 else:
                     x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)
                 # Track best after EVERY sweep (matches SA semantics): a low-

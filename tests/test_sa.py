@@ -217,3 +217,106 @@ def test_sa_cli_smoke(tmp_path):
     assert result.returncode == 0, result.stderr
     assert out.exists()
     assert "backend    : sa" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Sampler-correctness regressions for the QUBO fast path.
+#
+# Earlier the QUBO fast path used a fully-parallel Metropolis sweep that
+# proposed every bit independently against the same pre-sweep state. On a
+# 3-regular MIS this oscillates deterministically between 0^N and 1^N at any
+# temperature (see diagnose_pa_mis.py); the fix is the sequential single-bit
+# sweep _qubo_seq_glauber_sweep which respects the Markov property bit by
+# bit. These tests pin both the bug and the fix so a future "let's just
+# parallelise it" refactor can't silently regress.
+# ---------------------------------------------------------------------------
+
+
+def test_qubo_parallel_metropolis_oscillates_on_3regular_mis():
+    """Pin the documented failure mode of the legacy parallel sweep.
+
+    On a regular-graph MIS every bit independently sees a favourable
+    single-flip ΔE in the all-zeros and all-ones states, so a fully
+    parallel proposal flips them all and bounces between the two
+    extremes. We pin this behaviour so the deprecated routine cannot be
+    re-introduced as a default by accident.
+    """
+    from qqa.sa import _qubo_parallel_metropolis_sweep  # noqa: PLC0415
+
+    g = nx.random_regular_graph(3, 32, seed=0)
+    problem = qqa.MaximumIndependentSet(g, device="cpu")
+    q_sym = 0.5 * (problem.Q_mat + problem.Q_mat.t())
+    q_diag = q_sym.diagonal().contiguous()
+    rng = torch.Generator(device="cpu").manual_seed(0)
+    x = torch.zeros((1, 32), dtype=torch.float32)
+
+    sizes: list[int] = []
+    for _ in range(8):
+        x = _qubo_parallel_metropolis_sweep(x, q_sym, q_diag, beta=5.0, rng=rng)
+        sizes.append(int(x.sum().item()))
+
+    # Deterministic oscillation: 32, 0, 32, 0, ...
+    assert sizes == [32, 0, 32, 0, 32, 0, 32, 0], (
+        f"Parallel sweep is supposed to mode-lock on regular MIS; got {sizes}. "
+        "If this test breaks, somebody fixed the buggy parallel sampler — "
+        "great, but please update the docstring of _qubo_parallel_metropolis_sweep "
+        "and remove the warning."
+    )
+
+
+def test_qubo_seq_glauber_sweep_solves_3regular_mis():
+    """The current (sequential) sampler must reach the MIS optimum.
+
+    Counterpart to the oscillation pin above. With the same graph and
+    enough sweeps at moderate β, the sequential single-bit sampler must
+    find a feasible IS with size in the textbook range (≥10 on 3-regular
+    N=32). Catches any future refactor that accidentally re-introduces
+    parallel updates inside the QUBO fast path.
+    """
+    from qqa.sa import _qubo_seq_glauber_sweep  # noqa: PLC0415
+
+    g = nx.random_regular_graph(3, 32, seed=0)
+    problem = qqa.MaximumIndependentSet(g, device="cpu")
+    q_sym = 0.5 * (problem.Q_mat + problem.Q_mat.t())
+    q_diag = q_sym.diagonal().contiguous()
+    rng = torch.Generator(device="cpu").manual_seed(0)
+    x = torch.zeros((4, 32), dtype=torch.float32)
+
+    best = float("inf")
+    for _ in range(50):
+        x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta=4.0, rng=rng)
+        best = min(best, float(problem.loss_fn(x).min().item()))
+
+    # On 3-regular N=32 a feasible IS of size 10 has loss = -10. Anything
+    # weaker than -8 means we have either heavy infeasibility or are still
+    # bouncing — both indicate the sampler regressed.
+    assert best <= -10.0, (
+        f"Sequential QUBO sweep should reach loss ≤ -10 on 3-regular MIS; got {best}."
+    )
+
+
+def test_sa_default_backend_solves_3regular_mis():
+    """End-to-end SA must deliver a near-optimal MIS on 3-regular N=32.
+
+    Under the buggy parallel sweep this returned ``best_obj ≥ -5``; the
+    sequential fix routinely reaches ``-12`` or better. We pin a loose
+    threshold of ``-10`` so the test stays stable across CI runners while
+    still catching the historical regression.
+    """
+    g = nx.random_regular_graph(3, 32, seed=0)
+    problem = qqa.MaximumIndependentSet(g, device="cpu")
+    res = qqa.simulated_annealing(
+        problem,
+        sol_size=64,
+        num_sweeps=500,
+        beta_start=0.1,
+        beta_end=8.0,
+        beta_schedule="geometric",
+        seed=0,
+        verbose=False,
+    )
+    assert float(res.best_obj) <= -10.0, (
+        f"SA on 3-regular MIS should reach best_obj ≤ -10; got {res.best_obj}. "
+        "If this regresses look for accidental reintroduction of parallel "
+        "single-bit proposals in the QUBO fast path (see lessons L29)."
+    )

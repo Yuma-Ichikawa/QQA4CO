@@ -7,11 +7,13 @@ head against QQA / CRA-PI-GNN / CPRA on the *same*
 
 Two execution paths are dispatched automatically:
 
-1. **QUBO fast path** (``problem.Q_mat`` present) — every sweep updates all
-   spins in **one** ``x @ Q`` matmul plus a Glauber-like independent
-   acceptance per bit. Total cost is ``O(num_sweeps * N^2)`` flops — the
-   same as one QQA epoch — and runs end-to-end on GPU with no host
-   round-trips inside the loop.
+1. **QUBO fast path** (``problem.Q_mat`` present) — :func:`_qubo_seq_glauber_sweep`
+   runs *sequential* single-bit Glauber/Metropolis updates inside one
+   sweep, but every replica is updated in parallel on GPU. The per-bit
+   ΔE is computed from the relevant column of ``Q`` in O(N) per bit, so a
+   full sweep is O(N²) flops per replica with **zero host round-trips**.
+   This is the textbook-correct sampler that Boltzmann-equilibrates for
+   any symmetric QUBO.
 2. **Generic single-spin sequential MH** — for non-QUBO problems
    (``Knapsack``, ``MaxSAT3``, ``MaximumIndependentSet``'s edge-list
    variants when used through ``UserProblem``, ...). Calls
@@ -21,13 +23,14 @@ Two execution paths are dispatched automatically:
 Both paths support a leading batch dimension of size ``sol_size`` so the
 chain is naturally parallelised on GPU.
 
-The Glauber-like acceptance used in the fast path proposes every bit
-independently in the *same* sweep, which is **not** a strictly correct
-single-spin Metropolis chain (proposals are not conditional on the most
-recent neighbour state). It does converge to the Boltzmann distribution
-in the high-``beta`` limit for QUBO objectives, and matches the
-"parallel-tempered classical SA" baselines used in the QQA papers — which
-is the comparison we ship for benchmark notebooks.
+History note (kept for reproducibility of the QQA papers): the previous
+fast path proposed every bit *in parallel* against the same pre-sweep
+state. That is **not** a valid single-spin chain on coupled QUBOs and
+caused catastrophic mode-locking on MIS / MaxCut style problems
+(empirically: 3-regular MIS oscillates between all-zeros and all-ones
+forever because every bit independently sees a favourable single-flip
+ΔE). The biased baseline is preserved as :func:`_qubo_parallel_metropolis_sweep`
+for paper-reproduction tests, but it is *no longer* the default sampler.
 """
 
 from __future__ import annotations
@@ -95,6 +98,52 @@ def _build_beta_schedule(
 # ---------------------------------------------------------------------------
 
 
+def _qubo_seq_glauber_sweep(
+    x: torch.Tensor,
+    q_sym: torch.Tensor,
+    q_diag: torch.Tensor,
+    beta: float,
+    rng: torch.Generator,
+) -> torch.Tensor:
+    """One **sequential** single-bit Metropolis sweep on a binary QUBO.
+
+    Updates the bits in a random permutation. For each bit ``j`` the
+    single-flip ΔE is computed from the *current* state via one column
+    of ``q_sym``:
+
+        ΔE_j(x) = (1 - 2 x_j) * (2 (Q_sym x)_j - 2 x_j Q_jj + Q_jj)
+
+    Acceptance is independent across replicas (Metropolis,
+    ``p = min(1, exp(-β ΔE))``). ``x`` is updated in-place after each
+    bit so subsequent bits in the same sweep see the most recent state —
+    this is what distinguishes the textbook-correct sampler from the
+    biased fully-parallel proposal.
+
+    Cost per sweep: ``N`` matrix-vector slices of size ``N`` per replica
+    = ``O(N²)`` flops. The ``sol_size`` batch dimension is handled
+    natively on GPU (no host round-trips inside the loop).
+    """
+    sol_size, num_vars = x.shape
+    perm = torch.randperm(num_vars, generator=rng, device=x.device)
+    # ``q_sym`` may be a (N, N) tensor; we slice columns lazily.
+    for j in perm.tolist():
+        qx_j = x @ q_sym[:, j]  # shape (sol_size,)
+        x_j = x[:, j]
+        # ΔE for flipping bit j given the current x.
+        delta_e = (1.0 - 2.0 * x_j) * (2.0 * qx_j - 2.0 * x_j * q_diag[j] + q_diag[j])
+        # Metropolis acceptance, independent per replica.
+        accept_p = torch.exp(torch.clamp(-beta * delta_e, max=0.0))
+        u = torch.rand(sol_size, device=x.device, generator=rng)
+        flip = u < accept_p
+        # Update in place so subsequent bits in this sweep see the new x.
+        x = x.clone() if not x.is_contiguous() else x  # cheap no-op
+        x[:, j] = torch.where(flip, 1.0 - x_j, x_j)
+    return x
+
+
+# Legacy alias kept for one release so external users get a clear
+# DeprecationWarning if they were importing the buggy parallel sweep
+# directly. The default sampler is now the sequential version above.
 def _qubo_glauber_sweep(
     x: torch.Tensor,
     q_sym: torch.Tensor,
@@ -102,13 +151,33 @@ def _qubo_glauber_sweep(
     beta: float,
     rng: torch.Generator,
 ) -> torch.Tensor:
-    """One Glauber-like parallel sweep on a QUBO with symmetric ``q_sym``.
+    """Deprecated alias — forwards to :func:`_qubo_seq_glauber_sweep`.
 
-    Implements the exact single-bit-flip ΔE for ``L(x) = x^T Q x`` with
-    binary ``x``: flipping bit ``i`` changes the loss by
-    ``(1 - 2 x_i) * (2 (Q x)_i - 2 x_i Q_ii + Q_ii)``. Every bit is proposed
-    in parallel against the *same* pre-sweep ``x``; this is the standard
-    parallel-tempered classical SA baseline used in the QQA papers.
+    The previous implementation did parallel single-flip proposals on the
+    same pre-sweep state, which mode-locks on MIS / MaxCut. Use
+    :func:`_qubo_seq_glauber_sweep` (correct) or
+    :func:`_qubo_parallel_metropolis_sweep` (paper-reproduction baseline).
+    """
+    return _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
+
+
+def _qubo_parallel_metropolis_sweep(
+    x: torch.Tensor,
+    q_sym: torch.Tensor,
+    q_diag: torch.Tensor,
+    beta: float,
+    rng: torch.Generator,
+) -> torch.Tensor:
+    """One **fully parallel** Metropolis sweep on a binary QUBO.
+
+    .. warning::
+       This is the historical "parallel-tempered classical SA" baseline.
+       Every bit is proposed against the *same* pre-sweep ``x`` and
+       accepted independently — which **breaks detailed balance on any
+       coupled QUBO** and produces deterministic 0^N ↔ 1^N oscillation
+       on regular-graph MIS at any temperature. It is retained only for
+       reproducibility of the QQA-paper baselines; do **not** use it as
+       a sampler.
     """
     qx = x @ q_sym
     delta_e = (1.0 - 2.0 * x) * (2.0 * qx - 2.0 * x * q_diag + q_diag)
@@ -302,7 +371,7 @@ def simulated_annealing(
 
         with torch.no_grad():
             if use_qubo_fast:
-                x = _qubo_glauber_sweep(x, q_sym, q_diag, beta, rng)
+                x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
             else:
                 x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)
 
