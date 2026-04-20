@@ -28,6 +28,12 @@ from qqa.problems.extras import (
     NumberPartitioning,
     VertexCover,
 )
+from qqa.problems.factorization import (
+    IntegerFactorizationIsing,
+    random_factorization_problems,
+    random_prime,
+    random_semiprime,
+)
 from qqa.problems.normcut import NormalizedCut, NormCut
 from qqa.problems.qubo import (
     MaxClique,
@@ -86,4 +92,8 @@ __all__ = [
     "UserProblem",
     "user_problem_from_source",
     "load_problem_from_file",
+    "IntegerFactorizationIsing",
+    "random_factorization_problems",
+    "random_prime",
+    "random_semiprime",
 ]
