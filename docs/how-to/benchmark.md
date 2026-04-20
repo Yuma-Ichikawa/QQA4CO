@@ -6,7 +6,7 @@ No edits to the repo or knowledge of its internals are required.
 
 Every benchmark instance lives on the Hugging Face Hub:
 
-> **[`huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench)**
+> **[`huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench)**
 
 The dataset bundles the [DISCS](https://arxiv.org/abs/2311.04730) CO
 benchmarks (NeurIPS 2023), the **MaxCut G-set** superset (71 graphs,

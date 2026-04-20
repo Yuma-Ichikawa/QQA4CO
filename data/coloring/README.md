@@ -37,6 +37,6 @@ Everything below `.gitignore` is re-generated locally by:
 python scripts/generate_coloring_instances.py
 ```
 
-Upstream distribution: `Yuma-Ichikawsa/qqa4co-bench` on the Hugging Face
+Upstream distribution: `Yuma-Ichikawa/qqa4co-bench` on the Hugging Face
 Hub (same repo as DISCS; see `data/discs/README.md` for credentials /
 fallbacks).

@@ -12,7 +12,7 @@
 #
 # Two sources are supported. The default ``hf`` path pulls every family
 # straight from the Hugging Face dataset
-#   https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench
+#   https://huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench
 # (no login required, no conversion step). The ``local`` path re-generates
 # the non-DISCS families from scratch on this machine (useful when you
 # cannot reach the Hub, or when tweaking the generators themselves).
@@ -38,7 +38,7 @@ SOURCE="hf"                       # hf | local
 ONLY=""                           # comma-separated family names
 SKIP=""                           # comma-separated family names
 DISCS_ARGS=""
-HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/qqa4co-bench}"
+HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawa/qqa4co-bench}"
 
 usage() { sed -n '1,30p' "$0"; exit 0; }
 

@@ -41,5 +41,5 @@ against this published ground-state reference when available.
 python scripts/generate_ea3d_instances.py
 ```
 
-Upstream distribution: `Yuma-Ichikawsa/qqa4co-bench` on the Hugging Face
+Upstream distribution: `Yuma-Ichikawa/qqa4co-bench` on the Hugging Face
 Hub.

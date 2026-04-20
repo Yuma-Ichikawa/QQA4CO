@@ -1,7 +1,7 @@
 # MaxCut — G-set benchmark
 
 **71 graphs**, best-known cuts tracked, hosted on
-[`Yuma-Ichikawsa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench)
+[`Yuma-Ichikawa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench)
 under `gset/`.
 
 | size               | instances            | typical n, m                                 |
