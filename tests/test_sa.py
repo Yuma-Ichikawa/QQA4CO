@@ -264,6 +264,30 @@ def test_qubo_parallel_metropolis_oscillates_on_3regular_mis():
     )
 
 
+def test_qubo_seq_glauber_sweep_does_not_mutate_input():
+    """The QUBO fast-path sweep must have pure value semantics.
+
+    Earlier revisions used ``x[:, j] = …`` directly on the caller's
+    tensor, which silently mutated whatever array got passed in. PA's
+    genealogy and SA's per-chain best tracking depend on the pre-sweep
+    state being untouched, so we pin the no-mutation invariant here.
+    """
+    from qqa.sa import _qubo_seq_glauber_sweep  # noqa: PLC0415
+
+    torch.manual_seed(0)
+    Q = torch.randn(8, 8)
+    q_sym = 0.5 * (Q + Q.t())
+    q_diag = q_sym.diagonal().contiguous()
+    x_in = (torch.rand(4, 8) > 0.5).float()
+    x_snapshot = x_in.clone()
+    rng = torch.Generator(device="cpu").manual_seed(1)
+    _ = _qubo_seq_glauber_sweep(x_in, q_sym, q_diag, beta=1.5, rng=rng)
+    assert torch.equal(x_in, x_snapshot), (
+        "_qubo_seq_glauber_sweep must not mutate its input tensor; "
+        "callers and downstream genealogy code rely on pure value semantics."
+    )
+
+
 def test_qubo_seq_glauber_sweep_solves_3regular_mis():
     """The current (sequential) sampler must reach the MIS optimum.
 
