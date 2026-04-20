@@ -727,7 +727,7 @@ def render(
         fig.text(
             0.5,
             0.035,
-            "dataset  ·  huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench      "
+            "dataset  ·  huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench      "
             "runner  ·  scripts/bench_discs.py      viz  ·  scripts/plot_benchmarks.py",
             ha="center",
             va="center",

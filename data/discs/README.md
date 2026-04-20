@@ -36,7 +36,7 @@ make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
 That is it. The setup script will:
 
 1. **Download** the prebuilt dataset from the Hugging Face Hub
-   (`Yuma-Ichikawsa/qqa4co-bench`, override with `DISCS_HF_REPO_ID=...`) —
+   (`Yuma-Ichikawa/qqa4co-bench`, override with `DISCS_HF_REPO_ID=...`) —
    primary source, free, no auth required.
 2. **Or fall back** to the original Google Drive tarball
    (`DISCS-DATA.tar.gz`, ~6.7 GB) and extract just the `DISCS-DATA/sco/`
