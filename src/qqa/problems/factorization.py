@@ -228,9 +228,7 @@ def _compile(p: int, q: int) -> _Compilation:
             pinned[final_idx] = n_k
         else:
             if n_k != 0:
-                raise RuntimeError(
-                    f"internal: column {k} has no spin but N_k={n_k} ≠ 0"
-                )
+                raise RuntimeError(f"internal: column {k} has no spin but N_k={n_k} ≠ 0")
 
     # Pin the high bits of p and q (no enforcement — the optimiser is free
     # to permute them; pinning the leading bit anchors the known
@@ -295,9 +293,9 @@ def _build_qubo_from_compilation(c: _Compilation) -> tuple[np.ndarray, float, li
     h = np.zeros(n, dtype=np.float64)
     J = np.zeros((n, n), dtype=np.float64)
     e0 = 0.0
-    for (i, j, k) in c.and_clauses:
+    for i, j, k in c.and_clauses:
         e0 += _add_and_gadget(h, J, i, j, k)
-    for (i, j, k, a) in c.xor_clauses:
+    for i, j, k, a in c.xor_clauses:
         e0 += _add_xor_gadget(h, J, i, j, k, a)
 
     # Symmetrise J so the substitution loop below is simpler.
@@ -449,9 +447,7 @@ class IntegerFactorizationIsing(QUBOProblem):
         x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
         with torch.no_grad():
             xb = x.float().round().clamp_(0.0, 1.0)
-            energies = (
-                torch.einsum("bi,ij,bj->b", xb, self.Q_mat, xb) + self.offset
-            )
+            energies = torch.einsum("bi,ij,bj->b", xb, self.Q_mat, xb) + self.offset
             hamming = (xb != self.planted_x).sum(dim=-1)
 
         # Pick the lowest-energy replica.
@@ -499,9 +495,7 @@ class IntegerFactorizationIsing(QUBOProblem):
         """Decode ``(p̂, q̂)`` from a single Boolean configuration."""
         flat = x.view(-1).round().clamp_(0.0, 1.0).long().cpu().numpy()
         if flat.size != self.num_nodes:
-            raise ValueError(
-                f"decode_factors expected length {self.num_nodes}, got {flat.size}"
-            )
+            raise ValueError(f"decode_factors expected length {self.num_nodes}, got {flat.size}")
         full = np.zeros(self._compilation.n_vars, dtype=np.int64)
         for orig, b in self._pinned.items():
             full[orig] = b

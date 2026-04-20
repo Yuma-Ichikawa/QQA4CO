@@ -42,10 +42,24 @@ from qqa.problems.factorization import (
 @pytest.mark.parametrize(
     "n,expected",
     [
-        (2, True), (3, True), (5, True), (7, True), (11, True),
-        (13, True), (17, True), (19, True), (23, True), (29, True),
-        (4, False), (6, False), (9, False), (15, False),
-        (21, False), (25, False), (1, False), (0, False),
+        (2, True),
+        (3, True),
+        (5, True),
+        (7, True),
+        (11, True),
+        (13, True),
+        (17, True),
+        (19, True),
+        (23, True),
+        (29, True),
+        (4, False),
+        (6, False),
+        (9, False),
+        (15, False),
+        (21, False),
+        (25, False),
+        (1, False),
+        (0, False),
     ],
 )
 def test_is_probable_prime_small(n: int, expected: bool):
@@ -106,7 +120,10 @@ def test_and_gadget_full_spectrum():
 
     # Satisfying assignments of c = a∧b
     for (a, b, c), expected in {
-        (0, 0, 0): 0, (0, 1, 0): 0, (1, 0, 0): 0, (1, 1, 1): 0,
+        (0, 0, 0): 0,
+        (0, 1, 0): 0,
+        (1, 0, 0): 0,
+        (1, 1, 1): 0,
     }.items():
         assert energies[(a, b, c)] == pytest.approx(expected), (
             f"AND gadget violates Eq.(10) at sat assignment (a,b,c)=({a},{b},{c}): "
@@ -114,9 +131,10 @@ def test_and_gadget_full_spectrum():
         )
     # Violating assignments
     for (a, b, c), expected in {
-        (0, 0, 1): 12,                # a∧b=0 but c=1, the "hard" violation
-        (0, 1, 1): 4, (1, 0, 1): 4,
-        (1, 1, 0): 4,                 # a∧b=1 but c=0
+        (0, 0, 1): 12,  # a∧b=0 but c=1, the "hard" violation
+        (0, 1, 1): 4,
+        (1, 0, 1): 4,
+        (1, 1, 0): 4,  # a∧b=1 but c=0
     }.items():
         assert energies[(a, b, c)] == pytest.approx(expected), (
             f"AND gadget violates Eq.(10) at viol assignment (a,b,c)=({a},{b},{c}): "
@@ -151,13 +169,10 @@ def test_xor_gadget_full_spectrum():
         if is_planted:
             sat_count += 1
             assert pytest.approx(0.0, abs=1e-9) == E, (
-                f"XOR gadget should be 0 on planted (a,b,c,d)=({a},{b},{c},{d}), "
-                f"got {E}"
+                f"XOR gadget should be 0 on planted (a,b,c,d)=({a},{b},{c},{d}), got {E}"
             )
         else:
-            assert E >= 2.0 - 1e-9, (
-                f"XOR gadget gap < 2 at (a,b,c,d)=({a},{b},{c},{d}): {E}"
-            )
+            assert E >= 2.0 - 1e-9, f"XOR gadget gap < 2 at (a,b,c,d)=({a},{b},{c},{d}): {E}"
     assert sat_count == 4, f"XOR gadget should have 4 satisfying configs, got {sat_count}"
 
 
@@ -176,9 +191,7 @@ def test_planted_solution_has_zero_energy(p: int, q: int):
     """
     prob = IntegerFactorizationIsing(p=p, q=q)
     energy = prob.loss_fn(prob.planted_x.unsqueeze(0)).item()
-    assert energy == pytest.approx(0.0, abs=1e-5), (
-        f"planted energy = {energy} ≠ 0 for N={p*q}"
-    )
+    assert energy == pytest.approx(0.0, abs=1e-5), f"planted energy = {energy} ≠ 0 for N={p * q}"
 
 
 @pytest.mark.parametrize("p,q", [(3, 5), (5, 7), (11, 13)])
@@ -206,9 +219,7 @@ def test_planted_is_strict_minimum(p: int, q: int):
         flipped = base.clone()
         flipped[i] = 1.0 - flipped[i]
         e = prob.loss_fn(flipped.unsqueeze(0)).item()
-        assert e >= 2.0 - 1e-6, (
-            f"single-flip energy {e} < 2 for N={prob.N}, flip idx={i}"
-        )
+        assert e >= 2.0 - 1e-6, f"single-flip energy {e} < 2 for N={prob.N}, flip idx={i}"
 
 
 # --------------------------------------------------------------------------- #
