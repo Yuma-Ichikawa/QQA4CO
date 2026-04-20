@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import networkx as nx
+import pytest
 import torch
 
 import qqa
@@ -98,8 +99,6 @@ def test_approx_ratio_signs():
 
 def test_cli_rejects_parallel_with_sa_backend():
     """--parallel currently requires --backend qqa (sa/pa cannot batch)."""
-    import pytest
-
     with pytest.raises(SystemExit, match="--parallel"):
         bench_discs.main(
             [
@@ -112,6 +111,57 @@ def test_cli_rejects_parallel_with_sa_backend():
                 "1",
             ]
         )
+
+
+def test_approx_ratio_new_families():
+    # ea3d: both obj & best negative → ratio = obj / best (closer to 1 = better).
+    assert bench_discs._approx_ratio(-0.9, -1.0, "ea3d") == pytest.approx(0.9)
+    # coloring / balanced-partition: no meaningful ratio by design.
+    assert bench_discs._approx_ratio(0.0, 0.0, "coloring") is None
+    assert bench_discs._approx_ratio(12.0, float("nan"), "balanced-partition") is None
+    # mis-rrg follows the maximisation convention.
+    assert bench_discs._approx_ratio(18.0, 20.0, "mis-rrg") == pytest.approx(0.9)
+
+
+def test_resolve_suite_longest_prefix_mis_rrg(tmp_path, monkeypatch):
+    """``mis-rrg-d4_n20`` should match the ``mis-rrg`` family, not ``mis``."""
+    import json
+    import pickle
+
+    root = tmp_path / "data"
+    # ``mis`` lives under the DISCS layout (data/discs/mis/...).
+    (root / "discs" / "mis" / "satlib" / "uf").mkdir(parents=True)
+    # ``mis-rrg`` is a standalone top-level family (data/mis-rrg/...).
+    (root / "mis-rrg" / "d4_n20").mkdir(parents=True)
+    for sub_dir, graph in (
+        (root / "discs" / "mis" / "satlib" / "uf", nx.path_graph(3)),
+        (root / "mis-rrg" / "d4_n20", nx.cycle_graph(4)),
+    ):
+        with open(sub_dir / "0001.gpickle", "wb") as fh:
+            pickle.dump(graph, fh)
+        with open(sub_dir / "manifest.jsonl", "w") as fh:
+            fh.write(
+                json.dumps(
+                    {
+                        "id": f"{sub_dir.name}-0001",
+                        "file": "0001.gpickle",
+                        "num_nodes": graph.number_of_nodes(),
+                        "best_known": 1.0,
+                    }
+                )
+                + "\n"
+            )
+    monkeypatch.setenv("QQA_DATA_DIR", str(root))
+
+    # The catalog re-indexes mis-rrg under a synthetic ``rrg`` graph_type
+    # so the suite reads uniformly as ``mis-rrg-rrg-<subset>``.
+    triples = bench_discs._resolve_suite("mis-rrg-rrg-d4_n20")
+    assert triples == [("mis-rrg", "rrg", "d4_n20")]
+
+    # And ``mis-satlib-uf`` must still bind to the real ``mis`` family,
+    # not the longer-prefix ``mis-rrg`` family.
+    triples = bench_discs._resolve_suite("mis-satlib-uf")
+    assert triples == [("mis", "satlib", "uf")]
 
 
 def test_cli_accepts_paper_hyperparameters(monkeypatch):
