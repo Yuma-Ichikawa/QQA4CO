@@ -13,7 +13,7 @@
 #
 # Environment variables:
 #   QQA_DATA_DIR        if set, overrides ``data/`` root (rare)
-#   DISCS_HF_REPO_ID    HF dataset repo id (default: yuma-ichikawa/discs-co-bench)
+#   DISCS_HF_REPO_ID    HF dataset repo id (default: Yuma-Ichikawsa/qqa4co-bench)
 #   DISCS_GDRIVE_FOLDER Google Drive folder URL (default: paper-published one)
 
 set -euo pipefail
@@ -34,7 +34,7 @@ SOURCE="hf"
 PROBLEM="all"
 SUBSETS=""
 LIMIT=""
-HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/discs-co-bench}"
+HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/qqa4co-bench}"
 # The published DISCS Drive folder (1nEppx...) contains exactly two files:
 #   * 2dtsp.zip                    (TSP data, NOT used by us)
 #   * DISCS-DATA.tar.gz  ID=1lbpdEqs_rDqaLmS3YkFrbn7iK8z1K1it (~6.7 GB)

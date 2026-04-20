@@ -148,7 +148,7 @@ else:
     _ordered_keys = _UNIVERSAL_TAB_KEYS + _PQQA_TAB_KEYS + [_TREE_TAB_KEY]
 
 _tabs = st.tabs([_TAB_LABELS[k] for k in _ordered_keys])
-_tab_by_key: dict[str, "st.delta_generator.DeltaGenerator"] = dict(
+_tab_by_key: dict[str, st.delta_generator.DeltaGenerator] = dict(
     zip(_ordered_keys, _tabs, strict=True)
 )
 

@@ -243,8 +243,7 @@ def test_visualize_page_renders_pa_result():
         "Replica fate",
     ):
         assert pqqa_only_tab not in tab_labels, (
-            f"PQQA-only tab {pqqa_only_tab!r} must be hidden on a PA "
-            f"run; got tabs = {tab_labels!r}"
+            f"PQQA-only tab {pqqa_only_tab!r} must be hidden on a PA run; got tabs = {tab_labels!r}"
         )
 
 
@@ -300,8 +299,7 @@ def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
         "PA: Ancestry Sankey",
     ):
         assert pa_only_tab not in tab_labels, (
-            f"PA-only tab {pa_only_tab!r} must be hidden on a PQQA "
-            f"run; got tabs = {tab_labels!r}"
+            f"PA-only tab {pa_only_tab!r} must be hidden on a PQQA run; got tabs = {tab_labels!r}"
         )
     # PQQA-only tabs (what the Visualize page is designed around when
     # the run came from ``qqa.anneal``) must still be present.
@@ -315,8 +313,7 @@ def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
         "Replica fate",
     ):
         assert pqqa_tab in tab_labels, (
-            f"PQQA tab {pqqa_tab!r} must be present on a PQQA run; "
-            f"got {tab_labels!r}"
+            f"PQQA tab {pqqa_tab!r} must be present on a PQQA run; got {tab_labels!r}"
         )
 
 

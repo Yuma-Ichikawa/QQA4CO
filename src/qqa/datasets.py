@@ -760,6 +760,57 @@ def ea3d(
 
 
 # ---------------------------------------------------------------------------
+# MaxCut — G-set (Helmberg & Rendl 2000 / Ye mirror)
+# ---------------------------------------------------------------------------
+
+
+def gset(
+    subset: str | None = None,
+    *,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load MaxCut G-set instances.
+
+    G-set is the most-cited MaxCut benchmark: 71 graphs ranging from
+    n=800 (G1..G21) through n=10 000 (G70) up to n=20 000 (G81), signed
+    edge weights, with best-known cuts tracked in
+    ``scripts/fetch_gset_data.py``.
+
+    ``subset`` defaults to ``"standard"`` — the single flat family we
+    ship. Passing ``None`` discovers every subset under
+    ``data/gset/`` for forward compatibility (if you add,
+    e.g., ``data/gset/scaled/`` in the future).
+
+    Signed-weight behaviour
+    -----------------------
+    The manifest records the raw upstream weight (``±1`` for the ``±1``
+    families, real-valued for the Gaussian-weighted families). Our
+    ``qqa.MaxCut`` honours ``data["weight"]`` on each edge, so the
+    objective is ``sum_{(u,v) ∈ cut} w(u,v)`` as standard.
+    """
+
+    base = Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "gset"
+    subsets = _iter_subset_dirs(base, subset if subset is not None else "standard")
+    problems, bests, recs = [], [], []
+    total = 0
+    for sdir in subsets:
+        records = _subset_records(sdir)
+        graphs = _load_gpickle_records(records, sdir)
+        for g, rec in zip(graphs, records, strict=True):
+            if limit is not None and total >= limit:
+                break
+            problems.append(MaxCut(g, device=device))
+            bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
+            recs.append(rec)
+            total += 1
+        if limit is not None and total >= limit:
+            break
+    return DiscsBenchmark(problems, np.asarray(bests, dtype=np.float64), recs, subsets[0].parent)
+
+
+# ---------------------------------------------------------------------------
 # Balanced k-way partition (reuses DISCS normcut/nets graphs)
 # ---------------------------------------------------------------------------
 

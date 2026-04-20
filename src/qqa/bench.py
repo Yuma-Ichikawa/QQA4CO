@@ -268,10 +268,20 @@ def plot_benchmarks_main(argv: list[str] | None = None) -> int:
 
 
 def _normalise_output(output: Path | str | None) -> Path | None:
+    """Prepend :data:`DEFAULT_RESULTS_DIR` only for bare filenames.
+
+    - ``"results.json"`` → ``bench_results/results.json`` (convenience
+      shortcut for the "I just want a report next to the runs" case).
+    - ``"data/fig/bench.png"`` → ``data/fig/bench.png`` (honor any
+      explicit directory the caller passed; prepending ``bench_results/``
+      would be surprising and creates confusing nested trees).
+    - ``"./x.png"`` / ``"~/x.png"`` / ``"/abs/x.png"`` → kept as-is.
+    """
     if output is None:
         return None
     p = Path(output)
-    if not p.is_absolute() and not str(p).startswith((".", "~")):
+    has_dir = p.parent != Path("")
+    if not p.is_absolute() and not str(p).startswith((".", "~")) and not has_dir:
         p = DEFAULT_RESULTS_DIR / p
     p.parent.mkdir(parents=True, exist_ok=True)
     return p

@@ -22,16 +22,16 @@ with earlier QQA4CO releases (``import qqa``).
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/discussions"><img src="https://img.shields.io/github/discussions/Yuma-Ichikawa/QQA4CO?logo=github&label=Discussions" alt="GitHub Discussions"></a>
   <a href="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO"><img src="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO/branch/main/graph/badge.svg" alt="Coverage"></a>
   <a href="https://doi.org/10.5281/zenodo.19648231"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19648231-1f6feb?logo=doi&logoColor=white" alt="DOI"></a>
-  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Yuma--Ichikawsa%2Fdiscs--co--bench-yellow" alt="Hugging Face dataset"></a>
+  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Yuma--Ichikawsa%2Fqqa4co--bench-yellow" alt="Hugging Face dataset"></a>
 </p>
 
 <p align="center">
   <b>Benchmark data &nbsp;·&nbsp;</b>
-  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench">
-    <code>huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench</code>
+  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench">
+    <code>huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench</code>
   </a>
   <br>
-  <sub>DISCS (NeurIPS 2023) + Graph Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) + 3D Edwards-Anderson spin glass + Balanced k-way partition — one HF dataset, <code>make bench-all-setup</code> pulls everything.</sub>
+  <sub>DISCS (NeurIPS 2023) + MaxCut G-set (Helmberg & Rendl 2000) + Graph Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) + 3D Edwards-Anderson spin glass + Balanced k-way partition — one HF dataset, <code>make bench-all-setup</code> pulls everything.</sub>
 </p>
 
 <p align="center">
@@ -405,15 +405,16 @@ qqa gui                                  # opens http://localhost:8501
 
 Run `qqa <command> --help` for the full option list.
 
-### All CO benchmarks in one command (DISCS + PQQA + EA3D)
+### All CO benchmarks in one command (DISCS + G-set + PQQA + EA3D)
 
 Every benchmark instance lives on the Hugging Face Hub:
 
-> **Dataset:** [`huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench)
-> &nbsp;&nbsp;·&nbsp;&nbsp; DISCS (MaxCut/MIS/MaxClique/NormCut) + Graph
-> Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) + 3D
-> Edwards-Anderson spin glass + Balanced k-way partition — **one repo,
-> `make bench-all-setup` pulls everything**.
+> **Dataset:** [`huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench)
+> &nbsp;&nbsp;·&nbsp;&nbsp; DISCS (MaxCut / MIS / MaxClique / NormCut) +
+> **MaxCut G-set (Helmberg & Rendl 2000, 71 graphs G1-G67 + G70/72/77/81)** +
+> Graph Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) +
+> 3D Edwards-Anderson spin glass + Balanced k-way partition — **one
+> repo, `make bench-all-setup` pulls everything**.
 
 Third parties benchmark a solver in **three one-liners**:
 

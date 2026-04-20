@@ -764,7 +764,10 @@ def _cmd_bench_plot(args: argparse.Namespace) -> int:
     from qqa import bench as _b
 
     out = Path(args.output)
-    if not out.is_absolute() and not str(out).startswith((".", "~")):
+    # Only auto-prepend DEFAULT_RESULTS_DIR when the user asked for a bare
+    # filename ("report.png"); if they gave a directory ("data/fig/x.png")
+    # we must not mangle that into "bench_results/data/fig/x.png".
+    if not out.is_absolute() and not str(out).startswith((".", "~")) and out.parent == Path(""):
         out = _b.DEFAULT_RESULTS_DIR / out
     out.parent.mkdir(parents=True, exist_ok=True)
 

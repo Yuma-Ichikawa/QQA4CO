@@ -6,13 +6,14 @@ No edits to the repo or knowledge of its internals are required.
 
 Every benchmark instance lives on the Hugging Face Hub:
 
-> **[`huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench)**
+> **[`huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench)**
 
 The dataset bundles the [DISCS](https://arxiv.org/abs/2311.04730) CO
-benchmarks (NeurIPS 2023) plus four extra families described in the
-[PQQA paper](https://openreview.net/forum?id=9EfBeXaXf0): Graph
-Coloring, MIS on `d`-regular random graphs, 3D Edwards-Anderson spin
-glass and Balanced k-way partition.
+benchmarks (NeurIPS 2023), the **MaxCut G-set** superset (71 graphs,
+Helmberg & Rendl 2000 via Yinyu Ye's mirror), and four extra families
+described in the [PQQA paper](https://openreview.net/forum?id=9EfBeXaXf0):
+Graph Coloring, MIS on `d`-regular random graphs, 3D Edwards-Anderson
+spin glass and Balanced k-way partition.
 
 ---
 
@@ -117,6 +118,7 @@ convention differs per family so that the ratio is always in
 |------------------------|----------------|-------------------------------|
 | `mis`, `mis-rrg`       | maximisation   | `solver / best_known`         |
 | `maxcut`, `maxclique`  | maximisation   | `solver / best_known`         |
+| `gset` (MaxCut)        | maximisation   | `solver / best_known`         |
 | `normcut`              | minimisation   | `best_known / solver`         |
 | `coloring`             | conflict count | `feasible` flag only          |
 | `ea3d`                 | energy (≤ 0)   | `solver / best_known`         |

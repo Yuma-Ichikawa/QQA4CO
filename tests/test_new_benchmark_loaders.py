@@ -22,6 +22,7 @@ from qqa.datasets import (
     balanced_partition,
     coloring,
     ea3d,
+    gset,
     list_benchmark_families,
     mis_rrg,
 )
@@ -151,6 +152,31 @@ def fake_root(tmp_path, monkeypatch) -> Path:
         ],
     )
 
+    # G-set (flat: data/gset/standard/manifest.jsonl with two records).
+    # The records mirror the fields written by scripts/fetch_gset_data.py.
+    _write_gpickle_subset(
+        root / "gset" / "standard",
+        [nx.complete_graph(5), nx.cycle_graph(6)],
+        [
+            {
+                "problem": "maxcut",
+                "graph_type": "gset",
+                "subset": "standard",
+                "best_known": 6,
+                "best_known_source": "fixture",
+                "source_url": "fixture://G-fake-1",
+            },
+            {
+                "problem": "maxcut",
+                "graph_type": "gset",
+                "subset": "standard",
+                "best_known": 6,
+                "best_known_source": "fixture",
+                "source_url": "fixture://G-fake-2",
+            },
+        ],
+    )
+
     monkeypatch.setenv("QQA_DATA_DIR", str(root))
     return root
 
@@ -263,7 +289,7 @@ def test_balanced_partition_missing_graph_type_raises(fake_root):
 def test_list_benchmark_families(fake_root):
     cat = list_benchmark_families()
     # Families present:
-    assert set(cat.keys()) >= {"coloring", "mis-rrg", "ea3d", "discs"}
+    assert set(cat.keys()) >= {"coloring", "mis-rrg", "ea3d", "discs", "gset"}
     # coloring is flat-per-graph_type => everything sits under key ""
     assert set(cat["coloring"][""]) == {"myciel", "queen"}
     assert cat["mis-rrg"][""] == ["d4_n20"]
@@ -271,3 +297,47 @@ def test_list_benchmark_families(fake_root):
     assert cat["ea3d"]["gaussian"] == ["L2"]
     # discs structure is preserved verbatim.
     assert cat["discs"]["normcut"] == ["nets"]
+    # gset ships as a flat single-subset family under data/gset/standard/.
+    assert cat["gset"][""] == ["standard"]
+
+
+# --------------------------------------------------------------------------- #
+# G-set                                                                       #
+# --------------------------------------------------------------------------- #
+
+
+def test_gset_loads(fake_root):
+    bench = gset()
+    assert isinstance(bench, DiscsBenchmark)
+    assert len(bench) == 2
+    assert all(p.__class__.__name__ == "MaxCut" for p in bench.problems)
+    # best_known and source metadata propagated from the manifest.
+    assert bench.best_known[0] == 6.0
+    assert bench.manifest[0]["best_known_source"] == "fixture"
+    assert bench.manifest[0]["source_url"].startswith("fixture://")
+
+
+def test_gset_limit(fake_root):
+    bench = gset(limit=1)
+    assert len(bench) == 1
+
+
+def test_gset_bench_discs_catalog_registers(fake_root, monkeypatch):
+    """The bench_discs.py catalog must pick up ``gset`` via
+    ``list_benchmark_families`` so ``--suite gset`` resolves end-to-end
+    without any DISCS data on disk (regression test for the rename +
+    Gset integration).
+    """
+    # ``scripts/`` is not on sys.path by default in unit tests; patch it in.
+    import sys
+
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    monkeypatch.syspath_prepend(str(scripts))
+    # Re-import to pick up the fresh _PROBLEM_LOADER / _build_catalog.
+    sys.modules.pop("bench_discs", None)
+    bench_discs = __import__("bench_discs")
+
+    catalog = bench_discs._build_catalog()
+    assert "gset" in catalog
+    resolved = bench_discs._resolve_suite("gset")
+    assert any(fam == "gset" for fam, _, _ in resolved)
