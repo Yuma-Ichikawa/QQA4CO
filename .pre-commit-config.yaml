@@ -17,3 +17,20 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  # Block commits that introduce API tokens / private keys / other secrets.
+  # CI re-runs the same check in .github/workflows/gitleaks.yml, so a
+  # contributor who skips pre-commit locally is still caught on the PR.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  # Strip notebook cell outputs (execution counts, stdout/stderr, rendered
+  # PNG/HTML) before they hit the index. Without this hook, notebooks tend
+  # to leak local paths, experiment numbers and occasionally credentials
+  # via their cached stdout.
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.8.1
+    hooks:
+      - id: nbstripout

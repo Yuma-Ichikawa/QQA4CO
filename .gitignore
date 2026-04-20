@@ -46,4 +46,3 @@ bench_results/
 
 # Streamlit cache
 .streamlit/secrets.toml
-
