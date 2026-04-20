@@ -228,6 +228,24 @@ def test_visualize_page_renders_pa_result():
         assert extra_tab in tab_labels, (
             f"PA-specific visualize tab {extra_tab!r} missing; got {tab_labels!r}"
         )
+    # Backend-aware layout contract: PQQA-only tabs (driven by the
+    # ``PopulationTracker`` that PA never produces) MUST NOT appear on a
+    # PA run. The user explicitly asked for this — otherwise the tab bar
+    # advertises six tabs that all just say "No population snapshots
+    # recorded for this run." and clutter the UI.
+    for pqqa_only_tab in (
+        "Schedule",
+        "Parallel population",
+        "Solution-space PCA",
+        "Diversity",
+        "Loss spectrogram",
+        "Ridgeline",
+        "Replica fate",
+    ):
+        assert pqqa_only_tab not in tab_labels, (
+            f"PQQA-only tab {pqqa_only_tab!r} must be hidden on a PA "
+            f"run; got tabs = {tab_labels!r}"
+        )
 
 
 def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
@@ -270,6 +288,36 @@ def test_visualize_pqqa_family_tree_renders_dendrogram(tmp_path):
     assert "Family tree" in tab_labels, (
         f"Family tree tab must be present for PQQA results; got {tab_labels!r}"
     )
+    # Backend-aware contract (mirror of the PA-run test): PA-only tabs
+    # MUST NOT appear on a PQQA run. Otherwise we advertise six empty
+    # tabs ("no free-energy history" / "no genealogy" etc).
+    for pa_only_tab in (
+        "PA: ESS / β",
+        "PA: Free energy",
+        "PA: Equilibrium pop.",
+        "PA: Thermodynamics",
+        "PA: Lineage vs energy",
+        "PA: Ancestry Sankey",
+    ):
+        assert pa_only_tab not in tab_labels, (
+            f"PA-only tab {pa_only_tab!r} must be hidden on a PQQA "
+            f"run; got tabs = {tab_labels!r}"
+        )
+    # PQQA-only tabs (what the Visualize page is designed around when
+    # the run came from ``qqa.anneal``) must still be present.
+    for pqqa_tab in (
+        "Schedule",
+        "Parallel population",
+        "Solution-space PCA",
+        "Diversity",
+        "Loss spectrogram",
+        "Ridgeline",
+        "Replica fate",
+    ):
+        assert pqqa_tab in tab_labels, (
+            f"PQQA tab {pqqa_tab!r} must be present on a PQQA run; "
+            f"got {tab_labels!r}"
+        )
 
 
 def test_solve_page_pa_backend_smoke_run():

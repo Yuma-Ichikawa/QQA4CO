@@ -88,51 +88,121 @@ if is_pa:
 #   * PQQA → hierarchical-clustering dendrogram + per-clade energy evolution
 # That answers the user request to have a tree-style view that *adapts*
 # to the selected backend rather than hiding behind a "PA-only" label.
-base_tabs = [
-    "Solution",
-    "Dynamics",
-    "Best trajectory",
-    "Schedule",
-    "Parallel population",
-    "Solution-space PCA",
-    "Diversity",
-    "Loss spectrogram",
-    "Ridgeline",
-    "Replica fate",
-    "Family tree",
+# ---------------------------------------------------------------------------
+# Backend-aware tab layout.
+#
+# PQQA runs carry a ``PopulationTracker`` (per-epoch replica snapshots, used
+# by Population / PCA / Diversity / Spectrogram / Ridgeline / Replica-fate)
+# plus a PQQA-only ``history["bg"]`` schedule; PA runs carry a genealogy,
+# ESS / log-Z history, and equilibrium samples instead. Rendering both
+# sets on every run pollutes the UI with "No population snapshots
+# recorded" cards under PA and empty "PA: ..." tabs under PQQA. Show only
+# the tabs that apply to whichever backend produced ``result``.
+#
+# Layout:
+#   * Universal (both backends): Solution, Dynamics, Best trajectory,
+#     Family tree (tab_tree renders a backend-aware dendrogram / Muller
+#     plot internally).
+#   * PQQA-only: Schedule, Parallel population, Solution-space PCA,
+#     Diversity, Loss spectrogram, Ridgeline, Replica fate.
+#   * PA-only: PA ESS / β, PA Free energy, PA Equilibrium pop., PA
+#     Thermodynamics, PA Lineage vs energy, PA Ancestry Sankey.
+# ---------------------------------------------------------------------------
+_UNIVERSAL_TAB_KEYS: list[str] = ["sol", "hist", "best"]
+_PQQA_TAB_KEYS: list[str] = ["sched", "pop", "pca", "div", "spec", "ridge", "fate"]
+_PA_TAB_KEYS: list[str] = [
+    "pa_ess",
+    "pa_fe",
+    "pa_eq",
+    "pa_thermo",
+    "pa_lineage",
+    "pa_sankey",
 ]
-pa_extra_tabs = [
-    "PA: ESS / β",
-    "PA: Free energy",
-    "PA: Equilibrium pop.",
-    "PA: Thermodynamics",
-    "PA: Lineage vs energy",
-    "PA: Ancestry Sankey",
-]
-all_tabs = base_tabs + (pa_extra_tabs if is_pa else [])
-_tabs = st.tabs(all_tabs)
-(
-    tab_sol,
-    tab_hist,
-    tab_best,
-    tab_sched,
-    tab_pop,
-    tab_pca,
-    tab_div,
-    tab_spec,
-    tab_ridge,
-    tab_fate,
-    tab_tree,
-) = _tabs[:11]
+# ``tree`` is universal too but we put it at the end of each backend's layout
+# to keep the narrative flow "what → how → why → lineage".
+_TREE_TAB_KEY: str = "tree"
+
+_TAB_LABELS: dict[str, str] = {
+    "sol": "Solution",
+    "hist": "Dynamics",
+    "best": "Best trajectory",
+    "sched": "Schedule",
+    "pop": "Parallel population",
+    "pca": "Solution-space PCA",
+    "div": "Diversity",
+    "spec": "Loss spectrogram",
+    "ridge": "Ridgeline",
+    "fate": "Replica fate",
+    "tree": "Family tree",
+    "pa_ess": "PA: ESS / β",
+    "pa_fe": "PA: Free energy",
+    "pa_eq": "PA: Equilibrium pop.",
+    "pa_thermo": "PA: Thermodynamics",
+    "pa_lineage": "PA: Lineage vs energy",
+    "pa_sankey": "PA: Ancestry Sankey",
+}
+
 if is_pa:
-    (
-        tab_pa_ess,
-        tab_pa_fe,
-        tab_pa_eq,
-        tab_pa_thermo,
-        tab_pa_lineage,
-        tab_pa_sankey,
-    ) = _tabs[11:17]
+    _ordered_keys = _UNIVERSAL_TAB_KEYS + _PA_TAB_KEYS + [_TREE_TAB_KEY]
+else:
+    _ordered_keys = _UNIVERSAL_TAB_KEYS + _PQQA_TAB_KEYS + [_TREE_TAB_KEY]
+
+_tabs = st.tabs([_TAB_LABELS[k] for k in _ordered_keys])
+_tab_by_key: dict[str, "st.delta_generator.DeltaGenerator"] = dict(
+    zip(_ordered_keys, _tabs, strict=True)
+)
+
+
+@contextlib.contextmanager
+def _discard_tab_writes():
+    """Context manager that absorbs every Streamlit call into a placeholder
+    that is emptied on exit.
+
+    Used as a stand-in for tabs that are not part of the current backend's
+    layout (e.g. ``Schedule`` / ``Parallel population`` for a PA run) so
+    the existing ``with tab_X: ...`` rendering blocks below don't need to
+    be reindented or rewritten — they simply emit into a container that is
+    cleared the instant the ``with`` exits, leaving no trace in the page.
+    The ``st.tabs([...])`` label list already omits these tabs, so the
+    tab bar never advertises them either.
+    """
+    placeholder = st.empty()
+    try:
+        with placeholder.container():
+            yield
+    finally:
+        placeholder.empty()
+
+
+def _tab_or_noop(key: str):
+    """Return the real tab DG for ``key`` if it exists in this run's
+    layout, otherwise a write-absorbing noop context. Invariant: every
+    ``with tab_X:`` block in the rest of this page must go through this
+    accessor so it never receives ``None``.
+    """
+    real = _tab_by_key.get(key)
+    if real is not None:
+        return real
+    return _discard_tab_writes()
+
+
+tab_sol = _tab_or_noop("sol")
+tab_hist = _tab_or_noop("hist")
+tab_best = _tab_or_noop("best")
+tab_sched = _tab_or_noop("sched")
+tab_pop = _tab_or_noop("pop")
+tab_pca = _tab_or_noop("pca")
+tab_div = _tab_or_noop("div")
+tab_spec = _tab_or_noop("spec")
+tab_ridge = _tab_or_noop("ridge")
+tab_fate = _tab_or_noop("fate")
+tab_tree = _tab_or_noop("tree")
+tab_pa_ess = _tab_or_noop("pa_ess")
+tab_pa_fe = _tab_or_noop("pa_fe")
+tab_pa_eq = _tab_or_noop("pa_eq")
+tab_pa_thermo = _tab_or_noop("pa_thermo")
+tab_pa_lineage = _tab_or_noop("pa_lineage")
+tab_pa_sankey = _tab_or_noop("pa_sankey")
 
 
 def _retheme(fig):
