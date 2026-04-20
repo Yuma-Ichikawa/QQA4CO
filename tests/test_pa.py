@@ -332,3 +332,67 @@ def test_pa_solves_3regular_mis_with_ui_default_schedule():
         "If this regresses, look for a parallel-update sampler in "
         "qqa.sa._qubo_seq_glauber_sweep — see lessons L29."
     )
+
+
+def test_pa_polish_is_symmetric_with_pqqa():
+    """PA must apply the same greedy 1-flip polish PQQA uses by default.
+
+    Historical asymmetry: ``qqa.anneal`` had ``polish=True``, PA did not
+    — so on QUBO instances where the MCMC stopped one flip short of a
+    local optimum PA produced a visibly worse score than PQQA. We now
+    run ``qqa.polish.greedy_one_flip`` on PA's ``best_sol`` by default
+    and expose it through ``PAResult.polished_sol`` (mirroring
+    :class:`qqa.AnnealResult`).
+    """
+    g = nx.random_regular_graph(3, 20, seed=0)
+    prob = qqa.MaximumIndependentSet(g, device="cpu")
+
+    res_pol = qqa.population_annealing(
+        prob,
+        sol_size=16,
+        num_temps=10,
+        sweeps_per_temp=2,
+        beta_start=0.5,
+        beta_end=4.0,
+        seed=0,
+        verbose=False,
+        polish=True,
+    )
+    res_raw = qqa.population_annealing(
+        prob,
+        sol_size=16,
+        num_temps=10,
+        sweeps_per_temp=2,
+        beta_start=0.5,
+        beta_end=4.0,
+        seed=0,
+        verbose=False,
+        polish=False,
+    )
+
+    assert res_pol.polished_sol is not None, (
+        "PAResult.polished_sol must be populated when polish=True on a QUBO problem."
+    )
+    assert res_raw.polished_sol is None, "PAResult.polished_sol must be None when polish=False."
+    # Polishing never regresses — the guard inside pa.py only accepts
+    # strictly improving post-processing.
+    assert res_pol.best_obj <= res_raw.best_obj + 1e-9, (
+        f"Polished best_obj ({res_pol.best_obj}) regressed vs raw ({res_raw.best_obj})."
+    )
+
+
+def test_sa_polish_is_symmetric_with_pqqa():
+    """Same polish contract on the SA backend."""
+    g = nx.random_regular_graph(3, 20, seed=0)
+    prob = qqa.MaximumIndependentSet(g, device="cpu")
+    res = qqa.simulated_annealing(
+        prob,
+        sol_size=16,
+        num_sweeps=20,
+        beta_start=0.5,
+        beta_end=4.0,
+        seed=0,
+        verbose=False,
+        polish=True,
+    )
+    assert res.polished_sol is not None

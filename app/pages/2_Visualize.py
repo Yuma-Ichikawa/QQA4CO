@@ -101,7 +101,14 @@ base_tabs = [
     "Replica fate",
     "Family tree",
 ]
-pa_extra_tabs = ["PA: ESS / β", "PA: Free energy", "PA: Equilibrium pop."]
+pa_extra_tabs = [
+    "PA: ESS / β",
+    "PA: Free energy",
+    "PA: Equilibrium pop.",
+    "PA: Thermodynamics",
+    "PA: Lineage vs energy",
+    "PA: Ancestry Sankey",
+]
 all_tabs = base_tabs + (pa_extra_tabs if is_pa else [])
 _tabs = st.tabs(all_tabs)
 (
@@ -118,7 +125,14 @@ _tabs = st.tabs(all_tabs)
     tab_tree,
 ) = _tabs[:11]
 if is_pa:
-    tab_pa_ess, tab_pa_fe, tab_pa_eq = _tabs[11:14]
+    (
+        tab_pa_ess,
+        tab_pa_fe,
+        tab_pa_eq,
+        tab_pa_thermo,
+        tab_pa_lineage,
+        tab_pa_sankey,
+    ) = _tabs[11:17]
 
 
 def _retheme(fig):
@@ -706,6 +720,316 @@ if is_pa:
             )
         else:
             st.info("No equilibrium population stored.")
+
+    # ------------------------------------------------------------
+    # PA: Thermodynamics — per-step ln Z increments + entropy density
+    # ------------------------------------------------------------
+    # Visual answer to "where did Z move?" and "how did entropy drop?".
+    # ``log_z_ratio`` is the per-step contribution ln <w_t>_{t-1}, so
+    # bars show exactly which β windows carried the partition-function
+    # mass. Entropy density ``S(β)/N = β·<E>/N + ln Z / N`` converts the
+    # per-step record into a thermodynamic curve that tracks ordering.
+    with tab_pa_thermo:
+        betas_t = pa.history.get("beta") or []
+        log_z_ratio = pa.history.get("log_z_ratio") or []
+        log_z_cum = pa.history.get("log_z") or []
+        loss_mean = pa.history.get("loss_mean") or []
+
+        if betas_t and log_z_ratio:
+            nvars = int(pa.final_x.shape[1]) if pa.final_x is not None else 1
+            # log_z_ratio is the per-temperature increment in ln Z, i.e.
+            # ln <exp(-Δβ·E)>_{t-1}. Plotting it as bars highlights
+            # which β windows actually moved the free energy.
+            fig_dz = go.Figure()
+            fig_dz.add_trace(
+                go.Bar(
+                    x=betas_t,
+                    y=log_z_ratio,
+                    marker={"color": p["palette"][1 % len(p["palette"])]},
+                    name="Δ ln Z(β_t)",
+                )
+            )
+            fig_dz.update_layout(
+                **plotly_layout(
+                    title={"text": "Per-step Δ ln Z — where the partition function moves"},
+                    xaxis_title="β",
+                    yaxis_title="ln ⟨e^{−Δβ·E}⟩",
+                    height=320,
+                )
+            )
+            st.plotly_chart(fig_dz, width="stretch")
+
+            # Entropy density S/N = β⟨E⟩/N + ln Z / N (dimensionless
+            # form; works for binary {0,1} and spin {±1} alike). Only
+            # render when we have both ln Z and ⟨E⟩.
+            if log_z_cum and loss_mean and len(log_z_cum) == len(loss_mean):
+                import numpy as _np  # noqa: PLC0415
+
+                beta_arr = _np.asarray(betas_t, dtype=float)
+                logz_arr = _np.asarray(log_z_cum, dtype=float)
+                loss_arr = _np.asarray(loss_mean, dtype=float)
+                entropy_density = (beta_arr * loss_arr + logz_arr) / float(nvars)
+
+                fig_s = go.Figure()
+                fig_s.add_trace(
+                    go.Scatter(
+                        x=betas_t,
+                        y=entropy_density.tolist(),
+                        mode="lines+markers",
+                        line={"color": p["palette"][0], "width": 2.4},
+                        name="S(β)/N",
+                    )
+                )
+                fig_s.update_layout(
+                    **plotly_layout(
+                        title={"text": "Entropy density S(β)/N along the anneal"},
+                        xaxis_title="β",
+                        yaxis_title="S / N",
+                        height=320,
+                    )
+                )
+                st.plotly_chart(fig_s, width="stretch")
+            st.caption(
+                "``Δ ln Z`` localises the temperature windows that dominated "
+                "the free-energy estimate — narrow spikes often flag a phase "
+                "transition or a β grid that's too coarse there. ``S(β)/N`` "
+                "uses the standard thermodynamic identity "
+                "``S = β⟨E⟩ + ln Z`` and decreases monotonically as β "
+                "increases for any Boltzmann distribution."
+            )
+        else:
+            st.info("No per-step ln Z history available.")
+
+    # ------------------------------------------------------------
+    # PA: Lineage vs energy — founder × equilibrium-energy scatter
+    # ------------------------------------------------------------
+    # Couples the two usually-separate PA deliverables: *who survived*
+    # (genealogy) and *where did they land* (final_loss). Each point is
+    # one surviving replica; colour / x-axis = its founder id (sorted
+    # by descendant count). Reveals whether PA converged to a single
+    # low-energy basin or kept multiple competing lineages.
+    with tab_pa_lineage:
+        geneal = pa.genealogy
+        if geneal is not None and geneal.get("ancestors") is not None and pa.final_loss is not None:
+            import numpy as _np  # noqa: PLC0415
+
+            anc = geneal["ancestors"].detach().cpu().numpy().astype(int)
+            losses = pa.final_loss.detach().cpu().numpy().astype(float)
+            R = int(len(anc))
+
+            # Sort founders by number of surviving descendants so the
+            # x-axis carries a monotone meaning (big clades on the left).
+            uniq, counts = _np.unique(anc, return_counts=True)
+            order = _np.argsort(-counts)
+            founder_rank = {int(fid): r for r, fid in enumerate(uniq[order])}
+            x_rank = _np.asarray([founder_rank[int(a)] for a in anc])
+            # Jitter to avoid overplotting at the same rank.
+            jitter = _np.random.default_rng(0).uniform(-0.3, 0.3, size=R)
+
+            fig_scatter = go.Figure()
+            fig_scatter.add_trace(
+                go.Scatter(
+                    x=(x_rank + jitter).tolist(),
+                    y=losses.tolist(),
+                    mode="markers",
+                    marker={
+                        "size": 7,
+                        "color": x_rank.tolist(),
+                        "colorscale": "Viridis",
+                        "line": {"width": 0.3, "color": p["muted"]},
+                        "showscale": False,
+                    },
+                    text=[f"founder {int(a)}" for a in anc],
+                    hovertemplate="founder rank=%{x:.0f}<br>E=%{y:.4f}<extra></extra>",
+                    name="replicas",
+                )
+            )
+            fig_scatter.update_layout(
+                **plotly_layout(
+                    title={"text": "Lineage × energy — each dot = one surviving replica"},
+                    xaxis_title="founder rank (0 = most-descendant)",
+                    yaxis_title="energy at β_end",
+                    height=360,
+                )
+            )
+            st.plotly_chart(fig_scatter, width="stretch")
+
+            # Lorenz curve of descendant counts — how concentrated the
+            # population is. Diagonal = perfect equality, bowed
+            # towards (1, 0) = a handful of founders owning the lot.
+            sorted_counts = _np.sort(counts.astype(float))
+            cum = _np.cumsum(sorted_counts) / float(sorted_counts.sum())
+            xs = _np.linspace(0.0, 1.0, num=len(cum))
+            gini = 1.0 - 2.0 * float(_np.trapezoid(cum, xs))
+
+            fig_lor = go.Figure()
+            fig_lor.add_trace(
+                go.Scatter(
+                    x=[0.0, 1.0],
+                    y=[0.0, 1.0],
+                    mode="lines",
+                    line={"color": p["muted"], "dash": "dash", "width": 1},
+                    name="equality",
+                )
+            )
+            fig_lor.add_trace(
+                go.Scatter(
+                    x=xs.tolist(),
+                    y=cum.tolist(),
+                    mode="lines",
+                    line={"color": p["palette"][3 % len(p["palette"])], "width": 2.4},
+                    fill="tozeroy",
+                    name="Lorenz",
+                )
+            )
+            fig_lor.update_layout(
+                **plotly_layout(
+                    title={"text": f"Founder-descendant Lorenz curve  ·  Gini = {gini:.3f}"},
+                    xaxis_title="cumulative share of founders",
+                    yaxis_title="cumulative share of descendants",
+                    height=320,
+                )
+            )
+            st.plotly_chart(fig_lor, width="stretch")
+
+            st.caption(
+                "Scatter: couples genealogy with the equilibrium energy — "
+                "a clean horizontal cluster at the left indicates a single "
+                "dominant lineage that captured the ground state. "
+                "Lorenz curve: how unequally the founders share the final "
+                "population (Gini → 1 ⇒ one ancestor owns everything, "
+                "Gini → 0 ⇒ all founders survive equally). High Gini + "
+                "low distinct-founder count is a hint to raise ``R`` or "
+                "densify the β grid."
+            )
+        else:
+            st.info(
+                "Needs ``record_genealogy=True`` **and** stored "
+                "``final_loss``. Re-run PA from the Solve page to capture "
+                "both."
+            )
+
+    # ------------------------------------------------------------
+    # PA: Ancestry Sankey — flow of replicas across β layers
+    # ------------------------------------------------------------
+    # Muller shows stacked *shares*, the ancestry heatmap shows *ids*.
+    # Sankey shows *flow* — how many replicas each ancestor block
+    # copies into each successor at every resampling event. We
+    # aggregate to top-K lineages so the plot stays legible for any R.
+    with tab_pa_sankey:
+        geneal = pa.genealogy
+        parents_log = geneal.get("parents") if geneal is not None else None
+        betas_log = geneal.get("betas") if geneal is not None else None
+        ancestors_final = geneal.get("ancestors") if geneal is not None else None
+
+        if parents_log and ancestors_final is not None:
+            import numpy as _np  # noqa: PLC0415
+            import torch as _torch  # noqa: PLC0415
+
+            # Reconstruct root ancestor ID for every replica at every
+            # resampling layer by composing the parent-index chain.
+            R = int(ancestors_final.numel())
+            num_layers = len(parents_log) + 1
+            # layer_ancestors[l][r] = root founder of replica r at layer l.
+            # Layer 0 = initial (identity). Each subsequent layer = layer
+            # l-1 gathered by parents_log[l-1].
+            layer_anc = [_torch.arange(R, dtype=_torch.long)]
+            for pa_idx in parents_log:
+                prev = layer_anc[-1]
+                layer_anc.append(prev.index_select(0, pa_idx.to(prev.device)))
+            # We expect layer_anc[-1] to equal ancestors_final (up to
+            # device). Trust the chain reconstruction; no enforcement.
+
+            # Pick top-K founder groups by terminal size so the Sankey
+            # stays readable. Everything else is lumped into "…other".
+            final_ids = layer_anc[-1].cpu().numpy().astype(int)
+            uniq, counts = _np.unique(final_ids, return_counts=True)
+            order = _np.argsort(-counts)
+            K = min(8, len(uniq))
+            top = set(int(x) for x in uniq[order[:K]])
+
+            def _group(fid: int) -> str:
+                return f"F{fid}" if fid in top else "other"
+
+            # Build Sankey node / link lists.
+            # Nodes are (layer_idx, group_name); we lay them out left→right.
+            node_id: dict[tuple[int, str], int] = {}
+            node_labels: list[str] = []
+
+            def _add_node(layer: int, group: str) -> int:
+                key = (layer, group)
+                nid = node_id.get(key)
+                if nid is None:
+                    nid = len(node_labels)
+                    node_id[key] = nid
+                    node_labels.append(
+                        f"{group} @ β={betas_log[layer]:.2f}"
+                        if betas_log and layer < len(betas_log)
+                        else group
+                    )
+                return nid
+
+            src: list[int] = []
+            dst: list[int] = []
+            val: list[int] = []
+
+            # For each layer transition l-1 → l, link "group of the
+            # parent's root founder" → "group of the child's root
+            # founder". Because the *group is preserved by resampling*
+            # (resampling just copies ancestors), in practice src group
+            # = dst group, and the link count is the descendant count of
+            # that group at layer l. That's exactly the flow picture we
+            # want: wide ribbons = large clades, collapsing ribbons =
+            # extinctions.
+            for layer in range(1, num_layers):
+                anc_layer = layer_anc[layer].cpu().numpy().astype(int)
+                groups = _np.asarray([_group(int(f)) for f in anc_layer])
+                uniq_g, cnt_g = _np.unique(groups, return_counts=True)
+                for g, c in zip(uniq_g, cnt_g, strict=True):
+                    sid = _add_node(layer - 1, str(g))
+                    did = _add_node(layer, str(g))
+                    src.append(sid)
+                    dst.append(did)
+                    val.append(int(c))
+
+            if node_labels:
+                fig_sk = go.Figure(
+                    go.Sankey(
+                        node={
+                            "label": node_labels,
+                            "pad": 10,
+                            "thickness": 14,
+                            "line": {"color": p["muted"], "width": 0.4},
+                        },
+                        link={
+                            "source": src,
+                            "target": dst,
+                            "value": val,
+                            "color": "rgba(120,140,200,0.35)",
+                        },
+                    )
+                )
+                fig_sk.update_layout(
+                    **plotly_layout(
+                        title={"text": f"Ancestry flow (top {K} lineages)"},
+                        height=460,
+                    )
+                )
+                st.plotly_chart(fig_sk, width="stretch")
+                st.caption(
+                    "Ribbon thickness = number of replicas carrying that "
+                    "founder through the β layer. Dying ribbons mean "
+                    "extinctions driven by reweighting; surviving-but-"
+                    "narrowing ribbons mean near-neutral lineages that "
+                    "eventually lost out."
+                )
+            else:
+                st.info("Sankey needs at least one recorded resampling step.")
+        else:
+            st.info(
+                "Needs ``record_genealogy=True`` so PA records the "
+                "parent-index chain at every resampling."
+            )
 
 with tab_tree:
     # Backend-aware family tree.

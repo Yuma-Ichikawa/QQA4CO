@@ -13,6 +13,7 @@ Two backends are exposed via a sidebar radio:
 
 from __future__ import annotations
 
+import inspect
 import sys
 import time
 from pathlib import Path
@@ -380,6 +381,19 @@ else:
                 help=(
                     "Systematic = low-variance (Doucet & Johansen, 2008). "
                     "Multinomial = textbook baseline (higher variance)."
+                ),
+            )
+
+        with st.expander("Post-processing", expanded=False):
+            pa_polish = st.checkbox(
+                "Greedy 1-flip polish",
+                value=st.session_state.get("pa_polish", True),
+                key="pa_polish",
+                help=(
+                    "Run ``qqa.polish.greedy_one_flip`` on PA's best replica "
+                    "after the last β step — identical post-processing to "
+                    "PQQA, guarantees a 1-flip local optimum on QUBO problems. "
+                    "Disable to see the raw MCMC best."
                 ),
             )
 
@@ -914,8 +928,8 @@ if run and backend != "PQQA":
         chart.plotly_chart(fig, width="stretch", theme=None, config={"displayModeBar": False})
 
     try:
-        pa_result = qqa.population_annealing(
-            problem,
+        pa_kwargs = dict(
+            problem=problem,
             sol_size=int(pa_sol_size),
             num_temps=int(pa_num_temps),
             sweeps_per_temp=int(pa_sweeps_per_temp),
@@ -928,6 +942,13 @@ if run and backend != "PQQA":
             verbose=False,
             callback=_pa_callback,
         )
+        # Guard against older ``qqa`` wheels that pre-date the PA ``polish``
+        # knob (added alongside this UI control). The wheel check is cheap
+        # and keeps the app usable against any 0.5.1+ release; newer wheels
+        # get the QQA-symmetric post-processing by default.
+        if "polish" in inspect.signature(qqa.population_annealing).parameters:
+            pa_kwargs["polish"] = bool(pa_polish)
+        pa_result = qqa.population_annealing(**pa_kwargs)
     except Exception as e:
         st.error(f"PA run failed: {e}")
         st.stop()

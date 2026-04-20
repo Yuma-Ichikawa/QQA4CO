@@ -41,6 +41,7 @@ from typing import Any, Literal
 
 import torch
 
+from qqa.polish import greedy_one_flip
 from qqa.sa import (
     _build_beta_schedule,
     _qubo_seq_glauber_sweep,
@@ -101,11 +102,21 @@ class PAResult:
         Present when ``record_genealogy=True``. A dict with keys
         ``parents`` (list of ``(R,)`` long tensors, one per resampling
         step, holding the *index into the previous population* each
-        replica was copied from) and ``ancestors`` (list of ``(R,)`` long
-        tensors, the **root** ancestor index in the initial population
-        for each replica, propagated through every resampling step). Use
-        ``ancestors[-1]`` to draw a "family tree" or count the number of
-        surviving founders.
+        replica was copied from) and ``ancestors`` (``(R,)`` long tensor
+        with the **root** ancestor index in the initial population for
+        each surviving replica, propagated through every resampling
+        step). Use ``ancestors`` directly or chain ``parents`` to draw
+        a family tree / count surviving founders / visualise clonal
+        sweeps.
+    polished_sol:
+        ``(num_vars,)`` tensor — greedy-1-flip-locally-optimal version
+        of ``best_sol``. Populated iff :func:`population_annealing` is
+        called with ``polish=True`` on a QUBO problem (mirrors the
+        :class:`qqa.AnnealResult.polished_sol` contract). ``best_sol``
+        / ``best_obj`` / ``score`` are all overwritten by the polished
+        result whenever it strictly improves the QUBO loss, so reading
+        ``best_sol`` works unconditionally. ``None`` on non-QUBO
+        problems or when ``polish=False``.
     """
 
     best_sol: torch.Tensor
@@ -119,6 +130,7 @@ class PAResult:
     free_energy: float | None = None
     free_energy_density: float | None = None
     genealogy: dict | None = None
+    polished_sol: torch.Tensor | None = None
 
 
 def _systematic_resample_indices(weights: torch.Tensor, rng: torch.Generator) -> torch.Tensor:
@@ -171,6 +183,7 @@ def population_annealing(
     history_stride: int = 1,
     record_history: bool = True,
     record_genealogy: bool = False,
+    polish: bool = True,
     verbose: bool = True,
     check_interval: int = 10,
     callback: Callable[[int, float, float, float], None] | None = None,
@@ -211,6 +224,15 @@ def population_annealing(
         root-ancestor map on the result, so callers can reconstruct the
         family tree of the population. Costs ``O(R · num_temps)`` integer
         memory; off by default.
+    polish:
+        If ``True`` (default), run :func:`qqa.polish.greedy_one_flip`
+        on ``best_sol`` once the MCMC loop has finished, mirroring the
+        post-processing :func:`qqa.anneal` applies by default. Noop on
+        non-QUBO problems (no ``Q_mat``). Overwrites ``best_sol`` /
+        ``best_obj`` / ``score`` whenever the polish strictly improves
+        the QUBO loss, so PA and PQQA are directly comparable on the
+        same problem without the caller remembering which post-
+        processing is active.
 
     Returns
     -------
@@ -398,6 +420,21 @@ def population_annealing(
         )
 
     best_sol_disc = best_sol.detach()
+
+    # Default-on greedy 1-flip polish. Shared with :func:`qqa.anneal` via
+    # ``qqa.polish.greedy_one_flip``; noop when ``Q_mat`` is absent (spin
+    # / categorical / batched problems). The polish strictly improves
+    # ``best_obj`` on QUBO landscapes where the MCMC stopped short of a
+    # 1-flip local minimum, so PA matches PQQA's post-processing contract.
+    polished_sol: torch.Tensor | None = None
+    if polish and getattr(problem, "Q_mat", None) is not None:
+        polished_sol = greedy_one_flip(problem, best_sol_disc)
+        with torch.no_grad():
+            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
+        if pol_obj < best_obj:
+            best_obj = pol_obj
+            best_sol_disc = polished_sol.detach()
+
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 
     beta_final = float(betas[-1].item())
@@ -425,4 +462,5 @@ def population_annealing(
         free_energy=float(free_energy),
         free_energy_density=float(f_density),
         genealogy=genealogy,
+        polished_sol=polished_sol,
     )
