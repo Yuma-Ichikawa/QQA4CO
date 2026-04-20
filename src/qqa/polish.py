@@ -24,6 +24,41 @@ import torch
 
 
 @torch.no_grad()
+def apply_polish_if_improves(
+    problem,
+    best_sol: torch.Tensor | None,
+    best_obj: float,
+    *,
+    polish: bool = True,
+) -> tuple[torch.Tensor | None, float, torch.Tensor | None]:
+    """Run :func:`greedy_one_flip` and hot-swap the incumbent iff it improves.
+
+    Returns ``(best_sol, best_obj, polished_sol)`` where:
+
+    * ``polished_sol`` is the raw greedy result whenever the polish was
+      attempted (kept for introspection, surfaced on
+      ``AnnealResult.polished_sol`` / ``SAResult.polished_sol`` / …),
+      or ``None`` when polishing was skipped (``polish=False``, no
+      ``Q_mat``, or ``best_sol is None``).
+    * ``best_sol`` / ``best_obj`` are **replaced** only when the polish
+      strictly improved the objective — preserving the "monotone free
+      improvement" contract every QQA4CO backend expects.
+
+    Centralising the pattern here keeps :func:`qqa.anneal`,
+    :func:`qqa.simulated_annealing`, :func:`qqa.population_annealing` and
+    the PI-GNN trainers in lock-step; any future tweak (e.g. a smarter
+    multi-flip polish) lands once.
+    """
+    if not polish or best_sol is None or getattr(problem, "Q_mat", None) is None:
+        return best_sol, best_obj, None
+    polished = greedy_one_flip(problem, best_sol)
+    pol_obj = float(problem.loss_fn(polished.unsqueeze(0)).item())
+    if pol_obj < best_obj:
+        return polished, pol_obj, polished
+    return best_sol, best_obj, polished
+
+
+@torch.no_grad()
 def greedy_one_flip(
     problem,
     bits: torch.Tensor,

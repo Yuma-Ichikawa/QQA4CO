@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import itertools
 import sys
 from pathlib import Path
@@ -23,16 +22,13 @@ from _common import (  # noqa: E402
     sidebar_brand,
     theme_toggle_in_sidebar,
 )
+from _common import (
+    retheme_plotly as _retheme,
+)
 
 import qqa  # noqa: E402
 from qqa import visualization as viz  # noqa: E402
 from qqa.relaxation import CategoricalRelaxation  # noqa: E402
-
-
-def _retheme(fig):
-    with contextlib.suppress(Exception):
-        fig.update_layout(**plotly_layout())
-    return fig
 
 
 def _scalar_best(obj) -> float:

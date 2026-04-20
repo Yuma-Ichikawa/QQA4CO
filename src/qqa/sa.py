@@ -43,7 +43,7 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-from qqa.polish import greedy_one_flip
+from qqa.polish import apply_polish_if_improves
 from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
 from qqa.utils import require_cuda_if_requested, safe_score_summary
 
@@ -152,26 +152,6 @@ def _qubo_seq_glauber_sweep(
         # Rank-1 update of the cached field.
         qx = qx + delta_x_j.unsqueeze(1) * q_sym[j, :].unsqueeze(0)
     return x
-
-
-# Legacy alias kept for one release so external users get a clear
-# DeprecationWarning if they were importing the buggy parallel sweep
-# directly. The default sampler is now the sequential version above.
-def _qubo_glauber_sweep(
-    x: torch.Tensor,
-    q_sym: torch.Tensor,
-    q_diag: torch.Tensor,
-    beta: float,
-    rng: torch.Generator,
-) -> torch.Tensor:
-    """Deprecated alias — forwards to :func:`_qubo_seq_glauber_sweep`.
-
-    The previous implementation did parallel single-flip proposals on the
-    same pre-sweep state, which mode-locks on MIS / MaxCut. Use
-    :func:`_qubo_seq_glauber_sweep` (correct) or
-    :func:`_qubo_parallel_metropolis_sweep` (paper-reproduction baseline).
-    """
-    return _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
 
 
 def _qubo_parallel_metropolis_sweep(
@@ -443,14 +423,9 @@ def simulated_annealing(
 
     # Default-on greedy 1-flip polish — mirrors ``qqa.anneal`` / ``population_annealing``
     # so every QQA4CO backend exposes the same post-processing contract.
-    polished_sol: torch.Tensor | None = None
-    if polish and getattr(problem, "Q_mat", None) is not None:
-        polished_sol = greedy_one_flip(problem, best_sol_disc)
-        with torch.no_grad():
-            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
-        if pol_obj < best_obj:
-            best_obj = pol_obj
-            best_sol_disc = polished_sol.detach()
+    best_sol_disc, best_obj, polished_sol = apply_polish_if_improves(
+        problem, best_sol_disc, best_obj, polish=polish
+    )
 
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 

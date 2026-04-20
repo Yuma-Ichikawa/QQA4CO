@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from qqa.callbacks import Callback, CallbackState, HistoryRecorder
-from qqa.polish import greedy_one_flip
+from qqa.polish import apply_polish_if_improves
 from qqa.problems.base import COProblem
 from qqa.relaxation import _default_penalty_from_forward
 from qqa.schedule import LinearBGSchedule
@@ -380,17 +380,14 @@ def anneal(
     # contract is undefined). When the polish strictly improves the QUBO
     # objective, we hot-swap best_sol / best_obj / score so callers reading
     # ``result.best_sol`` automatically benefit.
-    polished_sol: torch.Tensor | None = None
-    if polish and not is_batch and getattr(problem, "Q_mat", None) is not None:
-        polished_sol = greedy_one_flip(problem, best_sol)
-        with torch.no_grad():
-            pol_obj = float(problem.loss_fn(polished_sol.unsqueeze(0)).item())
-        if pol_obj < best_obj:
-            best_sol = polished_sol
-            best_obj = pol_obj
-            score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
-            if verbose:
-                print(f"  POLISH    : 1-flip improved best_obj -> {best_obj}")
+    prev_obj = best_obj
+    best_sol, best_obj, polished_sol = apply_polish_if_improves(
+        problem, best_sol, best_obj, polish=polish and not is_batch
+    )
+    if polished_sol is not None and best_obj < prev_obj:
+        score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
+        if verbose:
+            print(f"  POLISH    : 1-flip improved best_obj -> {best_obj}")
 
     return AnnealResult(
         best_sol=best_sol,
