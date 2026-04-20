@@ -417,7 +417,9 @@ def convert_normcut_nets(src_root: Path, dst_root: Path, *, limit: int | None) -
         if g.number_of_nodes() == 0 or g.number_of_edges() == 0:
             LOG.warning(
                 "skip normcut-nets/%s: source pickle is empty (N=%d, E=%d)",
-                name, g.number_of_nodes(), g.number_of_edges(),
+                name,
+                g.number_of_nodes(),
+                g.number_of_edges(),
             )
             continue
         out = _Subset.open(dst_root, "normcut", "nets", name)

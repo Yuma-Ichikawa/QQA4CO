@@ -54,12 +54,12 @@ import qqa
 # override them via the Makefile presets (`bench-discs-paper`) or by
 # passing explicit CLI flags.
 _QQA_HP_DEFAULTS = {
-    "learning_rate": 1.0,   # paper sweeps {1, 0.1, 0.01}
-    "temp": 1e-3,           # paper: 0.001 fixed
-    "curve_rate": 4,        # paper: 4
-    "gamma_min": -2.0,      # paper: -2 (some MaxCut: -5/-20)
-    "gamma_max": 0.1,       # paper: 0.1
-    "div_param": 0.2,       # paper Ablation Fig 6
+    "learning_rate": 1.0,  # paper sweeps {1, 0.1, 0.01}
+    "temp": 1e-3,  # paper: 0.001 fixed
+    "curve_rate": 4,  # paper: 4
+    "gamma_min": -2.0,  # paper: -2 (some MaxCut: -5/-20)
+    "gamma_max": 0.1,  # paper: 0.1
+    "div_param": 0.2,  # paper Ablation Fig 6
 }
 
 
@@ -81,28 +81,40 @@ def add_qqa_hp_args(parser: argparse.ArgumentParser) -> None:
     expectation is exactly one call per parser).
     """
     parser.add_argument(
-        "--learning-rate", type=float,
-        default=_QQA_HP_DEFAULTS["learning_rate"], help=_HP_HELP["learning_rate"],
+        "--learning-rate",
+        type=float,
+        default=_QQA_HP_DEFAULTS["learning_rate"],
+        help=_HP_HELP["learning_rate"],
     )
     parser.add_argument(
-        "--temp", type=float,
-        default=_QQA_HP_DEFAULTS["temp"], help=_HP_HELP["temp"],
+        "--temp",
+        type=float,
+        default=_QQA_HP_DEFAULTS["temp"],
+        help=_HP_HELP["temp"],
     )
     parser.add_argument(
-        "--curve-rate", type=int,
-        default=_QQA_HP_DEFAULTS["curve_rate"], help=_HP_HELP["curve_rate"],
+        "--curve-rate",
+        type=int,
+        default=_QQA_HP_DEFAULTS["curve_rate"],
+        help=_HP_HELP["curve_rate"],
     )
     parser.add_argument(
-        "--gamma-min", type=float,
-        default=_QQA_HP_DEFAULTS["gamma_min"], help=_HP_HELP["gamma_min"],
+        "--gamma-min",
+        type=float,
+        default=_QQA_HP_DEFAULTS["gamma_min"],
+        help=_HP_HELP["gamma_min"],
     )
     parser.add_argument(
-        "--gamma-max", type=float,
-        default=_QQA_HP_DEFAULTS["gamma_max"], help=_HP_HELP["gamma_max"],
+        "--gamma-max",
+        type=float,
+        default=_QQA_HP_DEFAULTS["gamma_max"],
+        help=_HP_HELP["gamma_max"],
     )
     parser.add_argument(
-        "--div-param", type=float,
-        default=_QQA_HP_DEFAULTS["div_param"], help=_HP_HELP["div_param"],
+        "--div-param",
+        type=float,
+        default=_QQA_HP_DEFAULTS["div_param"],
+        help=_HP_HELP["div_param"],
     )
 
 

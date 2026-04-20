@@ -50,10 +50,22 @@ def test_add_qqa_hp_args_paper_defaults(bench):
 def test_add_qqa_hp_args_overrides(bench):
     p = argparse.ArgumentParser()
     bench.add_qqa_hp_args(p)
-    args = p.parse_args([
-        "--learning-rate", "0.1", "--temp", "5e-4", "--curve-rate", "8",
-        "--gamma-min", "-3", "--gamma-max", "0.5", "--div-param", "0.4",
-    ])
+    args = p.parse_args(
+        [
+            "--learning-rate",
+            "0.1",
+            "--temp",
+            "5e-4",
+            "--curve-rate",
+            "8",
+            "--gamma-min",
+            "-3",
+            "--gamma-max",
+            "0.5",
+            "--div-param",
+            "0.4",
+        ]
+    )
     assert args.learning_rate == pytest.approx(0.1)
     assert args.curve_rate == 8
 
@@ -65,8 +77,12 @@ def test_qqa_hp_kwargs_shape(bench):
     bench.add_qqa_hp_args(p)
     kwargs = bench.qqa_hp_kwargs(p.parse_args([]))
     expected_keys = {
-        "learning_rate", "temp", "curve_rate",
-        "gamma_min", "gamma_max", "div_param",
+        "learning_rate",
+        "temp",
+        "curve_rate",
+        "gamma_min",
+        "gamma_max",
+        "div_param",
     }
     assert set(kwargs.keys()) == expected_keys
 

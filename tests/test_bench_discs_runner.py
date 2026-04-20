@@ -103,10 +103,13 @@ def test_cli_rejects_parallel_with_sa_backend():
     with pytest.raises(SystemExit, match="--parallel"):
         bench_discs.main(
             [
-                "--suite", "mis-satlib-uf",
-                "--backend", "sa",
+                "--suite",
+                "mis-satlib-uf",
+                "--backend",
+                "sa",
                 "--parallel",
-                "--instances", "1",
+                "--instances",
+                "1",
             ]
         )
 
@@ -120,18 +123,31 @@ def test_cli_accepts_paper_hyperparameters(monkeypatch):
     monkeypatch.setattr(bench_discs, "_resolve_suite", lambda _suite: [])
     bench_discs.main(
         [
-            "--suite", "mis-satlib-uf",
-            "--backend", "qqa",
-            "--instances", "1",
-            "--sol-size", "100",
-            "--num-epochs", "3000",
-            "--learning-rate", "1.0",
-            "--temp", "1e-3",
-            "--curve-rate", "4",
-            "--gamma-min", "-2",
-            "--gamma-max", "0.1",
-            "--div-param", "0.2",
-            "--penalty", "2.0",
-            "--device", "cpu",
+            "--suite",
+            "mis-satlib-uf",
+            "--backend",
+            "qqa",
+            "--instances",
+            "1",
+            "--sol-size",
+            "100",
+            "--num-epochs",
+            "3000",
+            "--learning-rate",
+            "1.0",
+            "--temp",
+            "1e-3",
+            "--curve-rate",
+            "4",
+            "--gamma-min",
+            "-2",
+            "--gamma-max",
+            "0.1",
+            "--div-param",
+            "0.2",
+            "--penalty",
+            "2.0",
+            "--device",
+            "cpu",
         ]
     )

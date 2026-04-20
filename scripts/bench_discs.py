@@ -281,8 +281,12 @@ def main(argv: list[str] | None = None) -> int:
     }
     LOG.info(
         "qqa hp: lr=%g temp=%g curve_rate=%d gamma=[%g,%g] div=%g",
-        runner_kwargs["learning_rate"], runner_kwargs["temp"], runner_kwargs["curve_rate"],
-        runner_kwargs["gamma_min"], runner_kwargs["gamma_max"], runner_kwargs["div_param"],
+        runner_kwargs["learning_rate"],
+        runner_kwargs["temp"],
+        runner_kwargs["curve_rate"],
+        runner_kwargs["gamma_min"],
+        runner_kwargs["gamma_max"],
+        runner_kwargs["div_param"],
     )
     all_results: list[dict[str, Any]] = []
 
