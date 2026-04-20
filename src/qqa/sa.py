@@ -108,36 +108,47 @@ def _qubo_seq_glauber_sweep(
     """One **sequential** single-bit Metropolis sweep on a binary QUBO.
 
     Updates the bits in a random permutation. For each bit ``j`` the
-    single-flip ΔE is computed from the *current* state via one column
-    of ``q_sym``:
+    single-flip ΔE is computed from the *current* state via the cached
+    pre-sweep field ``qx = x @ q_sym``, which is incrementally updated
+    after each accepted flip via the rank-1 identity
 
-        ΔE_j(x) = (1 - 2 x_j) * (2 (Q_sym x)_j - 2 x_j Q_jj + Q_jj)
+        Δ(qx) = q_sym[:, j] · Δx_j   (with Δx_j = ±1)
+
+    so the per-bit work is O(N) instead of O(N²). The full sweep cost
+    stays at O(N²) per replica — we just dropped the per-bit matrix-
+    vector slice. The ``sol_size`` batch dimension is handled natively
+    on GPU with no host round-trips inside the loop.
 
     Acceptance is independent across replicas (Metropolis,
-    ``p = min(1, exp(-β ΔE))``). ``x`` is updated in-place after each
-    bit so subsequent bits in the same sweep see the most recent state —
-    this is what distinguishes the textbook-correct sampler from the
-    biased fully-parallel proposal.
-
-    Cost per sweep: ``N`` matrix-vector slices of size ``N`` per replica
-    = ``O(N²)`` flops. The ``sol_size`` batch dimension is handled
-    natively on GPU (no host round-trips inside the loop).
+    ``p = min(1, exp(-β ΔE))``). The function never mutates its input
+    tensor — a single clone is taken up-front so callers can rely on
+    pure value semantics.
     """
+    # One up-front clone so we never mutate the caller's tensor (and so
+    # subsequent in-loop ``x[:, j] = …`` assignments are safe regardless
+    # of how the caller obtained ``x``).
+    x = x.clone()
     sol_size, num_vars = x.shape
     perm = torch.randperm(num_vars, generator=rng, device=x.device)
-    # ``q_sym`` may be a (N, N) tensor; we slice columns lazily.
+    # Pre-compute the field qx = x @ q_sym once, then update it
+    # incrementally as bits flip.
+    qx = x @ q_sym  # shape (sol_size, num_vars)
+    two_q_diag = 2.0 * q_diag
     for j in perm.tolist():
-        qx_j = x @ q_sym[:, j]  # shape (sol_size,)
         x_j = x[:, j]
-        # ΔE for flipping bit j given the current x.
-        delta_e = (1.0 - 2.0 * x_j) * (2.0 * qx_j - 2.0 * x_j * q_diag[j] + q_diag[j])
-        # Metropolis acceptance, independent per replica.
+        qx_j = qx[:, j]
+        # ΔE_j = (1 - 2 x_j) · (2 (Q x)_j - 2 x_j Q_jj + Q_jj)
+        delta_e = (1.0 - 2.0 * x_j) * (2.0 * qx_j - x_j * two_q_diag[j] + q_diag[j])
         accept_p = torch.exp(torch.clamp(-beta * delta_e, max=0.0))
         u = torch.rand(sol_size, device=x.device, generator=rng)
         flip = u < accept_p
-        # Update in place so subsequent bits in this sweep see the new x.
-        x = x.clone() if not x.is_contiguous() else x  # cheap no-op
-        x[:, j] = torch.where(flip, 1.0 - x_j, x_j)
+        # Δx_j = (new - old) = (1 - x_j) - x_j   when flipped, else 0.
+        # Using x_j ∈ {0, 1}: Δx_j = +1 if x_j was 0, −1 if x_j was 1.
+        # Pack that into a per-replica scalar that's 0 when flip=False.
+        delta_x_j = torch.where(flip, 1.0 - 2.0 * x_j, torch.zeros_like(x_j))
+        x[:, j] = x_j + delta_x_j
+        # Rank-1 update of the cached field.
+        qx = qx + delta_x_j.unsqueeze(1) * q_sym[j, :].unsqueeze(0)
     return x
 
 
