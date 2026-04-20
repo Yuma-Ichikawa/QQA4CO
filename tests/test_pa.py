@@ -300,3 +300,35 @@ def test_pa_validates_arguments():
             beta_schedule="exponential",  # invalid
             verbose=False,
         )
+
+
+def test_pa_solves_3regular_mis_with_ui_default_schedule():
+    """Regression for the screenshot bug: PA with the UI defaults must
+    actually solve a 3-regular MIS instance.
+
+    Before the QUBO sampler fix the same call returned ``best_obj ≈ -3``
+    on N=32 (off by ~10 from the optimum) because the parallel sweep
+    deterministically oscillated between the empty and full IS. The
+    sequential single-bit fix routinely reaches ``-12`` or better. We
+    pin a loose threshold of ``-10`` so the test stays stable across CI
+    runners while still catching the historical regression.
+    """
+    g = nx.random_regular_graph(3, 32, seed=0)
+    prob = qqa.MaximumIndependentSet(g, device="cpu")
+    res = qqa.population_annealing(
+        prob,
+        sol_size=64,  # smaller than UI default but enough to anchor the test
+        num_temps=60,
+        sweeps_per_temp=10,
+        beta_start=0.1,
+        beta_end=10.0,
+        beta_schedule="geometric",
+        resample="systematic",
+        seed=0,
+        verbose=False,
+    )
+    assert float(res.best_obj) <= -10.0, (
+        f"PA on 3-regular MIS should reach best_obj ≤ -10; got {res.best_obj}. "
+        "If this regresses, look for a parallel-update sampler in "
+        "qqa.sa._qubo_seq_glauber_sweep — see lessons L29."
+    )
