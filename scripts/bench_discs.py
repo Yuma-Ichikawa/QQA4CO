@@ -102,6 +102,14 @@ def _load_balanced(graph_type, subset, **kw):
     return datasets.balanced_partition(graph_type=graph_type, subset=subset, **kw)
 
 
+def _load_gset(graph_type, subset, **kw):
+    kw.pop("parallel", None)
+    kw.pop("penalty", None)
+    # gset uses a flat layout (data/gset/<subset>/manifest.jsonl); graph_type
+    # carries the ``standard`` tag for parity with the rest of the catalog.
+    return datasets.gset(subset=graph_type or subset or "standard", **kw)
+
+
 _PROBLEM_LOADER = {
     "maxcut": datasets.discs_maxcut,
     "mis": datasets.discs_mis,
@@ -111,6 +119,7 @@ _PROBLEM_LOADER = {
     "coloring": _load_coloring,
     "ea3d": _load_ea3d,
     "balanced-partition": _load_balanced,
+    "gset": _load_gset,
 }
 
 
@@ -144,6 +153,12 @@ def _build_catalog() -> dict[str, dict[str, list[str]]]:
             subsets = type_dict.get("", [])
             if subsets:
                 catalog.setdefault("mis-rrg", {})["rrg"] = subsets
+        elif fam_name == "gset":
+            # data/gset/<subset>/manifest.jsonl (flat). Expose each
+            # subset directly so suite identifiers read ``gset-standard``
+            # and roll up as ``gset``.
+            for gt in type_dict.get("", []):
+                catalog.setdefault("gset", {})[gt] = [""]
     # balanced-partition is derived from the DISCS normcut layout — expose
     # it as a separate family so users can pick the `BalancedGraphPartition`
     # objective alongside the `NormalizedCut` objective on the same graphs.
@@ -333,7 +348,7 @@ def _approx_ratio(objective: float, best_known: float, kind: str) -> float | Non
     """
     if best_known is None or (isinstance(best_known, float) and np.isnan(best_known)):
         return None
-    if kind in {"mis", "maxcut", "maxclique", "mis-rrg"}:
+    if kind in {"mis", "maxcut", "maxclique", "mis-rrg", "gset"}:
         return objective / best_known if best_known != 0 else None
     if kind == "normcut":
         return best_known / objective if objective != 0 else None

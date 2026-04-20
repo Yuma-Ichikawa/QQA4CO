@@ -36,7 +36,7 @@ make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
 That is it. The setup script will:
 
 1. **Download** the prebuilt dataset from the Hugging Face Hub
-   (`yuma-ichikawa/discs-co-bench`, override with `DISCS_HF_REPO_ID=...`) —
+   (`Yuma-Ichikawsa/qqa4co-bench`, override with `DISCS_HF_REPO_ID=...`) —
    primary source, free, no auth required.
 2. **Or fall back** to the original Google Drive tarball
    (`DISCS-DATA.tar.gz`, ~6.7 GB) and extract just the `DISCS-DATA/sco/`
@@ -127,7 +127,7 @@ data/discs/
 
 ### Why Parquet for distribution (Hugging Face)?
 
-- Hugging Face Datasets' default; `load_dataset("user/discs-co-bench")` works
+- Hugging Face Datasets' default; `load_dataset("user/qqa4co-bench")` works
   out-of-the-box, with streaming for the large MIS-ER-10k subset.
 - Compresses ~3-5× tighter than per-file pickles.
 - Survives format evolution: edge_index columns are forwards-compatible.

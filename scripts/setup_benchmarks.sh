@@ -4,6 +4,7 @@
 #
 # Covered families:
 #   * DISCS (maxcut / mis / maxclique / normcut)        -- ~3.9 GB
+#   * MaxCut G-set (G1..G67 + G70/G72/G77/G81)          -- ~30  MB
 #   * Graph Coloring (COLOR: myciel, queen)             -- ~340 KB
 #   * MIS on d-regular Random Graphs (PQQA §5.1)        -- ~82  MB
 #   * 3D Edwards-Anderson spin glass (Gaussian/bimodal) -- ~280 KB
@@ -11,7 +12,7 @@
 #
 # Two sources are supported. The default ``hf`` path pulls every family
 # straight from the Hugging Face dataset
-#   https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench
+#   https://huggingface.co/datasets/Yuma-Ichikawsa/qqa4co-bench
 # (no login required, no conversion step). The ``local`` path re-generates
 # the non-DISCS families from scratch on this machine (useful when you
 # cannot reach the Hub, or when tweaking the generators themselves).
@@ -21,7 +22,7 @@
 #   ./scripts/setup_benchmarks.sh --source local            # procedural regen
 #   ./scripts/setup_benchmarks.sh --only coloring,ea3d      # cherry-pick
 #   ./scripts/setup_benchmarks.sh --skip discs              # skip DISCS only
-#   ./scripts/setup_benchmarks.sh --hf-repo OTHER/discs-co-bench
+#   ./scripts/setup_benchmarks.sh --hf-repo OTHER/qqa4co-bench
 #   ./scripts/setup_benchmarks.sh --discs-args "--limit 5"  # DISCS smoke only
 #
 # Environment variables:
@@ -37,7 +38,7 @@ SOURCE="hf"                       # hf | local
 ONLY=""                           # comma-separated family names
 SKIP=""                           # comma-separated family names
 DISCS_ARGS=""
-HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/discs-co-bench}"
+HF_REPO_ID="${DISCS_HF_REPO_ID:-Yuma-Ichikawsa/qqa4co-bench}"
 
 usage() { sed -n '1,30p' "$0"; exit 0; }
 
@@ -57,7 +58,7 @@ done
 
 cd "${REPO_ROOT}"
 
-ALL="discs coloring mis-rrg ea3d"
+ALL="discs gset coloring mis-rrg ea3d"
 should_run() {
     local fam="$1"
     if [[ -n "${ONLY}" ]]; then
@@ -116,7 +117,7 @@ fi
 # --------------------------------------------------------------------------- #
 # Coloring / MIS-RRG / EA3D                                                   #
 # --------------------------------------------------------------------------- #
-for fam in coloring mis-rrg ea3d; do
+for fam in gset coloring mis-rrg ea3d; do
     if ! should_run "${fam}"; then
         echo "[setup_benchmarks] >>> skip ${fam}"
         continue
@@ -125,6 +126,7 @@ for fam in coloring mis-rrg ea3d; do
         fetch_hf_family "${fam}"
     else
         case "${fam}" in
+            gset)     python scripts/fetch_gset_data.py ;;
             coloring) python scripts/generate_coloring_instances.py ;;
             mis-rrg)  python scripts/generate_rrg_instances.py ;;
             ea3d)     python scripts/generate_ea3d_instances.py ;;
@@ -134,9 +136,10 @@ done
 
 echo ""
 echo "[setup_benchmarks] done. Try:"
-echo "    python scripts/bench_discs.py --suite coloring-myciel --instances 3"
-echo "    python scripts/bench_discs.py --suite mis-rrg-rrg-d20_n10000 --instances 1"
-echo "    python scripts/bench_discs.py --suite ea3d-gaussian-L4 --instances 3"
-echo "    python scripts/bench_discs.py --suite balanced-partition-nets-MNIST --instances 1"
-echo "    python scripts/bench_discs.py --suite all --instances 3 --output results.json"
-echo "    python scripts/plot_benchmarks.py results.json --output bench_report.png"
+echo "    qqa bench-run --suite gset                  --instances 5"
+echo "    qqa bench-run --suite coloring-myciel       --instances 3"
+echo "    qqa bench-run --suite mis-rrg-rrg-d20_n10000 --instances 1"
+echo "    qqa bench-run --suite ea3d-gaussian-L4      --instances 3"
+echo "    qqa bench-run --suite balanced-partition-nets-MNIST --instances 1"
+echo "    qqa bench-run --suite all --instances 3 --output results.json"
+echo "    qqa bench-plot bench_results/results.json --output bench_report.png"

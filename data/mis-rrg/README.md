@@ -40,5 +40,5 @@ solver benchmark. We ship the `n = 10^4` variant here (covers both
 the Hugging Face Hub mirror stays lean. Reinstate it by passing
 `--nodes 1000000` to `scripts/generate_rrg_instances.py` if needed.
 
-Upstream distribution: `yuma-ichikawa/discs-co-bench` on the Hugging Face
+Upstream distribution: `Yuma-Ichikawsa/qqa4co-bench` on the Hugging Face
 Hub.

@@ -1,2 +1,9 @@
+# The actual Gset payload (30 MB) lives on Hugging Face
+# (`Yuma-Ichikawsa/qqa4co-bench` under `gset/`). Pull it with
+# `make bench-all-setup` or `./scripts/setup_benchmarks.sh --only gset`.
+# The raw Stanford text files downloaded by
+# `scripts/fetch_gset_data.py` land under `raw/` and are likewise
+# excluded from version control.
 *
 !.gitignore
+!README.md
