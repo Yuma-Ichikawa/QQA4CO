@@ -22,6 +22,16 @@ with earlier QQA4CO releases (``import qqa``).
   <a href="https://github.com/Yuma-Ichikawa/QQA4CO/discussions"><img src="https://img.shields.io/github/discussions/Yuma-Ichikawa/QQA4CO?logo=github&label=Discussions" alt="GitHub Discussions"></a>
   <a href="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO"><img src="https://codecov.io/gh/Yuma-Ichikawa/QQA4CO/branch/main/graph/badge.svg" alt="Coverage"></a>
   <a href="https://doi.org/10.5281/zenodo.19648231"><img src="https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19648231-1f6feb?logo=doi&logoColor=white" alt="DOI"></a>
+  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench"><img src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Yuma--Ichikawsa%2Fdiscs--co--bench-yellow" alt="Hugging Face dataset"></a>
+</p>
+
+<p align="center">
+  <b>Benchmark data &nbsp;·&nbsp;</b>
+  <a href="https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench">
+    <code>huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench</code>
+  </a>
+  <br>
+  <sub>DISCS (NeurIPS 2023) + Graph Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) + 3D Edwards-Anderson spin glass + Balanced k-way partition — one HF dataset, <code>make bench-all-setup</code> pulls everything.</sub>
 </p>
 
 <p align="center">
@@ -397,47 +407,57 @@ Run `qqa <command> --help` for the full option list.
 
 ### All CO benchmarks in one command (DISCS + PQQA + EA3D)
 
-Every benchmark family QQA4CO ships — DISCS (MaxCut/MIS/MaxClique/NormCut),
-Graph Coloring (COLOR), MIS on d-regular Random Graphs (PQQA §5.1),
-3D Edwards-Anderson spin glass, and Balanced k-way partition — lives on
-the Hugging Face Hub as a single dataset
-(`Yuma-Ichikawsa/discs-co-bench`). Fetching and solving the whole suite
-is **one command each**:
+Every benchmark instance lives on the Hugging Face Hub:
+
+> **Dataset:** [`huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench`](https://huggingface.co/datasets/Yuma-Ichikawsa/discs-co-bench)
+> &nbsp;&nbsp;·&nbsp;&nbsp; DISCS (MaxCut/MIS/MaxClique/NormCut) + Graph
+> Coloring (COLOR) + MIS on d-regular random graphs (PQQA §5.1) + 3D
+> Edwards-Anderson spin glass + Balanced k-way partition — **one repo,
+> `make bench-all-setup` pulls everything**.
+
+Third parties benchmark a solver in **three one-liners**:
 
 ```bash
 pip install -e ".[discs,dev]"
-make bench-all-setup                     # pull every family from HF Hub (~4 GB)
-make bench-all-smoke                     # 3 instances per suite on CPU + render chart
+make bench-all-setup                                # 1. fetch every family from HF Hub
+qqa bench-run --suite all --output mine.json        # 2. run your solver
+qqa bench-plot bench_results/mine.json --output report.png  # 3. render the report
 ```
 
-`bench-all-smoke` drops `bench_all_smoke.json` and `bench_all_smoke.png`
-(radar + per-subset bars + feasibility + per-instance box plot) in the
-repo root so you can eyeball improvements to your solver across families
-at a glance. See [**Visualising benchmark results**](#visualising-benchmark-results)
-below.
-
-To benchmark a single family or a single subset:
+Outputs land under `./bench_results/` (git-ignored). For an A/B plot
+against a baseline, pass multiple JSON files to `qqa bench-plot`:
 
 ```bash
-# DISCS
-make bench-discs SUITE=mis-satlib BACKEND=qqa DEVICE=cuda
-make bench-discs SUITE=mis-satlib-uf DEVICE=cuda PARALLEL=1
-
-# Other families (same SUITE=... syntax, no new Make target needed):
-python scripts/bench_discs.py --suite coloring-myciel            --instances 3
-python scripts/bench_discs.py --suite coloring-queen             --instances 3
-python scripts/bench_discs.py --suite mis-rrg-rrg-d20_n10000     --instances 1
-python scripts/bench_discs.py --suite mis-rrg-rrg-d100_n10000    --instances 1
-python scripts/bench_discs.py --suite ea3d-gaussian-L4           --instances 3
-python scripts/bench_discs.py --suite ea3d-bimodal-L6            --instances 3
-python scripts/bench_discs.py --suite balanced-partition-nets-MNIST --instances 1
+qqa bench-plot bench_results/qqa.json bench_results/sa.json \
+    --labels "QQA (ours)" "SA baseline" \
+    --title "QQA vs SA on the CO suite" \
+    --output ab.png
 ```
 
-Third parties only need `pip install -e ".[discs,dev]"` + `make
-bench-all-setup` to reproduce the benchmark — no GoogleDrive auth, no
-local conversion step. The setup script (`scripts/setup_benchmarks.sh`)
-also takes `--source local` to re-generate the procedural families
-offline, and `--only coloring,ea3d` / `--skip discs` to cherry-pick.
+`qqa bench-list` prints every suite id that is resolvable from the
+current `./data/` tree:
+
+```bash
+qqa bench-list             # nested tree
+qqa bench-list --as-suites # one --suite id per line (for scripting)
+```
+
+`--suite` is longest-prefix-matched, so compound family names work
+(e.g. `mis-rrg-rrg-d20_n10000`, `balanced-partition-nets-MNIST`).
+
+Python API (same entry points as the CLI, with full keyword arg
+coverage):
+
+```python
+from qqa import bench
+bench.list_suites()                                # dict view of available suites
+bench.run("mis-satlib", instances=3, output="mine.json")
+bench.plot(["bench_results/mine.json"], output="report.png")
+```
+
+The `scripts/setup_benchmarks.sh` helper also supports `--source local`
+to re-generate the procedural families offline, and
+`--only coloring,ea3d` / `--skip discs` to cherry-pick families.
 
 The original DISCS-only path (`make bench-discs-setup`,
 `make bench-discs-smoke`, etc.) is still available and unchanged.
@@ -492,34 +512,41 @@ the construction details, scaling table, and the citation.
 
 ### Visualising benchmark results
 
-`scripts/plot_benchmarks.py` turns any `bench_discs.py --output *.json`
-payload into a 2×2 report image:
+`qqa bench-plot` (or the underlying `scripts/plot_benchmarks.py`) turns
+any `qqa bench-run --output *.json` payload into a polished
+publication-quality **report image** with four panels chosen so each
+one surfaces a *different* failure mode — improvements or regressions
+become impossible to miss.
 
 ```bash
-# one run, default 2x2 report
-python scripts/plot_benchmarks.py results.json --output report.png
+# one run, default layout
+qqa bench-plot bench_results/mine.json --output report.png
 
-# A/B comparison (e.g. baseline vs. your new method)
-python scripts/plot_benchmarks.py baseline.json tuned.json \
-    --labels baseline my-method --output ab.png
+# A/B comparison (baseline vs. your new method)
+qqa bench-plot bench_results/baseline.json bench_results/mine.json \
+    --labels "baseline" "my method" --output ab.png
 
-# Makefile shortcut
-make bench-plot JSON=results.json OUTPUT=report.png
+# dark theme for talks
+qqa bench-plot bench_results/mine.json --theme dark --output dark.png
+
+# Makefile shortcut (still available)
+make bench-plot JSON=bench_results/mine.json
 ```
 
-The image has four panels — chosen so each one exposes a *different*
-failure mode so that improvements (or regressions) to your method are
-impossible to miss:
+The image has a persistent **header / KPI band / footer** plus four
+data panels:
 
 | panel                 | what it shows                                                                 |
 |-----------------------|-------------------------------------------------------------------------------|
-| **Radar chart**       | mean approximation ratio on one axis per family. Spokes that don't cover an axis reveal families where the solver has no signal. |
-| **Per-subset bar**    | mean ratio per `<family>/<subset>`, grouped by family. Catches subset-level regressions that the radar would average out.         |
-| **Feasibility bar**   | share of replicas satisfying constraints per subset — lets a penalised QUBO admit a high objective while flagging its infeasibility. |
-| **Per-instance box**  | distribution (median + IQR + outliers) of approximation ratios per family. Reveals variance / skew / per-instance outliers.       |
+| **Radar chart**       | mean approximation ratio on one axis per family, with filled polygons and per-family colours that carry into every other panel. Spokes below 1.0 reveal families where the solver has no signal. |
+| **Per-subset bars**   | horizontal bars of mean ratio per `<family>/<subset>`, sorted, with a light family-colour band behind each group. Catches subset-level regressions that the radar would average out. |
+| **Feasibility bars**  | share of replicas satisfying constraints per subset — lets a penalised QUBO admit a high objective while flagging that it was infeasible. |
+| **Per-instance violin** | KDE violin + median + jittered strip of every replica, so variance, skew and per-instance outliers are visible at a glance. |
 
-The script only depends on matplotlib + numpy (already core deps) and
-takes any number of JSON files so A/B/C... comparisons stay a one-liner.
+The `--theme light|dark` switch controls the palette (Okabe-Ito
+colour-blind-safe methods + stable per-family hues). Output formats
+follow the extension (`.png` / `.svg` / `.pdf`); use `--format` to
+force. Only depends on matplotlib + numpy (core QQA4CO deps).
 
 ![Benchmark report example](data/fig/gallery/bench_report_example.png)
 

@@ -13,7 +13,7 @@
 .DEFAULT_GOAL := help
 .PHONY: help test lint format docs serve ci clean install build \
         bench-discs bench-discs-setup bench-discs-smoke \
-        bench-all bench-all-setup bench-all-smoke bench-plot
+        bench-all bench-all-setup bench-all-smoke bench-plot bench-list
 
 UV ?= uv
 PY_TARGETS := src tests scripts app
@@ -89,25 +89,33 @@ bench-discs-paper:  ## reproduce PQQA paper (Ichikawa NeurIPS 2024) settings
 bench-all-setup:  ## fetch ALL CO benchmark families from HF Hub (DISCS + coloring + mis-rrg + ea3d)
 	$(UV) run --extra discs ./scripts/setup_benchmarks.sh
 
-bench-all-smoke:  ## 3 instances x every suite (DISCS + coloring + mis-rrg + ea3d) on CPU
-	$(UV) run --extra discs python scripts/bench_discs.py \
+bench-all-smoke:  ## 3 instances x every suite on CPU + render the report under bench_results/
+	mkdir -p bench_results
+	$(UV) run --extra discs qqa bench-run \
 	    --suite all --backend qqa --instances 3 --device cpu \
-	    --output bench_all_smoke.json
-	$(UV) run python scripts/plot_benchmarks.py bench_all_smoke.json \
-	    --output bench_all_smoke.png
+	    --output smoke.json
+	$(UV) run qqa bench-plot bench_results/smoke.json \
+	    --title "QQA4CO smoke report (3 instances/suite, CPU)" \
+	    --output smoke.png
 
-bench-all:  ## full benchmark on every family (use SUITE=... to scope, OUTPUT=... for JSON)
-	$(UV) run --extra discs python scripts/bench_discs.py \
+bench-all:  ## full benchmark (SUITE=... to scope, OUTPUT=... for JSON). Auto-plots results.
+	mkdir -p bench_results
+	$(UV) run --extra discs qqa bench-run \
 	    --suite $(or $(SUITE),all) \
 	    --backend $(or $(BACKEND),qqa) \
 	    --device $(or $(DEVICE),auto) \
 	    $(if $(INSTANCES),--instances $(INSTANCES),) \
 	    $(if $(filter 1,$(PARALLEL)),--parallel,) \
-	    --output $(or $(OUTPUT),bench_all_$(or $(BACKEND),qqa).json)
+	    --output $(or $(OUTPUT),$(or $(BACKEND),qqa).json)
+	$(UV) run qqa bench-plot bench_results/$(or $(OUTPUT),$(or $(BACKEND),qqa).json) \
+	    --output $(basename $(or $(OUTPUT),$(or $(BACKEND),qqa).json)).png
 
 bench-plot:  ## render radar + bar + box charts from a bench JSON (pass JSON=path)
-	$(UV) run python scripts/plot_benchmarks.py $(JSON) \
+	$(UV) run qqa bench-plot $(JSON) \
 	    --output $(or $(OUTPUT),$(basename $(notdir $(JSON))).png)
+
+bench-list:  ## list every benchmark suite reachable from ./data
+	$(UV) run qqa bench-list
 
 clean:  ## remove build artefacts and caches
 	rm -rf dist/ site/ .pytest_cache/ .ruff_cache/ build/
