@@ -13,14 +13,30 @@ Every problem class exposes:
 | `MaximumIndependentSet(g)`     | $x \in \{0,1\}^N$ | $-\\|S\\| + p \cdot (\\text{violated edges})$ |
 | `MaxClique(g)`                 | $x \in \{0,1\}^N$ | $-\\|S\\| + p \cdot (\\text{non-edges in } S)$ |
 | `MaxCut(g)`                    | $x \in \{0,1\}^N$ | $x^T Q x$ (standard QUBO) |
-| `MaximumIndependentSetInstance(graphs, max_node)` | $(B, N)$ batched over a list of graphs | per-instance MIS QUBO with zero padding to `max_node` |
-| `MaxCutInstance(graphs, max_node)` | batched | per-instance Max-Cut QUBO |
-| `MaxCliqueInstance(graphs, max_node)` | batched | per-instance Max-Clique QUBO |
+| `MaximumIndependentSetInstance(graphs[, max_node, penalty])` | $(B, I, N)$ batched | per-instance MIS QUBO, mask-zeroed padding |
+| `MaxCutInstance(graphs[, max_node])` | batched | per-instance Max-Cut QUBO, mask-zeroed padding |
+| `MaxCliqueInstance(graphs[, max_node, penalty])` | batched | per-instance Max-Clique QUBO, mask-zeroed padding |
 
-`*Instance` variants accept `graphs: Sequence[nx.Graph]` and pad each
-adjacency matrix to `max_node`; padded rows/cols contribute zero to the
-loss so the batched anneal processes problems of different sizes in one
-GPU call.
+`*Instance` variants take `graphs: Sequence[nx.Graph]`, auto-derive
+`max_node = max(g.number_of_nodes())` (override via the kwarg), and
+attach a per-instance ``pad_mask`` that is multiplied into ``x`` inside
+both ``loss_fn`` and ``score_summary``. The mask makes padded positions
+strictly inert: anything the optimiser writes into ``x[..., n_i:]`` is
+squashed to zero before the einsum, so heterogeneous-size batches solve
+correctly without leaking padded variables into the reported objective.
+
+`score_summary` for the batched classes returns per-instance arrays
+(``np.ndarray`` of length ``num_instance``) of objective values and
+feasibility flags. ``qqa.anneal`` exposes them as ``result.score`` so
+downstream tools can read the per-instance feasibility / |S| / cut
+without recomputing.
+
+`penalty` may be either a scalar (broadcast to all instances) or a
+sequence of length ``num_instance`` for heterogeneous penalty tuning.
+
+The batched path is supported by ``qqa.anneal`` only — SA / PA backends
+require a single dense ``Q_mat`` and intentionally reject
+batched-instance problems.
 
 ## Classic CO (binary, problem-specific losses)
 

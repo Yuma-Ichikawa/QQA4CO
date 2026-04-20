@@ -12,8 +12,10 @@ for completeness; obtain those datasets separately and point ``QQA_DATA_DIR``
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
+from dataclasses import dataclass
 from pathlib import Path
 
 import networkx as nx
@@ -27,6 +29,7 @@ from qqa.problems import (
     MaxCutInstance,
     MaximumIndependentSet,
     MaximumIndependentSetInstance,
+    NormalizedCut,
 )
 
 _THIS = Path(__file__).resolve()
@@ -275,3 +278,258 @@ def best_opt(path: str | os.PathLike | None = None) -> np.ndarray:
     root = _resolve(path, "maxcut/optsicom")
     bests = [_load_pickle(root / f)[1][0] for f in sorted(os.listdir(root))]
     return np.asarray(bests)
+
+
+# ============================================================================ #
+# DISCS unified suite (data/discs/<problem>/<graph_type>/<subset>/...)         #
+# ============================================================================ #
+#
+# This block consumes the layout produced by ``scripts/setup_discs_data.sh``
+# (which calls ``scripts/convert_discs_to_qqa.py``). Each subset directory
+# contains:
+#
+#   * ``{0001,...}.gpickle`` — one ``pickle.dump(networkx.Graph)`` per file.
+#   * ``manifest.jsonl``     — one JSON record per graph carrying the
+#                              ``best_known`` objective and provenance fields.
+#
+# All four DISCS CO problem families (MaxCut / MIS / MaxClique / NormCut) share
+# the same on-disk schema, so a single helper drives every loader below.
+# ---------------------------------------------------------------------------- #
+
+
+def _default_discs_root() -> Path:
+    return _default_data_dir() / "discs"
+
+
+@dataclass(frozen=True)
+class DiscsBenchmark:
+    """A loaded DISCS subset.
+
+    Attributes
+    ----------
+    problems:
+        List of concrete ``COProblem`` instances ready to feed into
+        ``qqa.anneal`` / ``qqa.simulated_annealing`` / ``qqa.population_annealing``.
+    best_known:
+        ``np.ndarray`` of length ``len(problems)``. Entries are ``np.nan`` for
+        instances whose source did not carry a known optimum.
+    manifest:
+        Raw manifest records (1 dict per instance) — useful for surfacing
+        ``num_nodes``, ``source``, etc. in benchmark dashboards.
+    subset_dir:
+        Path to the directory we read from.
+    """
+
+    problems: list
+    best_known: np.ndarray
+    manifest: list[dict]
+    subset_dir: Path
+
+    def __len__(self) -> int:
+        return len(self.problems)
+
+
+def _read_manifest(subset_dir: Path) -> list[dict]:
+    manifest = subset_dir / "manifest.jsonl"
+    if not manifest.is_file():
+        raise FileNotFoundError(
+            f"DISCS manifest not found at {manifest}. Did you run `./scripts/setup_discs_data.sh`?"
+        )
+    records: list[dict] = []
+    with open(manifest) as fh:
+        for line in fh:
+            line = line.strip()
+            if line:
+                records.append(json.loads(line))
+    if not records:
+        raise FileNotFoundError(f"DISCS manifest at {manifest} is empty.")
+    return records
+
+
+def _resolve_discs_subset(
+    problem: str,
+    graph_type: str,
+    subset: str | None,
+    *,
+    root: str | os.PathLike | None,
+) -> tuple[Path, list[dict]]:
+    """Locate the subset directory + manifest for one (problem, graph_type, subset)."""
+    base = Path(root).expanduser().resolve() if root is not None else _default_discs_root()
+    if not base.is_dir():
+        raise FileNotFoundError(
+            f"DISCS unified data root {base} does not exist. "
+            "Run `./scripts/setup_discs_data.sh` (or set QQA_DATA_DIR)."
+        )
+    candidates: list[Path] = []
+    type_dir = base / problem / graph_type
+    if not type_dir.is_dir():
+        raise FileNotFoundError(
+            f"DISCS subset directory {type_dir} not found. "
+            f"Available problem dirs: {sorted(p.name for p in base.iterdir() if p.is_dir())}"
+        )
+    if subset is not None:
+        candidates = [type_dir / subset]
+    else:
+        candidates = [p for p in sorted(type_dir.iterdir()) if p.is_dir()]
+    if not candidates:
+        raise FileNotFoundError(
+            f"No DISCS subsets under {type_dir}. "
+            f"Available subsets: {sorted(p.name for p in type_dir.iterdir() if p.is_dir())}"
+        )
+
+    records: list[dict] = []
+    for cand in candidates:
+        records.extend(_read_manifest(cand))
+    # The single subset case keeps a unique subset_dir; multi-subset returns the
+    # parent type_dir to make traceback hints predictable.
+    return (candidates[0] if len(candidates) == 1 else type_dir), records
+
+
+def _load_graphs_from_manifest(
+    subset_dir: Path,
+    records: list[dict],
+    *,
+    limit: int | None = None,
+) -> tuple[list[nx.Graph], np.ndarray, list[dict]]:
+    if limit is not None:
+        records = records[:limit]
+    graphs: list[nx.Graph] = []
+    bests: list[float] = []
+    for rec in records:
+        # When records come from a multi-subset query the per-record subset
+        # directory differs; reconstruct it relative to the unified root.
+        per_dir = subset_dir if subset_dir.name == rec["subset"] else subset_dir / rec["subset"]
+        graph_path = per_dir / rec["file"]
+        with open(graph_path, "rb") as fh:
+            graphs.append(pickle.load(fh))
+        bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
+    return graphs, np.asarray(bests, dtype=np.float64), records
+
+
+def discs_maxcut(
+    graph_type: str = "ba",
+    subset: str | None = None,
+    *,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+    parallel: bool = False,
+) -> DiscsBenchmark:
+    """Load DISCS MaxCut instances.
+
+    Parameters
+    ----------
+    graph_type
+        ``"ba"`` (Barabási–Albert), ``"er"`` (Erdős–Rényi), or ``"optsicom"``.
+    subset
+        Subset name within the graph type (e.g. ``"200"``, ``"1024-1100"``,
+        ``"b"``). If ``None``, every subset under ``graph_type`` is loaded
+        and concatenated.
+    device, limit, root
+        Standard knobs (limit caps total instances; root overrides
+        ``QQA_DATA_DIR/discs``).
+    parallel
+        If ``True``, pack every graph into a single :class:`MaxCutInstance`
+        problem (padded to ``max_node`` and masked) so ``qqa.anneal`` solves
+        them all in one batched call. The returned ``DiscsBenchmark.problems``
+        is then a length-1 list. See :doc:`docs/problems` for details.
+    """
+    sdir, records = _resolve_discs_subset("maxcut", graph_type, subset, root=root)
+    graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    if parallel:
+        problems = [MaxCutInstance(graphs, device=device)]
+    else:
+        problems = [MaxCut(g, device=device) for g in graphs]
+    return DiscsBenchmark(problems, bests, recs, sdir)
+
+
+def discs_mis(
+    graph_type: str = "satlib",
+    subset: str | None = None,
+    *,
+    penalty: float = 2.0,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+    parallel: bool = False,
+) -> DiscsBenchmark:
+    """Load DISCS Maximum Independent Set instances.
+
+    ``graph_type`` ∈ ``{"satlib", "er", "er_density"}``.
+
+    Set ``parallel=True`` to fold every instance into a single
+    :class:`MaximumIndependentSetInstance` (one batched solve via
+    ``qqa.anneal``). All instances share ``penalty``; for heterogeneous
+    penalties build the ``Instance`` class manually.
+    """
+    sdir, records = _resolve_discs_subset("mis", graph_type, subset, root=root)
+    graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    if parallel:
+        problems = [MaximumIndependentSetInstance(graphs, penalty=penalty, device=device)]
+    else:
+        problems = [MaximumIndependentSet(g, penalty=penalty, device=device) for g in graphs]
+    return DiscsBenchmark(problems, bests, recs, sdir)
+
+
+def discs_maxclique(
+    graph_type: str = "rb",
+    subset: str | None = None,
+    *,
+    penalty: float = 3.0,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+    parallel: bool = False,
+) -> DiscsBenchmark:
+    """Load DISCS Maximum Clique instances. ``graph_type`` ∈ ``{"rb", "twitter"}``.
+
+    Set ``parallel=True`` to fold every instance into a single
+    :class:`MaxCliqueInstance`.
+    """
+    sdir, records = _resolve_discs_subset("maxclique", graph_type, subset, root=root)
+    graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    if parallel:
+        problems = [MaxCliqueInstance(graphs, penalty=penalty, device=device)]
+    else:
+        problems = [MaxClique(g, penalty=penalty, device=device) for g in graphs]
+    return DiscsBenchmark(problems, bests, recs, sdir)
+
+
+def discs_normcut(
+    graph_type: str = "nets",
+    subset: str | None = None,
+    *,
+    num_category: int = 2,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load DISCS Normalized Cut instances.
+
+    ``graph_type`` ∈ ``{"nets", "gap_rand"}``.
+    Note: DISCS itself ships only ``best_known=None`` for NormCut (it is a
+    minimisation with no known optimum); approximation ratios in benchmarks
+    are typically reported relative to DISCS' best-found values.
+    """
+    sdir, records = _resolve_discs_subset("normcut", graph_type, subset, root=root)
+    graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    problems = [NormalizedCut(g, num_category=num_category, device=device) for g in graphs]
+    return DiscsBenchmark(problems, bests, recs, sdir)
+
+
+def list_discs_subsets(root: str | os.PathLike | None = None) -> dict[str, dict[str, list[str]]]:
+    """Return ``{problem: {graph_type: [subset, ...]}}`` for the unified suite."""
+    base = Path(root).expanduser().resolve() if root is not None else _default_discs_root()
+    out: dict[str, dict[str, list[str]]] = {}
+    if not base.is_dir():
+        return out
+    for prob_dir in sorted(base.iterdir()):
+        if not prob_dir.is_dir() or prob_dir.name.startswith("_"):
+            continue
+        out[prob_dir.name] = {}
+        for type_dir in sorted(prob_dir.iterdir()):
+            if not type_dir.is_dir():
+                continue
+            subsets = sorted(s.name for s in type_dir.iterdir() if s.is_dir())
+            out[prob_dir.name][type_dir.name] = subsets
+    return out

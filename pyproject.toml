@@ -81,6 +81,14 @@ notebook = ["jupyterlab>=4", "ipykernel>=6", "nbformat>=5"]
 # of the default ``qqa.anneal`` solver. See ``qqa.pignn`` and the
 # "Optional CRA-PI-GNN backend" section in README.md.
 pignn = ["torch-geometric>=2.6"]
+# Needed only by the DISCS CO benchmark suite (data/discs/, scripts/setup_discs_data.sh,
+# scripts/convert_discs_to_qqa.py, scripts/bench_discs.py). Optional because most
+# qqa users will not download the DISCS instances.
+discs = [
+    "huggingface_hub>=0.20",
+    "gdown>=5.0",
+    "python-sat>=0.1.7",
+]
 dev = [
     "pytest>=8",
     "ruff>=0.6",
@@ -89,7 +97,7 @@ dev = [
     "requests>=2.31",
 ]
 all = [
-    "qqa[plotly,gui,docs,notebook,dev,pignn]",
+    "qqa[plotly,gui,docs,notebook,dev,pignn,discs]",
 ]
 
 [project.scripts]

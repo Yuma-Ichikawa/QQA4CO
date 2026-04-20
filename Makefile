@@ -11,7 +11,8 @@
 #   make clean   # remove build artefacts
 
 .DEFAULT_GOAL := help
-.PHONY: help test lint format docs serve ci clean install build
+.PHONY: help test lint format docs serve ci clean install build \
+        bench-discs bench-discs-setup bench-discs-smoke
 
 UV ?= uv
 PY_TARGETS := src tests scripts app
@@ -47,6 +48,42 @@ ci:  ## everything CI runs, in CI order
 build:  ## build wheel + sdist into dist/
 	rm -rf dist/
 	$(UV) build
+
+bench-discs-setup:  ## download + convert the DISCS CO benchmark suite (~6.7 GB)
+	$(UV) run --extra discs scripts/setup_discs_data.sh
+
+bench-discs-smoke:  ## 3 instances per problem family on real DISCS data (CPU)
+	$(UV) run --extra discs python scripts/bench_discs.py \
+	    --suite all --backend qqa --instances 3 --device cpu \
+	    --output bench_discs_smoke.json
+
+bench-discs:  ## full DISCS suite with qqa.anneal (use SUITE=... to scope; PARALLEL=1 to batch)
+	$(UV) run --extra discs python scripts/bench_discs.py \
+	    --suite $(or $(SUITE),all) \
+	    --backend $(or $(BACKEND),qqa) \
+	    --device $(or $(DEVICE),auto) \
+	    $(if $(filter 1,$(PARALLEL)),--parallel,) \
+	    --output $(or $(OUTPUT),bench_discs_$(or $(BACKEND),qqa).json)
+
+bench-discs-paper:  ## reproduce PQQA paper (Ichikawa NeurIPS 2024) settings
+	## Defaults match Table 1 (SATLIB MIS, S=100, fewer steps): expect
+	## mean_ratio ~0.993 vs KaMIS. Override SOL_SIZE / NUM_EPOCHS for
+	## "more steps" (3000 -> 30000) or S=1000 row.
+	$(UV) run --extra discs python scripts/bench_discs.py \
+	    --suite $(or $(SUITE),mis-satlib-uf) \
+	    --backend qqa \
+	    --device $(or $(DEVICE),auto) \
+	    --sol-size $(or $(SOL_SIZE),100) \
+	    --num-epochs $(or $(NUM_EPOCHS),3000) \
+	    --learning-rate $(or $(LEARNING_RATE),0.1) \
+	    --temp 1e-3 \
+	    --curve-rate 4 \
+	    --gamma-min -2 \
+	    --gamma-max 0.1 \
+	    --div-param $(or $(DIV_PARAM),0.2) \
+	    --penalty $(or $(PENALTY),2.0) \
+	    $(if $(filter 1,$(PARALLEL)),--parallel,) \
+	    --output $(or $(OUTPUT),bench_discs_paper.json)
 
 clean:  ## remove build artefacts and caches
 	rm -rf dist/ site/ .pytest_cache/ .ruff_cache/ build/
