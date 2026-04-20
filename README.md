@@ -435,6 +435,31 @@ See [`data/discs/README.md`](data/discs/README.md) for the full layout,
 optional Hugging Face source, the `qqa.datasets.discs_*` Python loaders,
 and the batched-instance (`parallel=True`) API.
 
+### Planted-solution factorization Ising/QUBO benchmark (Hen 2026)
+
+A second, complementary benchmark is the **planted-solution
+factorization Ising** of Hen, *Planted-solution SAT and Ising
+benchmarks from integer factorization* (arXiv:2604.09837, 2026). The
+construction encodes ``N = p · q`` as a circuit of AND/XOR Ising
+gadgets whose unique ground state is the bit-string of ``(p, q)``, so
+**every solver claim is verifiable** against the known optimum.
+
+```python
+import qqa
+prob = qqa.IntegerFactorizationIsing(p=11, q=13)         # N = 143
+result = qqa.anneal(prob, sol_size=500, num_epochs=3000,
+                    learning_rate=0.5,
+                    schedule=qqa.LinearBGSchedule(min_bg=-2, max_bg=0.5))
+print(result.score["extra"]["p_hat"], result.score["extra"]["q_hat"])
+```
+
+```bash
+uv run python scripts/bench_factorization.py --bits 4 --instances 5
+```
+
+See [`data/factorization/README.md`](data/factorization/README.md) for
+the construction details, scaling table, and the citation.
+
 ## Streamlit dashboard
 
 ```bash
@@ -716,3 +741,21 @@ Reference implementation: <https://github.com/google-research/discs>.
 The unified ``data/discs/`` layout (one ``.gpickle`` per instance plus a
 ``manifest.jsonl`` sidecar) is QQA4CO-specific and described in
 [`data/discs/README.md`](data/discs/README.md).
+
+If you use the **planted-solution factorization Ising benchmark**
+(`qqa.IntegerFactorizationIsing`, `scripts/bench_factorization.py`,
+`data/factorization/`), please cite the paper that introduced the
+construction and the gadget formulas this implementation follows:
+
+```bibtex
+@article{hen2026planted,
+  title   = {Planted-solution {SAT} and Ising benchmarks from integer factorization},
+  author  = {Hen, Itay},
+  journal = {arXiv preprint arXiv:2604.09837},
+  year    = {2026}
+}
+```
+
+Reference SAT/Ising compiler: <https://github.com/itay-hen/pq-SAT-benchmark>.
+The QQA4CO implementation in `src/qqa/problems/factorization.py` is
+independent and follows Eqs. 10–12 of the paper directly.

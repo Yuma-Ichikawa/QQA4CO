@@ -38,6 +38,28 @@ The batched path is supported by ``qqa.anneal`` only — SA / PA backends
 require a single dense ``Q_mat`` and intentionally reject
 batched-instance problems.
 
+## Planted-solution factorization Ising/QUBO (Hen 2026)
+
+| Class                                   | Inputs            | Loss / property                                  |
+| --------------------------------------- | ----------------- | ------------------------------------------------ |
+| `IntegerFactorizationIsing(p, q)`       | two primes        | $x^T Q x + E_0$, **min = 0** on the planted bits |
+| `random_factorization_problems(d, k)`   | bit-length, count | list of $k$ random instances of width $d$        |
+
+Implements arXiv:2604.09837. The semi-prime $N = p \cdot q$ is encoded
+via long multiplication into a circuit of AND and XOR clauses; each
+clause becomes the three- or four-spin energy gadget of Eqs. 10–11 of
+the paper. Pinned spins (the bits of $N$ and the leading bits of
+$p$, $q$) are folded into the constant offset, so the resulting QUBO is
+strictly free-variable.
+
+`score_summary(x)` returns the residual energy above the planted optimum,
+the **decoded** factor pair `(p̂, q̂)`, the product `N̂`, and the
+bit-Hamming distance to the planted assignment. `feasible == True`
+exactly when the optimiser found the planted solution and `p̂ · q̂ = N`.
+
+See `data/factorization/README.md` for the construction details, problem
+sizes vs. bit-length, and the citation.
+
 ## Classic CO (binary, problem-specific losses)
 
 | Class | Inputs | Loss / feasibility |
