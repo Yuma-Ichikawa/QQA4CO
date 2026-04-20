@@ -12,7 +12,8 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help test lint format docs serve ci clean install build \
-        bench-discs bench-discs-setup bench-discs-smoke
+        bench-discs bench-discs-setup bench-discs-smoke \
+        bench-all bench-all-setup bench-all-smoke bench-plot
 
 UV ?= uv
 PY_TARGETS := src tests scripts app
@@ -84,6 +85,29 @@ bench-discs-paper:  ## reproduce PQQA paper (Ichikawa NeurIPS 2024) settings
 	    --penalty $(or $(PENALTY),2.0) \
 	    $(if $(filter 1,$(PARALLEL)),--parallel,) \
 	    --output $(or $(OUTPUT),bench_discs_paper.json)
+
+bench-all-setup:  ## fetch ALL CO benchmark families from HF Hub (DISCS + coloring + mis-rrg + ea3d)
+	$(UV) run --extra discs ./scripts/setup_benchmarks.sh
+
+bench-all-smoke:  ## 3 instances x every suite (DISCS + coloring + mis-rrg + ea3d) on CPU
+	$(UV) run --extra discs python scripts/bench_discs.py \
+	    --suite all --backend qqa --instances 3 --device cpu \
+	    --output bench_all_smoke.json
+	$(UV) run python scripts/plot_benchmarks.py bench_all_smoke.json \
+	    --output bench_all_smoke.png
+
+bench-all:  ## full benchmark on every family (use SUITE=... to scope, OUTPUT=... for JSON)
+	$(UV) run --extra discs python scripts/bench_discs.py \
+	    --suite $(or $(SUITE),all) \
+	    --backend $(or $(BACKEND),qqa) \
+	    --device $(or $(DEVICE),auto) \
+	    $(if $(INSTANCES),--instances $(INSTANCES),) \
+	    $(if $(filter 1,$(PARALLEL)),--parallel,) \
+	    --output $(or $(OUTPUT),bench_all_$(or $(BACKEND),qqa).json)
+
+bench-plot:  ## render radar + bar + box charts from a bench JSON (pass JSON=path)
+	$(UV) run python scripts/plot_benchmarks.py $(JSON) \
+	    --output $(or $(OUTPUT),$(basename $(notdir $(JSON))).png)
 
 clean:  ## remove build artefacts and caches
 	rm -rf dist/ site/ .pytest_cache/ .ruff_cache/ build/
