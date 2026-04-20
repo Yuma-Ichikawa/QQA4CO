@@ -1,10 +1,25 @@
-"""Run the DISCS combinatorial-optimization benchmark suite.
+"""Run combinatorial-optimisation benchmarks against QQA / SA / PA.
+
+This script drives every benchmark family shipped with QQA4CO:
+
+* **DISCS** (Goshvadi et al. NeurIPS 2023, repackaged):
+  ``mis-*``, ``maxcut-*``, ``maxclique-*``, ``normcut-*``.
+* **PQQA paper** (Ichikawa & Arai NeurIPS 2024) extras not in DISCS:
+  ``mis-rrg-*`` (MIS on d-regular random graphs),
+  ``coloring-*`` (Graph coloring, Trick 2002 subset),
+  ``balanced-partition-*`` (balanced k-way cut on the DISCS nets graphs).
+* **Physics stress test** requested on top of the paper:
+  ``ea3d-*`` (3D Edwards-Anderson spin glass, Gaussian and ±J).
 
 Examples
 --------
 Smoke (3 instances of the SATLIB MIS subset, default ``qqa.anneal`` backend)::
 
     python scripts/bench_discs.py --suite mis-satlib --instances 3
+
+Smoke for the 3D EA spin glass (L=4 Gaussian, 5 instances)::
+
+    python scripts/bench_discs.py --suite ea3d-gaussian-L4 --instances 5
 
 All available subsets, save JSON results::
 
@@ -21,10 +36,15 @@ Suite identifiers
 -----------------
 ``--suite`` accepts:
 
-* ``all``                            — every subset under ``data/discs/``
-* ``<problem>``                      — every subset of one problem (mis, maxcut, ...)
-* ``<problem>-<graph_type>``         — every subset of one (problem, type)
-* ``<problem>-<graph_type>-<subset>`` — exactly one subset
+* ``all``                            — every subset under ``data/`` (DISCS + extras)
+* ``<family>``                       — every subset of one family
+  (``mis``, ``maxcut``, ``mis-rrg``, ``ea3d``, ``coloring``,
+  ``balanced-partition``, ...)
+* ``<family>-<graph_type>``          — every subset of one (family, type)
+* ``<family>-<graph_type>-<subset>`` — exactly one subset
+
+Family names may themselves contain a hyphen (``mis-rrg``,
+``balanced-partition``); resolution is longest-prefix-first.
 """
 
 from __future__ import annotations
@@ -54,58 +74,149 @@ LOG = bench.setup_logging(verbose=False, name="bench_discs")
 # --------------------------------------------------------------------------- #
 
 
+# Loaders are wrapped so every one has the same
+#   fn(graph_type, subset, *, device, limit, **extras) -> DiscsBenchmark
+# signature. ``extras`` can carry family-specific knobs (``penalty``,
+# ``num_category``, ...). The wrappers translate ``graph_type`` into the
+# loader's native first positional argument.
+def _load_mis_rrg(graph_type, subset, **kw):
+    kw.pop("parallel", None)  # mis-rrg has no batched class
+    return datasets.mis_rrg(subset=subset, **kw)
+
+
+def _load_coloring(graph_type, subset, **kw):
+    kw.pop("parallel", None)
+    kw.pop("penalty", None)
+    return datasets.coloring(graph_type=graph_type, subset=subset, **kw)
+
+
+def _load_ea3d(graph_type, subset, **kw):
+    kw.pop("parallel", None)
+    kw.pop("penalty", None)
+    return datasets.ea3d(dist=graph_type, subset=subset, **kw)
+
+
+def _load_balanced(graph_type, subset, **kw):
+    kw.pop("parallel", None)
+    kw.pop("penalty", None)
+    return datasets.balanced_partition(graph_type=graph_type, subset=subset, **kw)
+
+
 _PROBLEM_LOADER = {
     "maxcut": datasets.discs_maxcut,
     "mis": datasets.discs_mis,
     "maxclique": datasets.discs_maxclique,
     "normcut": datasets.discs_normcut,
+    "mis-rrg": _load_mis_rrg,
+    "coloring": _load_coloring,
+    "ea3d": _load_ea3d,
+    "balanced-partition": _load_balanced,
 }
 
 
+def _build_catalog() -> dict[str, dict[str, list[str]]]:
+    """Unified ``{family: {graph_type: [subset, ...]}}`` catalog.
+
+    Collapses DISCS layout + the new generate_* layouts under ``data/``.
+    A single-level family (where the leaf with ``manifest.jsonl`` is
+    directly under ``data/<family>/``) is recorded as
+    ``{"": ["<subset>"]}`` so downstream dispatch keeps a consistent
+    3-slot triple even when the family has no ``graph_type`` layer.
+    """
+    catalog: dict[str, dict[str, list[str]]] = {}
+    discs = datasets.list_discs_subsets()
+    for prob, types in discs.items():
+        catalog[prob] = {gt: list(subs) for gt, subs in types.items()}
+    fams = datasets.list_benchmark_families()
+    for fam_name, type_dict in fams.items():
+        if fam_name == "discs":
+            continue
+        if fam_name == "ea3d":
+            # two-level ({dist: [L-label, ...]}) — keep as-is.
+            catalog.setdefault(fam_name, {}).update(type_dict)
+        elif fam_name == "coloring":
+            # coloring/<graph_type>/manifest.jsonl (flat subset). Expose
+            # each graph_type as its own 1-element "subset list" so the
+            # suite name reads ``coloring-myciel`` uniformly.
+            for gt in type_dict.get("", []):
+                catalog.setdefault("coloring", {})[gt] = [""]
+        elif fam_name == "mis-rrg":
+            subsets = type_dict.get("", [])
+            if subsets:
+                catalog.setdefault("mis-rrg", {})["rrg"] = subsets
+    # balanced-partition is derived from the DISCS normcut layout — expose
+    # it as a separate family so users can pick the `BalancedGraphPartition`
+    # objective alongside the `NormalizedCut` objective on the same graphs.
+    if "normcut" in discs:
+        catalog.setdefault("balanced-partition", {}).update(
+            {gt: list(subs) for gt, subs in discs["normcut"].items()}
+        )
+    return catalog
+
+
 def _resolve_suite(suite: str) -> list[tuple[str, str, str | None]]:
-    """Return a list of ``(problem, graph_type, subset)`` triples."""
-    catalog = datasets.list_discs_subsets()
+    """Return a list of ``(family, graph_type, subset)`` triples.
+
+    Uses longest-prefix-first family matching so compound names
+    (``mis-rrg``, ``balanced-partition``) are resolved before single-token
+    ones (``mis``).
+    """
+    catalog = _build_catalog()
     if not catalog:
-        raise SystemExit("No DISCS data found. Run `./scripts/setup_discs_data.sh` first.")
+        raise SystemExit(
+            "No benchmark data found under ``data/``. Run "
+            "`./scripts/setup_discs_data.sh` and/or the appropriate "
+            "`scripts/generate_*_instances.py` first."
+        )
 
     out: list[tuple[str, str, str | None]] = []
     if suite == "all":
-        for prob, types in catalog.items():
+        for fam, types in catalog.items():
             for gtype, subsets in types.items():
                 for sub in subsets:
-                    out.append((prob, gtype, sub))
+                    out.append((fam, gtype, sub))
         return out
 
-    parts = suite.split("-")
-    prob = parts[0]
-    if prob not in catalog:
-        raise SystemExit(f"Unknown suite '{suite}'. Available problems: {sorted(catalog)}")
-    if len(parts) == 1:
-        for gtype, subsets in catalog[prob].items():
+    # Longest-prefix family match.
+    fam: str | None = None
+    rest: str = ""
+    for cand in sorted(catalog.keys(), key=len, reverse=True):
+        if suite == cand:
+            fam, rest = cand, ""
+            break
+        if suite.startswith(cand + "-"):
+            fam, rest = cand, suite[len(cand) + 1 :]
+            break
+    if fam is None:
+        raise SystemExit(f"Unknown suite '{suite}'. Available families: {sorted(catalog)}")
+
+    types = catalog[fam]
+    if not rest:
+        for gtype, subsets in types.items():
             for sub in subsets:
-                out.append((prob, gtype, sub))
+                out.append((fam, gtype, sub))
         return out
 
-    # parts[1:] is graph_type and possibly subset.
-    # The subset name may itself contain dashes (e.g. ``ba-1024-1100``), so we
-    # match by trying the longest valid prefix first.
-    rest = "-".join(parts[1:])
-    types = catalog[prob]
     for gtype in types:
         if rest == gtype:
             for sub in types[gtype]:
-                out.append((prob, gtype, sub))
+                out.append((fam, gtype, sub))
             return out
         prefix = gtype + "-"
         if rest.startswith(prefix):
             sub = rest[len(prefix) :]
             if sub in types[gtype]:
-                out.append((prob, gtype, sub))
+                out.append((fam, gtype, sub))
                 return out
 
+    # Allow ``mis-rrg-d20_n10000`` (flat subset, no graph_type).
+    if "" in types and rest in types[""]:
+        out.append((fam, "", rest))
+        return out
+
     raise SystemExit(
-        f"Could not resolve suite '{suite}'. Available under {prob}: "
-        + ", ".join(f"{prob}-{g}-{s}" for g, ss in types.items() for s in ss)
+        f"Could not resolve suite '{suite}'. Available under {fam}: "
+        + ", ".join(f"{fam}-{g}-{s}" if g else f"{fam}-{s}" for g, ss in types.items() for s in ss)
     )
 
 
@@ -160,19 +271,14 @@ _BACKENDS = {
 def _objective_and_feasibility(problem, result, problem_kind: str) -> tuple[float, bool]:
     """Return the *human-readable* CO objective and a feasibility flag.
 
-    qqa loss conventions (with penalised QUBO formulations):
+    qqa loss conventions:
 
-    * **MIS** ``loss = -|S| + penalty * (#violated edges)``. We MUST use
-      :meth:`score_summary` (or recompute |S| only over feasible vertices)
-      because ``-loss`` overestimates ``|S|`` whenever an edge constraint
-      is violated.
-    * **MaxClique** ``loss = -|S| + penalty * (#missing pairs)``. Same
-      caveat as MIS — use :meth:`score_summary`.
-    * **MaxCut** ``loss = -cut_weight``. Unconstrained, ``cut = -loss`` is
-      always exact; we still call :meth:`score_summary` to keep the JSON
-      output consistent and pick the best replica directly.
-    * **NormCut** is already in minimisation form on the discrete projection;
-      we run :meth:`discrete_ncut` on the projected best replica.
+    * **mis / maxcut / maxclique**: penalised QUBO; use ``score_summary``.
+    * **normcut**: minimisation via ``discrete_ncut(x_disc)``.
+    * **coloring**: ``score_summary`` returns ``conflicts`` (≥0, 0 ≡ feasible).
+    * **mis-rrg**: same contract as mis (MaximumIndependentSet).
+    * **balanced-partition**: ``score_summary`` returns ``edge cut``.
+    * **ea3d**: unconstrained Ising energy — return ``best_obj`` directly.
     """
     if problem_kind == "normcut":
         with torch.no_grad():
@@ -180,7 +286,13 @@ def _objective_and_feasibility(problem, result, problem_kind: str) -> tuple[floa
             ncut = float(problem.discrete_ncut(x_disc).item())
         return ncut, True
 
-    # MIS / MaxCut / MaxClique: ask the problem for the feasibility-aware metric.
+    if problem_kind == "ea3d":
+        # Unconstrained Ising energy (``best_obj`` is already the relaxed
+        # loss evaluated on the projected best replica).
+        return float(result.best_obj), True
+
+    # mis / maxcut / maxclique / coloring / mis-rrg / balanced-partition:
+    # each problem's ``score_summary`` returns ``value`` + ``feasible``.
     summary = problem.score_summary(result.best_sol)
     return float(summary.get("value", -result.best_obj)), bool(summary.get("feasible", True))
 
@@ -201,7 +313,7 @@ def _per_instance_objectives_and_feasibility(
     ``MaxCutInstance``, ``MaxCliqueInstance``). NormCut has no batched class
     yet, so this path is only used for the QUBO families.
     """
-    if problem_kind not in {"mis", "maxcut", "maxclique"}:
+    if problem_kind not in {"mis", "maxcut", "maxclique", "mis-rrg"}:
         raise ValueError(f"--parallel does not support problem '{problem_kind}'.")
     summary = problem.score_summary(result.best_sol)
     values = list(summary["value"].tolist())
@@ -210,13 +322,39 @@ def _per_instance_objectives_and_feasibility(
 
 
 def _approx_ratio(objective: float, best_known: float, kind: str) -> float | None:
-    """Approximation ratio relative to the published best (NaN-safe)."""
-    if best_known is None or np.isnan(best_known) or best_known == 0:
+    """Approximation ratio relative to the published best (NaN-safe).
+
+    Sign convention: the returned number is "higher is better", clipped so
+    ``1.0 = optimal``. For minimisation problems (normcut, coloring,
+    balanced-partition, ea3d with known ground state) we return
+    ``best_known / objective`` so that pairs with ``objective > 0`` stay
+    comparable. For ea3d the ground-state energy is negative; the ratio is
+    then ``objective / best_known`` (both negative, ratio ∈ (0, 1]).
+    """
+    if best_known is None or (isinstance(best_known, float) and np.isnan(best_known)):
         return None
-    if kind in {"mis", "maxcut", "maxclique"}:
-        return objective / best_known  # higher is better
+    if kind in {"mis", "maxcut", "maxclique", "mis-rrg"}:
+        return objective / best_known if best_known != 0 else None
     if kind == "normcut":
-        return best_known / objective  # lower is better
+        return best_known / objective if objective != 0 else None
+    if kind == "coloring":
+        # best_known is 0 for procedural families when we set K = chromatic
+        # number; "distance from feasibility" is ``objective`` itself.
+        # Return ``None`` so the mean aggregator ignores this family but
+        # ``feasible`` still flags 0-conflict solutions.
+        return None
+    if kind == "balanced-partition":
+        # best_known is NaN upstream (no exact reference); the caller
+        # already short-circuited.
+        return None
+    if kind == "ea3d":
+        # Both ``objective`` and ``best_known`` are negative energies; the
+        # closer ``objective`` is to ``best_known`` the better. Return
+        # ``objective / best_known ∈ (0, 1]`` so "higher is better" still
+        # holds (1.0 when the solver reaches the ground state).
+        if best_known == 0:
+            return None
+        return objective / best_known
     return None
 
 
@@ -299,8 +437,13 @@ def main(argv: list[str] | None = None) -> int:
             "device": args.device,
             "limit": args.instances,
         }
-        if args.penalty is not None and prob in {"mis", "maxclique"}:
+        if args.penalty is not None and prob in {"mis", "maxclique", "mis-rrg"}:
             load_kwargs["penalty"] = args.penalty
+        # ``sub == ""`` is the "no real subset" sentinel for flat layouts
+        # (coloring/<graph_type>/manifest.jsonl). Pass ``None`` to the
+        # loader so it picks up the whole family.
+        if load_kwargs["subset"] == "":
+            load_kwargs["subset"] = None
         use_parallel = args.parallel and prob in {"mis", "maxcut", "maxclique"}
         if args.parallel and not use_parallel:
             LOG.warning("  --parallel ignored for problem '%s' (no batched class).", prob)
@@ -332,7 +475,9 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "instance": i,
                         "id": dataset.manifest[i]["id"],
-                        "num_nodes": dataset.manifest[i]["num_nodes"],
+                        "num_nodes": dataset.manifest[i].get(
+                            "num_nodes", dataset.manifest[i].get("num_spins", 0)
+                        ),
                         "objective": obj,
                         "feasible": feasible,
                         "best_known": best,
@@ -360,7 +505,9 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "instance": i,
                         "id": dataset.manifest[i]["id"],
-                        "num_nodes": dataset.manifest[i]["num_nodes"],
+                        "num_nodes": dataset.manifest[i].get(
+                            "num_nodes", dataset.manifest[i].get("num_spins", 0)
+                        ),
                         "objective": obj,
                         "feasible": feasible,
                         "best_known": best,

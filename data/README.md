@@ -12,8 +12,11 @@ data/
 ├── gset/            ← Stanford G-set MaxCut (G1, G2, ..., G81)
 ├── mis/             ← bundled small/large ER MIS instances
 ├── fig/             ← static figures used by docs (NOT instance data)
-└── discs/           ← unified DISCS NeurIPS-2023 CO suite
-                       (gitignored except .gitignore + README.md)
+├── discs/           ← unified DISCS NeurIPS-2023 CO suite
+│                      (gitignored except .gitignore + README.md)
+├── coloring/        ← Graph Coloring (myciel, queen) — procedural
+├── mis-rrg/         ← MIS on d-regular random graphs — PQQA §5.1
+└── ea3d/            ← 3D Edwards-Anderson spin glass (Gaussian / bimodal)
 ```
 
 ## What lives here vs what is git-ignored
@@ -236,11 +239,15 @@ When a new benchmark exposes an objective that no existing
 
 ## Reference layouts (existing families)
 
-| Family  | Problems                                  | Source                                  | Layout                                      |
-|---------|-------------------------------------------|-----------------------------------------|---------------------------------------------|
-| `gset`  | MaxCut                                    | Stanford G-set                          | one `<name>` text file per instance         |
-| `mis`   | Maximum Independent Set                   | bundled (ER-small, ER-large)            | per-instance directories with `meta.json`   |
-| `discs` | MaxCut, MIS, MaxClique, NormCut           | Goshvadi et al., NeurIPS 2023           | unified `gpickle + manifest.jsonl` (above)  |
+| Family               | Problems                                  | Source                                  | Layout                                      |
+|----------------------|-------------------------------------------|-----------------------------------------|---------------------------------------------|
+| `gset`               | MaxCut                                    | Stanford G-set                          | one `<name>` text file per instance         |
+| `mis`                | Maximum Independent Set                   | bundled (ER-small, ER-large)            | per-instance directories with `meta.json`   |
+| `discs`              | MaxCut, MIS, MaxClique, NormCut           | Goshvadi et al., NeurIPS 2023           | unified `gpickle + manifest.jsonl` (above)  |
+| `coloring`           | Graph Coloring (K-colouring)              | COLOR / Trick 2002, procedural          | `coloring/<graph_type>/` + manifest         |
+| `mis-rrg`            | MIS on d-regular random graphs            | PQQA §5.1 (arXiv:2409.02135v2)          | `mis-rrg/d{D}_n{N}/` + manifest             |
+| `ea3d`               | 3D Edwards-Anderson spin glass            | user-requested hard benchmark           | `ea3d/<gaussian|bimodal>/L{L}/` + manifest  |
+| `balanced-partition` | Balanced k-way partition (DISCS nets)     | reuses `discs/normcut/nets/` graphs     | (no new payload; reads DISCS pickles)       |
 
 When in doubt, **mimic `discs/` exactly** — it is the most general layout
 and the loader code is already battle-tested.

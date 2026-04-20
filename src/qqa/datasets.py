@@ -23,6 +23,9 @@ import numpy as np
 import torch
 
 from qqa.problems import (
+    BalancedGraphPartition,
+    Coloring,
+    EdwardsAnderson,
     MaxClique,
     MaxCliqueInstance,
     MaxCut,
@@ -532,4 +535,307 @@ def list_discs_subsets(root: str | os.PathLike | None = None) -> dict[str, dict[
                 continue
             subsets = sorted(s.name for s in type_dir.iterdir() if s.is_dir())
             out[prob_dir.name][type_dir.name] = subsets
+    return out
+
+
+# ============================================================================ #
+# PQQA-paper extensions and physics stress tests                               #
+# ============================================================================ #
+#
+# The layout mirrors DISCS: each leaf subset directory holds                   #
+# ``*.gpickle`` / ``*.npz`` plus ``manifest.jsonl``. New top-level families:   #
+#                                                                             #
+#   data/coloring/{myciel,queen}/                    Graph Coloring (Trick 02) #
+#   data/mis-rrg/{d{D}_n{N}}/                         MIS on d-regular graphs  #
+#   data/ea3d/{gaussian,bimodal}/L{L}/                3D Edwards-Anderson      #
+#   data/balanced-partition/{nets}/...                Balanced k-way cut       #
+# ---------------------------------------------------------------------------- #
+
+
+def _subset_records(subset_dir: Path) -> list[dict]:
+    return _read_manifest(subset_dir)
+
+
+def _iter_subset_dirs(family_root: Path, subset: str | None) -> list[Path]:
+    if not family_root.is_dir():
+        raise FileNotFoundError(
+            f"Benchmark family root {family_root} not found. "
+            "Run the corresponding scripts/generate_*_instances.py script "
+            "or `./scripts/setup_discs_data.sh` to fetch it from the HF Hub."
+        )
+    # family_root itself may be a leaf (manifest.jsonl at this level).
+    if subset is None and (family_root / "manifest.jsonl").is_file():
+        return [family_root]
+    subsets: list[Path] = []
+    if subset is not None:
+        direct = family_root / subset
+        if direct.is_dir() and (direct / "manifest.jsonl").is_file():
+            return [direct]
+        # two-level layout (e.g. ea3d/gaussian/L4)
+        for child in sorted(family_root.iterdir()):
+            if child.is_dir():
+                leaf = child / subset
+                if leaf.is_dir() and (leaf / "manifest.jsonl").is_file():
+                    subsets.append(leaf)
+        if subsets:
+            return subsets
+        raise FileNotFoundError(
+            f"subset {subset!r} not found under {family_root}. "
+            f"Available: {[p.name for p in family_root.iterdir() if p.is_dir()]}"
+        )
+    for child in sorted(family_root.iterdir()):
+        if not child.is_dir():
+            continue
+        if (child / "manifest.jsonl").is_file():
+            subsets.append(child)
+            continue
+        for gc in sorted(child.iterdir()):
+            if gc.is_dir() and (gc / "manifest.jsonl").is_file():
+                subsets.append(gc)
+    if not subsets:
+        raise FileNotFoundError(f"no subsets with manifest.jsonl found under {family_root}")
+    return subsets
+
+
+def _load_gpickle_records(records: list[dict], subset_dir: Path) -> list[nx.Graph]:
+    graphs: list[nx.Graph] = []
+    for rec in records:
+        with open(subset_dir / rec["file"], "rb") as fh:
+            graphs.append(pickle.load(fh))
+    return graphs
+
+
+# ---------------------------------------------------------------------------
+# Graph coloring (COLOR / Trick 2002 subset)
+# ---------------------------------------------------------------------------
+
+
+def coloring(
+    graph_type: str | None = None,
+    subset: str | None = None,
+    *,
+    num_colors: int | None = None,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load Graph-Coloring benchmark instances.
+
+    ``graph_type`` selects a family (``"myciel"``, ``"queen"``, ...). ``None``
+    means every family. Each manifest record carries a ``num_colors``
+    field — the chromatic number for the procedural families — which is
+    used as the default K for the ``Coloring`` problem unless ``num_colors``
+    is overridden here.
+    """
+    base = (
+        Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "coloring"
+    )
+    if graph_type is not None:
+        base = base / graph_type
+    subsets = _iter_subset_dirs(base, subset)
+    problems, bests, recs = [], [], []
+    total = 0
+    for sdir in subsets:
+        records = _subset_records(sdir)
+        graphs = _load_gpickle_records(records, sdir)
+        for g, rec in zip(graphs, records, strict=True):
+            if limit is not None and total >= limit:
+                break
+            K = int(num_colors if num_colors is not None else rec["num_colors"])
+            problems.append(Coloring(g, num_category=K, device=device))
+            bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
+            recs.append(rec)
+            total += 1
+        if limit is not None and total >= limit:
+            break
+    return DiscsBenchmark(problems, np.asarray(bests, dtype=np.float64), recs, subsets[0].parent)
+
+
+# ---------------------------------------------------------------------------
+# MIS on Regular Random Graphs (PQQA §5.1)
+# ---------------------------------------------------------------------------
+
+
+def mis_rrg(
+    subset: str | None = None,
+    *,
+    penalty: float = 2.0,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load MIS-on-regular-random-graph instances (PQQA §5.1).
+
+    ``subset`` is a ``d{D}_n{N}`` key (e.g. ``"d20_n10000"``); ``None`` loads
+    every subset under ``data/mis-rrg/``.
+    """
+    base = (
+        Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "mis-rrg"
+    )
+    subsets = _iter_subset_dirs(base, subset)
+    problems, bests, recs = [], [], []
+    total = 0
+    for sdir in subsets:
+        records = _subset_records(sdir)
+        graphs = _load_gpickle_records(records, sdir)
+        for g, rec in zip(graphs, records, strict=True):
+            if limit is not None and total >= limit:
+                break
+            problems.append(MaximumIndependentSet(g, penalty=penalty, device=device))
+            bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
+            recs.append(rec)
+            total += 1
+        if limit is not None and total >= limit:
+            break
+    return DiscsBenchmark(problems, np.asarray(bests, dtype=np.float64), recs, subsets[0].parent)
+
+
+# ---------------------------------------------------------------------------
+# 3D Edwards-Anderson spin glass
+# ---------------------------------------------------------------------------
+
+
+def _reconstruct_ea3d_problem(
+    npz_path: Path,
+    device: str | torch.device,
+) -> EdwardsAnderson:
+    data = np.load(npz_path, allow_pickle=False)
+    L = int(data["L"])
+    i_arr = np.asarray(data["i"], dtype=np.int64)
+    j_arr = np.asarray(data["j"], dtype=np.int64)
+    J_arr = np.asarray(data["J"], dtype=np.float64)
+    N = L**3
+    obj = EdwardsAnderson.__new__(EdwardsAnderson)
+    super(EdwardsAnderson, obj).__init__()
+    obj.num_spins = N
+    obj.L = L
+    obj.dim = 3
+    obj.periodic = True
+    obj.sigma = float("nan")
+    obj.seed = -1
+    obj.device = device
+    J_mat = torch.zeros((N, N), dtype=torch.float32)
+    for a, b, w in zip(i_arr, j_arr, J_arr, strict=True):
+        J_mat[a, b] = float(w)
+        J_mat[b, a] = float(w)
+    obj.J = J_mat.to(device)
+    obj.h = None
+    from qqa.relaxation import SpinRelaxation
+
+    obj.relaxation = SpinRelaxation()
+    return obj
+
+
+def ea3d(
+    dist: str | None = None,
+    subset: str | None = None,
+    *,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load 3D Edwards-Anderson spin-glass instances.
+
+    ``dist`` ∈ ``{"gaussian", "bimodal"}`` (``None`` = both). ``subset`` is
+    the lattice-size tag ``"L{L}"`` (``None`` = every size).
+    """
+    base = Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "ea3d"
+    if dist is not None:
+        base = base / dist
+    subsets = _iter_subset_dirs(base, subset)
+    problems, bests, recs = [], [], []
+    total = 0
+    for sdir in subsets:
+        records = _subset_records(sdir)
+        for rec in records:
+            if limit is not None and total >= limit:
+                break
+            problems.append(_reconstruct_ea3d_problem(sdir / rec["file"], device=device))
+            bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
+            recs.append(rec)
+            total += 1
+        if limit is not None and total >= limit:
+            break
+    return DiscsBenchmark(problems, np.asarray(bests, dtype=np.float64), recs, subsets[0].parent)
+
+
+# ---------------------------------------------------------------------------
+# Balanced k-way partition (reuses DISCS normcut/nets graphs)
+# ---------------------------------------------------------------------------
+
+
+def balanced_partition(
+    graph_type: str = "nets",
+    subset: str | None = None,
+    *,
+    num_category: int = 4,
+    penalty: float = 5e-4,
+    device: str | torch.device = "cpu",
+    limit: int | None = None,
+    root: str | os.PathLike | None = None,
+) -> DiscsBenchmark:
+    """Load Balanced graph-partition instances (PQQA §5.4).
+
+    Uses the DNN computation-graph pickles that DISCS already ships under
+    ``data/discs/normcut/nets/`` and re-wraps them as
+    :class:`BalancedGraphPartition` (different objective from DISCS'
+    NormCut but on the same underlying graphs).
+    """
+    base_discs = (
+        Path(root).expanduser().resolve()
+        if root is not None
+        else _default_data_dir() / "discs" / "normcut"
+    )
+    type_dir = base_discs / graph_type
+    if not type_dir.is_dir():
+        raise FileNotFoundError(
+            f"balanced-partition source directory {type_dir} not found. "
+            "Run ./scripts/setup_discs_data.sh to fetch DISCS first."
+        )
+    subsets = _iter_subset_dirs(type_dir, subset)
+    problems, bests, recs = [], [], []
+    total = 0
+    for sdir in subsets:
+        records = _subset_records(sdir)
+        graphs = _load_gpickle_records(records, sdir)
+        for g, rec in zip(graphs, records, strict=True):
+            if limit is not None and total >= limit:
+                break
+            problems.append(
+                BalancedGraphPartition(g, num_category=num_category, penalty=penalty, device=device)
+            )
+            bests.append(np.nan)  # no published optimum for balanced k-way
+            rec = {**rec, "num_category": num_category}
+            recs.append(rec)
+            total += 1
+        if limit is not None and total >= limit:
+            break
+    return DiscsBenchmark(problems, np.asarray(bests, dtype=np.float64), recs, subsets[0].parent)
+
+
+def list_benchmark_families(
+    root: str | os.PathLike | None = None,
+) -> dict[str, dict[str, list[str]]]:
+    """Return ``{family: {graph_type_or_L: [subset, ...]}}`` for every family
+    under the data root (``discs``, ``coloring``, ``mis-rrg``, ``ea3d``, ...).
+    """
+    base = Path(root).expanduser().resolve() if root is not None else _default_data_dir()
+    out: dict[str, dict[str, list[str]]] = {}
+    if not base.is_dir():
+        return out
+    for fam in sorted(base.iterdir()):
+        if not fam.is_dir() or fam.name.startswith("_"):
+            continue
+        types: dict[str, list[str]] = {}
+        for sub in sorted(fam.iterdir()):
+            if not sub.is_dir():
+                continue
+            if (sub / "manifest.jsonl").is_file():
+                types.setdefault("", []).append(sub.name)
+            else:
+                subsubs = [s.name for s in sorted(sub.iterdir()) if s.is_dir()]
+                if subsubs:
+                    types[sub.name] = subsubs
+        if types:
+            out[fam.name] = types
     return out
