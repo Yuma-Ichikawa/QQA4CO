@@ -97,6 +97,7 @@ def build_dimacs(name: str, cache_dir: Path) -> nx.Graph:
     g.graph["source"] = f"DIMACS COLOR {name}.col (Trick 2002; Stanford GraphBase)"
     return g
 
+
 # -------- Mycielski graphs -------------------------------------------------
 # Chromatic number of M_k is k by construction (Mycielski 1955).
 # We start from k=3 so N grows: M_3=5, M_4=11, M_5=23, M_6=47, M_7=95.
