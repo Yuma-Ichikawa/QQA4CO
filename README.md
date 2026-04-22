@@ -466,25 +466,41 @@ The original DISCS-only path (`make bench-discs-setup`,
 ### arXiv-2409.02135v2 (PQQA) benchmark coverage matrix
 
 Every benchmark from PQQA (Ichikawa and Arai 2024, arXiv:2409.02135v2,
-§5.1–§5.4) is now mirrored on the companion HF dataset
+§5.1–§5.5) is now mirrored on the companion HF dataset
 [`Yuma-Ichikawa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench)
 and reachable via `qqa bench-run --suite <id>` from the installed
-`qqa` CLI:
+`qqa` CLI. Rows map one-to-one to the problem tables in §5 of the paper:
 
-| Paper section | Problem family | HF subset (`Yuma-Ichikawa/qqa4co-bench`) | `--suite <id>` | One-line command |
+| Paper section / table | Problem family | HF subset (`Yuma-Ichikawa/qqa4co-bench`) | `--suite <id>` | One-line command |
 | --- | --- | --- | --- | --- |
-| §5.1 | MIS on SATLIB (500 instances) | `mis/satlib/uf` | `mis-satlib-uf` | `qqa bench-run --suite mis-satlib-uf --instances 500` |
-| §5.1 | MIS on Erdos-Renyi (few / more budgets) | `mis/er/er_*` | `mis-er-small`, `mis-er-large` | `qqa bench-run --suite mis-er-small --instances 6` |
-| §5.1 | MIS on RRG `d=20, n=10^{4,5,6}` | `mis-rrg/d20_n{10000,100000,1000000}` | `mis-rrg-d20_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d20_n10000 --instances 5` |
-| §5.1 | MIS on RRG `d=100, n=10^{4,5,6}` | `mis-rrg/d100_n{10000,100000,1000000}` | `mis-rrg-d100_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d100_n10000 --instances 5` |
-| §5.2 | Max Clique (DISCS RB) | `maxclique/rb` | `maxclique-rb` | `qqa bench-run --suite maxclique-rb --instances 500` |
-| §5.2 | Max Clique (Twitter social) | `maxclique/twitter` | `maxclique-twitter` | `qqa bench-run --suite maxclique-twitter` |
-| §5.3 | Max Cut (DISCS Barabasi-Albert) | `maxcut/*` | `maxcut-ba-*`, `maxcut-er-*` | `qqa bench-run --suite maxcut-ba --instances 100` |
-| §5.3 | Max Cut (G-set, Helmberg-Rendl 2000) | `gset/standard` | `gset` | `qqa bench-run --suite gset --instances 71` |
-| §5.3 | Balanced k-way graph partition | `balanced/nets` | `balanced-partition-nets-*` | `qqa bench-run --suite balanced-partition-nets-MNIST` |
-| §5.3 | Normalized Cut | `normcut/nets` | `normcut-nets-*` | `qqa bench-run --suite normcut-nets-MNIST` |
-| §5.4 | 3D Edwards-Anderson (Gauss / bimodal, L=4,6,8) | `ea3d/*` | `ea3d-gauss-L4` (etc.) | `qqa bench-run --suite ea3d-gauss-L8 --instances 50` |
-| §5.4 | Graph Coloring (Myciel / queen / COLOR) | `coloring/*` | `coloring-myciel`, `coloring-queen` | `qqa bench-run --suite coloring-myciel` |
+| §5.1 / Table 1 | MIS on SATLIB (500 instances) | `mis/satlib/uf` | `mis-satlib-uf` | `qqa bench-run --suite mis-satlib-uf --instances 500` |
+| §5.1 / Table 1 | MIS on ER-[700-800] (128 instances) | `mis/er/800` | `mis-er-small` | `qqa bench-run --suite mis-er-small --instances 128` |
+| §5.1 / Table 1 | MIS on ER-[9000-11000] (16 instances, note [a]) | `mis/er/10k` | `mis-er-large` | `qqa bench-run --suite mis-er-large --instances 16` |
+| §5.1 / Table 2 | MIS on RRG `d=20, n=10^{4,5,6}` | `mis-rrg/d20_n{10000,100000,1000000}` | `mis-rrg-d20_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d20_n10000 --instances 5` |
+| §5.1 / Table 2 | MIS on RRG `d=100, n=10^{4,5,6}` | `mis-rrg/d100_n{10000,100000,1000000}` | `mis-rrg-d100_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d100_n10000 --instances 5` |
+| §5.2 / Table 3 | Max Clique (DISCS RB) | `maxclique/rb` | `maxclique-rb` | `qqa bench-run --suite maxclique-rb --instances 500` |
+| §5.2 / Table 3 | Max Clique (Twitter social) | `maxclique/twitter` | `maxclique-twitter` | `qqa bench-run --suite maxclique-twitter` |
+| §5.3 / Fig. 3 | Max Cut (ER, 7 sizes from 16 to 1,100 nodes) | `maxcut/er/er-0.15-n-*` | `maxcut-er-*` | `qqa bench-run --suite maxcut-er-n-128-150 --instances 100` |
+| §5.3 / Fig. 3 | Max Cut (BA, 7 sizes from 16 to 1,100 nodes) | `maxcut/ba/ba-4-n-*` | `maxcut-ba-*` | `qqa bench-run --suite maxcut-ba-n-128-150 --instances 100` |
+| §5.3 / Table 4 | Max Cut (Optsicom, 10 real-world graphs) | `maxcut/optsicom/b` | `maxcut-optsicom` | `qqa bench-run --suite maxcut-optsicom --instances 10` |
+| §5.4 / Table 5 | Balanced k-way graph partition (VGG, MNIST-conv, ResNet, AlexNet, Inception-v3) | `normcut/nets/*` | `balanced-partition-nets-*` | `qqa bench-run --suite balanced-partition-nets-INCEPTION` |
+| §5.5 / Table 6 | Graph Coloring — Mycielski (myciel5-7) | `coloring/myciel` | `coloring-myciel` | `qqa bench-run --suite coloring-myciel` |
+| §5.5 / Table 6 | Graph Coloring — Queen (queen5_5 … queen13_13, incl. queen8_12) | `coloring/queen` + `coloring/dimacs` | `coloring-queen`, `coloring-dimacs` | `qqa bench-run --suite coloring-queen` |
+| §5.5 / Table 6 | Graph Coloring — DIMACS real-world (`anna`, `jean`, `queen8_12`) | `coloring/dimacs` | `coloring-dimacs` | `qqa bench-run --suite coloring-dimacs --instances 3` |
+
+Rows whose HF subset does not appear in the paper (G-set, NormCut with
+the 8-graph DISCS superset, ER density sweeps, EA3D spin glass) are
+shipped as convenience extras and documented separately under
+`data/*/README.md`.
+
+**[a] ER-[9000-11000] caveat.** The 16 instances in `mis/er/10k/` are
+the exact graphs used by Sun et al. 2023 and Ichikawa & Arai 2024, but
+the upstream DISCS conversion does not carry per-instance KaMIS
+ground-truth labels, so `manifest.jsonl` records `best_known: null` and
+the ApR column in `qqa bench-run` output is left `NaN`. The paper
+reports the aggregate KaMIS average (`381.31`, Table 5 footnote); to
+reproduce the Table 1 ApR numbers you must either run KaMIS yourself on
+each of the 16 graphs or divide raw IS sizes by that aggregate.
 
 Run them all in one shot:
 
