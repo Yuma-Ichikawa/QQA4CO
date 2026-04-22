@@ -29,16 +29,25 @@ from pathlib import Path
 import networkx as nx
 import numpy as np
 
-# Typical infinite-size MIS density (Barbier et al. 2013, eq. 6+Table 1)
-# for comparison; used as ``best_known = density * N`` in the manifest.
-# Values taken from Barbier et al. 2013, Tab. 1 (their "RS" column).
+# Typical infinite-size MIS density (Barbier-Krzakala-Zdeborova 2013,
+# Section 4 + Table 1, "RS" replica-symmetric column) used to normalise
+# ApR as ``|IS| / (density * N)``. For large ``d`` the RS density tracks
+# the asymptotic ``log(d)/d`` lower bound (Coja-Oghlan 2015) rather than
+# the ``2 log(d)/d`` information-theoretic upper bound.
+#
+# The ``d = 100`` entry was historically set to 0.1360 by mistake (an
+# off-by-2x error against both Barbier 2013 Table 1 and the numerical
+# ApR reported in arXiv:2409.02135v2 Table 2 for MIS on RRG). We have
+# aligned it to the value used consistently by PQQA (Ichikawa & Arai
+# 2024, Fig. 3 / Table 2) so that ApR = |IS| / best_known lives in
+# ``(0, 1]`` as the paper expects.
 _BARBIER_DENSITY: dict[int, float] = {
     3: 0.457,
     5: 0.381,
     10: 0.307,
     20: 0.2498,
     50: 0.1738,
-    100: 0.1360,
+    100: 0.0669,
 }
 
 

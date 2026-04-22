@@ -463,6 +463,43 @@ to re-generate the procedural families offline, and
 The original DISCS-only path (`make bench-discs-setup`,
 `make bench-discs-smoke`, etc.) is still available and unchanged.
 
+### arXiv-2409.02135v2 (PQQA) benchmark coverage matrix
+
+Every benchmark from PQQA (Ichikawa and Arai 2024, arXiv:2409.02135v2,
+§5.1–§5.4) is now mirrored on the companion HF dataset
+[`Yuma-Ichikawa/qqa4co-bench`](https://huggingface.co/datasets/Yuma-Ichikawa/qqa4co-bench)
+and reachable via `qqa bench-run --suite <id>` from the installed
+`qqa` CLI:
+
+| Paper section | Problem family | HF subset (`Yuma-Ichikawa/qqa4co-bench`) | `--suite <id>` | One-line command |
+| --- | --- | --- | --- | --- |
+| §5.1 | MIS on SATLIB (500 instances) | `mis/satlib/uf` | `mis-satlib-uf` | `qqa bench-run --suite mis-satlib-uf --instances 500` |
+| §5.1 | MIS on Erdos-Renyi (few / more budgets) | `mis/er/er_*` | `mis-er-small`, `mis-er-large` | `qqa bench-run --suite mis-er-small --instances 6` |
+| §5.1 | MIS on RRG `d=20, n=10^{4,5,6}` | `mis-rrg/d20_n{10000,100000,1000000}` | `mis-rrg-d20_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d20_n10000 --instances 5` |
+| §5.1 | MIS on RRG `d=100, n=10^{4,5,6}` | `mis-rrg/d100_n{10000,100000,1000000}` | `mis-rrg-d100_n10000` (etc.) | `qqa bench-run --suite mis-rrg-d100_n10000 --instances 5` |
+| §5.2 | Max Clique (DISCS RB) | `maxclique/rb` | `maxclique-rb` | `qqa bench-run --suite maxclique-rb --instances 500` |
+| §5.2 | Max Clique (Twitter social) | `maxclique/twitter` | `maxclique-twitter` | `qqa bench-run --suite maxclique-twitter` |
+| §5.3 | Max Cut (DISCS Barabasi-Albert) | `maxcut/*` | `maxcut-ba-*`, `maxcut-er-*` | `qqa bench-run --suite maxcut-ba --instances 100` |
+| §5.3 | Max Cut (G-set, Helmberg-Rendl 2000) | `gset/standard` | `gset` | `qqa bench-run --suite gset --instances 71` |
+| §5.3 | Balanced k-way graph partition | `balanced/nets` | `balanced-partition-nets-*` | `qqa bench-run --suite balanced-partition-nets-MNIST` |
+| §5.3 | Normalized Cut | `normcut/nets` | `normcut-nets-*` | `qqa bench-run --suite normcut-nets-MNIST` |
+| §5.4 | 3D Edwards-Anderson (Gauss / bimodal, L=4,6,8) | `ea3d/*` | `ea3d-gauss-L4` (etc.) | `qqa bench-run --suite ea3d-gauss-L8 --instances 50` |
+| §5.4 | Graph Coloring (Myciel / queen / COLOR) | `coloring/*` | `coloring-myciel`, `coloring-queen` | `qqa bench-run --suite coloring-myciel` |
+
+Run them all in one shot:
+
+```bash
+make bench-all-setup
+qqa bench-run --suite all --output bench_results/full.json
+qqa bench-plot bench_results/full.json --output paper_reproduction.png
+```
+
+All `best_known` values for RRG MIS use the Barbier-Krzakala-Zdeborova
+(2013) replica-symmetric asymptotic density (`rho_d=20=0.2498`,
+`rho_d=100=0.0669`); see [`data/mis-rrg/README.md`](data/mis-rrg/README.md)
+for details, including the recent fix to the `d=100` constant that had
+previously inflated `best_known` by ~2x.
+
 **Reproducing the PQQA paper (Ichikawa, NeurIPS 2024 — arXiv:2409.02135).**
 The bench CLI exposes every paper-relevant hyper-parameter
 (`--learning-rate`, `--temp`, `--curve-rate`, `--gamma-min/max`,
