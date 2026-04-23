@@ -38,6 +38,7 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
+from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
 from qqa.pa import PAResult, population_annealing
 from qqa.problems import (
     QAP,
@@ -116,6 +117,7 @@ __all__ = [
     "GraphBisection",
     "HistoryRecorder",
     "HopfieldMemory",
+    "ISCOResult",
     "IntegerFactorizationIsing",
     "Ising1D",
     "Knapsack",
@@ -147,9 +149,11 @@ __all__ = [
     "VertexCover",
     "__version__",
     "anneal",
+    "discrete_langevin",
     "enable_tf32",
     "fix_seed",
     "generate_graph",
+    "isco_anneal",
     "load_problem_from_file",
     "polish",
     "population_annealing",
