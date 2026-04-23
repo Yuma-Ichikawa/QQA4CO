@@ -110,12 +110,17 @@ CUDA is picked up automatically when available.
    comparing methods is one `--backend` switch away.
 4. **GPU-parallel MCMC baselines** for honest head-to-head comparisons —
    classical **Simulated Annealing** (`qqa.simulated_annealing`) with a
-   QUBO Glauber fast path, and **Population Annealing**
+   QUBO Glauber fast path, **Population Annealing**
    (`qqa.population_annealing`, Hukushima-Iba / Machta) with systematic or
-   multinomial resampling between temperature steps. Both expose the same
-   `best_sol` / `best_obj` / `history` surface as `qqa.anneal`, so the
-   Streamlit *Compare* page can race PQQA against either at a matched
-   compute budget.
+   multinomial resampling between temperature steps, and the
+   **iSCO sampler** (`qqa.discrete_langevin`, a.k.a. `qqa.isco_anneal`)
+   of Sun et al., *Revisiting Sampling for Combinatorial Optimization*
+   (ICML 2023), a full implementation of the paper's Algorithm 1 +
+   Appendix C (path-auxiliary multi-flip MH with Poisson-length paths
+   and adaptive μ targeting 0.574 acceptance). All three expose the
+   same `best_sol` / `best_obj` / `history` / `polished_sol` surface as
+   `qqa.anneal`, so the Streamlit *Compare* page can race PQQA against
+   any of them at a matched compute budget.
 5. **A polished Streamlit dashboard** (light / dark, live progress, parallel
    population view, per-problem solution viz, hyper-parameter sweeps) and a
    `qqa` **CLI** (`solve / bench / gui / version`) for reproducible
@@ -375,6 +380,127 @@ hyperparameter choice across all three rows.
   (`N >= 1000`, `d` low, paper defaults) it produces competitive solutions —
   but see the original [CRA4CO repository](https://github.com/Yuma-Ichikawa/CRA4CO)
   for the canonical DGL implementation.
+
+## iSCO baseline (Sun et al., ICML 2023)
+
+Alongside `qqa.simulated_annealing` and `qqa.population_annealing`,
+QQA4CO ships a **faithful, GPU-parallel implementation of iSCO** as
+`qqa.discrete_langevin` (paper-faithful alias: `qqa.isco_anneal`),
+following the paper's Algorithm 1 and Appendix C (*Path-Auxiliary
+Sampler + Annealing*) in full. Specifically, every MH step
+
+1. samples a path length `L ~ Poisson(μ)` truncated to `L ≥ 1`
+   (Eq. 31);
+2. picks `L` sites **without replacement** from the locally-balanced
+   weights $w_j = \exp\bigl(-\Delta_j(x)/(2\tau)\bigr)$ via the Gumbel
+   top-`L` trick (Eq. 28), where the exact one-flip QUBO delta is
+
+$$
+\Delta_i(x) \;=\; (1 - 2 x_i)\bigl(Q_{ii} + 2\,((Q x)_i - Q_{ii} x_i)\bigr);
+$$
+
+3. flips those `L` bits simultaneously to obtain the candidate `y`;
+4. accepts via the **path-auxiliary MH correction** over the ordered
+   permutation `σ` (Eq. 30):
+
+$$
+A = \min\!\Bigl\{1,\;\frac{\pi(y)\,q_y(\sigma_r)}{\pi(x)\,q_x(\sigma)}\Bigr\}
+\qquad\text{with}\qquad
+q_x(\sigma) \;=\; \prod_{k=1}^{L} \frac{w_{\sigma_k}}{W_x - \sum_{m<k} w_{\sigma_m}};
+$$
+
+5. adapts `μ` to track the paper's 0.574 acceptance target:
+   `μ ← clip(μ + 0.001·(Ā − 0.574), 1, N)`.
+
+The outer loop performs `num_steps` temperature updates (`m` in
+Algorithm 1); `num_inner` MH steps are run at each temperature (`n` in
+Algorithm 1). The default exponential decay schedule reproduces §5 of
+the paper; `schedule="lin"` reproduces the literal linear form from
+Algorithm 1 line 8. The implementation was cross-checked against
+[`google-research/discs`](https://github.com/google-research/discs) and
+[`ruqizhang/discrete-langevin`](https://github.com/ruqizhang/discrete-langevin).
+
+**Empirically verified detailed balance.** The PAS-MH kernel is
+covered by an enumerable-state Boltzmann test
+(`tests/test_isco.py::test_isco_detailed_balance_on_tiny_qubo`)
+that asserts `TV(empirical, exact Boltzmann) < 0.02` after 4000
+inner steps × 200 chains at fixed temperature on a 2^4-state
+QUBO. An offline sweep across
+`N ∈ {3, 4, 5} × seed ∈ {0, 7, 42} × μ ∈ {1, 2, 3} ×
+{float32, float64}` shows TV ≤ 0.0064 in every cell, so the
+sampler is verified to converge to the target distribution under
+realistic operating conditions. (See the
+[`Unreleased` entry in `CHANGELOG.md`](CHANGELOG.md) for the
+silent NaN bug in the Plackett-Luce log-prob recursion that this
+test was added to guard against.)
+
+The backend uses the same `sol_size` / `initial_state` / `device` /
+`polish=True` contract as every other QQA4CO solver, and returns an
+`ISCOResult` with the standard `best_sol` / `best_obj` / `runtime` /
+`history` / `score` / `polished_sol` fields plus iSCO-specific
+diagnostics (`accept_rate`, `mu_final`, `mean_path_length`,
+`t_max_used`).
+
+### Quickstart
+
+```python
+import networkx as nx
+import qqa
+
+qqa.fix_seed(0)
+g = nx.random_regular_graph(d=3, n=200, seed=0)
+problem = qqa.MaximumIndependentSet(g, penalty=2)
+
+result = qqa.discrete_langevin(
+    problem,
+    sol_size=256,          # number of parallel chains (num_chains in iSCO paper)
+    num_steps=500,         # outer annealing steps (m)
+    num_inner=4,           # inner MH steps per temperature (n)
+    t_max=None,            # auto-calibrate from |Δ| quantile (DISCS adaptive-step recipe)
+    t_min=0.01,
+    schedule="exp",        # paper §5 default (exponential decay). "lin" = Alg 1 literal form
+    mu0=1.0,               # initial Poisson mean for path length
+    device="cuda",
+    seed=0,
+)
+print(f"MIS size: {-int(result.best_obj)}  acc={result.accept_rate:.2f}  "
+      f"μ_final={result.mu_final:.2f}  mean_L={result.mean_path_length:.2f}  "
+      f"runtime={result.runtime:.2f}s")
+```
+
+### Batched instances (same API)
+
+```python
+result = qqa.discrete_langevin(
+    batched_problem,       # e.g. MaximumIndependentSetInstance(graphs, ...)
+    sol_size=128, num_steps=500, num_inner=4, device="cuda",
+)
+# result.best_sol: (I, N);  result.best_obj: numpy array of shape (I,)
+```
+
+### When to use which baseline
+
+| Use case                                                           | Recommended                   |
+| ------------------------------------------------------------------ | ----------------------------- |
+| PQQA headline method (gradient-based, continuous relaxation)       | `qqa.anneal`                  |
+| Classical single-spin SA reference (Glauber / Metropolis)          | `qqa.simulated_annealing`     |
+| Free-energy estimation + spin-glass ground states (PA)             | `qqa.population_annealing`    |
+| iSCO paper reproduction; multi-flip path-auxiliary MH on QUBO      | `qqa.discrete_langevin`       |
+| Spin glasses / permutation / categorical problems                  | `qqa.anneal` (iSCO is QUBO-only) |
+
+iSCO is only defined for binary QUBO (both single-instance `Q_mat` and
+batched-instance `Q_tensor` are supported); spin, categorical and
+structured-shape relaxations are rejected at the API boundary with an
+actionable `NotImplementedError` pointing at `qqa.anneal`.
+
+### Compute-budget parity with SA
+
+One iSCO outer step with `num_inner=n` performs `n` multi-flip MH
+moves per chain, each flipping ~`μ` sites. One SA sweep performs one
+flip per bit per chain. So the compute of
+`qqa.discrete_langevin(..., num_steps=m, num_inner=n)` is comparable
+to `qqa.simulated_annealing(..., num_sweeps=m*n*μ/N)` — a useful rule
+of thumb when designing head-to-head benchmarks at matched budget.
 
 ## Problem catalog
 
@@ -886,6 +1012,41 @@ Reference implementation: <https://github.com/google-research/discs>.
 The unified ``data/discs/`` layout (one ``.gpickle`` per instance plus a
 ``manifest.jsonl`` sidecar) is QQA4CO-specific and described in
 [`data/discs/README.md`](data/discs/README.md).
+
+If you use the **iSCO baseline** (`qqa.discrete_langevin`, a.k.a.
+`qqa.isco_anneal`), please cite the iSCO paper (whose Algorithm 1 and
+Appendix C this backend implements) and — for the DISCS reference
+implementation used for cross-checking — the DISCS benchmark paper:
+
+```bibtex
+@inproceedings{sun2023revisiting,
+  title     = {Revisiting Sampling for Combinatorial Optimization},
+  author    = {Sun, Haoran and Goshvadi, Katayoon and Nova, Azade and
+               Schuurmans, Dale and Dai, Hanjun},
+  booktitle = {Proceedings of the 40th International Conference on
+               Machine Learning (ICML)},
+  series    = {Proceedings of Machine Learning Research},
+  volume    = {202},
+  pages     = {32859--32874},
+  year      = {2023},
+  url       = {https://proceedings.mlr.press/v202/sun23c.html}
+}
+
+@inproceedings{goshvadi2023discs,
+  title     = {{DISCS}: A Benchmark for Discrete Sampling},
+  author    = {Goshvadi, Katayoon and Sun, Haoran and Liu, Xingchao
+               and Nova, Azade and Zhang, Ruqi and Grathwohl, Will
+               and Schuurmans, Dale and Dai, Hanjun},
+  booktitle = {Advances in Neural Information Processing Systems
+               (NeurIPS Datasets and Benchmarks Track)},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=oi1MUMk5NF}
+}
+```
+
+Reference implementations consulted during the port:
+<https://github.com/google-research/discs> (`samplers/path_auxiliary.py`)
+and <https://github.com/ruqizhang/discrete-langevin> (`samplers.py`).
 
 If you use the **planted-solution factorization Ising benchmark**
 (`qqa.IntegerFactorizationIsing`, `scripts/bench_factorization.py`,

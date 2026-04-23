@@ -6,6 +6,63 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **First-class iSCO sampler support** via `qqa.discrete_langevin`
+  (paper-faithful alias `qqa.isco_anneal`). Faithful, GPU-parallel
+  implementation of **Algorithm 1 + Appendix C (PAS-MH-Step)** of
+  Sun, Goshvadi, Nova, Schuurmans, Dai, *Revisiting Sampling for
+  Combinatorial Optimization*, ICML 2023 (pmlr-v202-sun23c). Every
+  MH step samples a Poisson-length path `L ~ Poisson(μ)` truncated
+  at `L ≥ 1`, picks `L` sites without replacement via Gumbel-top-`L`
+  with logits `−Δ_j/(2τ)`, applies the **path-auxiliary MH
+  correction** over the ordered permutation σ (Eq. 30), and adapts μ
+  toward the paper's 0.574 acceptance target (Eq. 31). Works on
+  single-instance (`Q_mat`) and batched-instance (`Q_tensor`) QUBOs;
+  spin / categorical / structured-shape relaxations are rejected at
+  the API boundary with an actionable `NotImplementedError`. Returns
+  an `ISCOResult` that mirrors `SAResult` / `PAResult`
+  (`best_sol` / `best_obj` / `runtime` / `history` / `score` /
+  `polished_sol`) plus iSCO-specific diagnostics
+  (`accept_rate`, `mu_final`, `mean_path_length`, `t_max_used`).
+  Cross-checked against the DISCS reference implementation
+  (`samplers/path_auxiliary.py`) and the Zhang et al.
+  `discrete-langevin` reference. See the new
+  *iSCO baseline (Sun et al., ICML 2023)* section in the README and
+  citations `sun2023revisiting` + `goshvadi2023discs`.
+- **Empirical detailed-balance test for iSCO**
+  (`tests/test_isco.py::test_isco_detailed_balance_on_tiny_qubo`)
+  enumerates a 2^4-state QUBO, runs the full PAS-MH kernel for 4000
+  inner steps × 200 chains at fixed temperature, and asserts
+  TV(empirical, exact Boltzmann) < 0.02. Ships as a permanent
+  guard against silent MH-correction regressions; offline sweep
+  across `N ∈ {3, 4, 5} × seed ∈ {0, 7, 42} × μ ∈ {1, 2, 3} ×
+  {float32, float64}` shows the post-fix sampler converges to
+  TV ≤ 0.0064 in every cell.
+
+### Fixed
+
+- **iSCO `_plackett_luce_logprob` NaN bug (silent detailed-balance
+  violation).** The Plackett-Luce log-prob recursion used
+  `diff.clamp(max=-1e-12)` to keep `log1p(-exp(diff))` finite, but
+  `-1e-12` round-trips to `0.0` in float32 (machine ε ≈ 1.19e-7),
+  sending the recursion into `log(0) = -inf` whenever `sigma`
+  contained the repeated indices that `_reverse_path` writes into
+  the masked tail (i.e. **every chain with `L_per_chain < L_max`,
+  which is every short chain in any batch with variable Poisson
+  path length**). Subsequent summation via `* mask.to(dtype)` then
+  produced `(-inf) * 0 = NaN`, making `log(u) < log_alpha` evaluate
+  to `False` everywhere and silently rejecting every multi-flip
+  proposal in the affected chain. Empirical TV(empirical, Boltzmann)
+  on a 4-bit enumerable QUBO was ~0.51; after the fix it is
+  ~0.001-0.002. Two surgical changes: (a) dtype-aware clamp
+  (`eps_clamp = -1e-6` for float32, `-1e-12` for float64); (b)
+  `torch.where(mask, value, 0)` instead of `* mask` so masked
+  positions can never contaminate the sum via `inf * 0`. Regression
+  tests `test_plackett_luce_logprob_handles_repeated_indices_in_float32`
+  and `test_isco_detailed_balance_on_tiny_qubo` ensure this stays
+  fixed. Lessons L48-L50 in `tasks/lessons.md`.
+
 ## [0.6.0] - 2026-04-20
 
 ### Added
