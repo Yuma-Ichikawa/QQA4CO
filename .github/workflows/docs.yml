@@ -38,7 +38,7 @@ jobs:
         run: uv sync --extra docs
       - name: Build site
         run: uv run mkdocs build --clean --strict --site-dir _site
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: _site
 
