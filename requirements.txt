@@ -14,7 +14,7 @@
 # CPU-only PyTorch wheel (avoids the 900MB CUDA build that would blow
 # through the 1GB Streamlit Community Cloud image budget).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.2,<2.8
+torch>=2.2,<2.13
 
 numpy>=1.24,<3
 networkx>=3.1
