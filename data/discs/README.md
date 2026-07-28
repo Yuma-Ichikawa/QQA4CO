@@ -171,7 +171,10 @@ python scripts/convert_discs_to_qqa.py \
 
 ```python
 from qqa.datasets import (
-    discs_mis, discs_maxcut, discs_maxclique, discs_normcut,
+    discs_mis,
+    discs_maxcut,
+    discs_maxclique,
+    discs_normcut,
     list_discs_subsets,
 )
 

@@ -30,6 +30,13 @@ from importlib.metadata import version as _pkg_version
 
 from qqa import polish, warmstart
 from qqa.annealing import AnnealResult, anneal
+from qqa.blackbox import (
+    BlackBoxConstraint,
+    BlackBoxProblem,
+    BlackBoxResult,
+    blackbox_optimize,
+    plot_blackbox,
+)
 from qqa.callbacks import (
     AutoDivTuner,
     Callback,
@@ -38,7 +45,28 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
+from qqa.hybrid import SCIPHybridResult, solve_qqa_scip
 from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
+from qqa.mixed import (
+    Binary,
+    BinaryVariable,
+    Constraint,
+    Integer,
+    IntegerVariable,
+    MixedProblem,
+    MixedRelaxation,
+    Real,
+    RealVariable,
+    VariableSpace,
+    solve_mixed,
+)
+from qqa.multiobjective import (
+    MultiObjectiveProblem,
+    Objective,
+    ParetoResult,
+    pareto_anneal,
+    plot_pareto,
+)
 from qqa.pa import PAResult, population_annealing
 from qqa.problems import (
     QAP,
@@ -85,8 +113,18 @@ from qqa.relaxation import (
     Relaxation,
     SpinRelaxation,
 )
+from qqa.reporting import save_html_report
 from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
+from qqa.tex import (
+    LLMAPIError,
+    ModelSpec,
+    OpenAICompatibleClient,
+    TexSolveResult,
+    compile_tex,
+    problem_from_spec,
+    solve_tex,
+)
 from qqa.utils import enable_tf32, fix_seed, generate_graph
 
 # Single-source the version from the wheel metadata so ``__version__`` is
@@ -105,23 +143,32 @@ __all__ = [
     "AnnealResult",
     "AutoDivTuner",
     "BalancedGraphPartition",
+    "BlackBoxConstraint",
+    "BlackBoxProblem",
+    "BlackBoxResult",
+    "Binary",
     "BinaryInstanceRelaxation",
     "BinaryPerceptron",
     "BinaryRelaxation",
+    "BinaryVariable",
     "COProblem",
     "Callback",
     "CallbackState",
     "CategoricalRelaxation",
     "Coloring",
+    "Constraint",
     "EdwardsAnderson",
     "GraphBisection",
     "HistoryRecorder",
     "HopfieldMemory",
     "ISCOResult",
+    "Integer",
     "IntegerFactorizationIsing",
+    "IntegerVariable",
     "Ising1D",
     "Knapsack",
     "LinearBGSchedule",
+    "LLMAPIError",
     "MaxClique",
     "MaxCliqueInstance",
     "MaxCut",
@@ -130,25 +177,39 @@ __all__ = [
     "MaximumIndependentSet",
     "MaximumIndependentSetInstance",
     "MinimumDominatingSet",
+    "MixedProblem",
+    "MixedRelaxation",
+    "ModelSpec",
+    "MultiObjectiveProblem",
     "NQueens",
     "NormCut",
     "NormalizedCut",
     "NumberPartitioning",
+    "Objective",
+    "OpenAICompatibleClient",
     "PAResult",
+    "ParetoResult",
     "PSpinGlass",
     "PopulationTracker",
     "QUBOProblem",
     "RandomFieldIsing",
+    "Real",
+    "RealVariable",
     "Relaxation",
     "SAResult",
+    "SCIPHybridResult",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
+    "TexSolveResult",
     "TrajectoryTracker",
     "UserProblem",
+    "VariableSpace",
     "VertexCover",
     "__version__",
     "anneal",
+    "blackbox_optimize",
+    "compile_tex",
     "discrete_langevin",
     "enable_tf32",
     "fix_seed",
@@ -157,10 +218,18 @@ __all__ = [
     "load_problem_from_file",
     "polish",
     "population_annealing",
+    "pareto_anneal",
+    "plot_blackbox",
+    "plot_pareto",
+    "problem_from_spec",
     "random_factorization_problems",
     "random_prime",
     "random_semiprime",
     "simulated_annealing",
+    "save_html_report",
+    "solve_qqa_scip",
+    "solve_tex",
+    "solve_mixed",
     "user_problem_from_source",
     "warmstart",
 ]

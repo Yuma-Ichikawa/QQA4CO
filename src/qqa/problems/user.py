@@ -75,6 +75,10 @@ class UserProblem(COProblem):
         device: str | torch.device = "cpu",
     ):
         super().__init__()
+        if not isinstance(num_vars, int) or isinstance(num_vars, bool) or num_vars < 1:
+            raise ValueError(f"num_vars must be a positive integer, got {num_vars!r}.")
+        if not callable(loss_fn):
+            raise TypeError(f"loss_fn must be callable, got {type(loss_fn).__name__}.")
         self.num_vars = int(num_vars)
         self.num_nodes = int(num_vars)
         self.num_node = int(num_vars)

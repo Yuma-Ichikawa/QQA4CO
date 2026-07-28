@@ -1,0 +1,181 @@
+"""Correctness and validation tests for mixed-variable optimisation."""
+
+from __future__ import annotations
+
+import pytest
+import torch
+
+import qqa
+
+
+def test_variable_space_round_trip_and_named_views():
+    problem = qqa.MixedProblem(
+        [
+            qqa.Binary("enabled", size=2),
+            qqa.Integer("units", lower=-2, upper=5),
+            qqa.Real("temperature", lower=10.0, upper=20.0),
+        ],
+        lambda v: v["enabled"].sum(dim=-1) + v["units"] + v["temperature"],
+    )
+    packed = problem.pack(
+        {"enabled": [1, 0], "units": 3, "temperature": 12.5},
+    )
+    assert packed.tolist() == [1.0, 0.0, 3.0, 12.5]
+    named = problem.unpack(packed)
+    assert named["enabled"].tolist() == [1.0, 0.0]
+    assert named["units"].item() == 3
+    assert named["temperature"].item() == 12.5
+
+    latent = problem.relaxation.encode(packed)
+    torch.testing.assert_close(problem.relaxation.project(latent), packed)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: qqa.Binary("bad-name"),
+        lambda: qqa.Integer("x", 2, 2),
+        lambda: qqa.Real("x", float("-inf"), 1.0),
+    ],
+)
+def test_variable_declarations_reject_invalid_domains(factory):
+    with pytest.raises((TypeError, ValueError)):
+        factory()
+
+
+def test_variable_kind_cannot_be_overridden():
+    with pytest.raises(TypeError):
+        qqa.Binary("x", kind="real")
+
+
+def test_real_problem_converges_without_rounding():
+    qqa.fix_seed(0)
+    problem = qqa.MixedProblem(
+        [qqa.Real("x", -5.0, 5.0), qqa.Real("y", -5.0, 5.0)],
+        lambda v: (v["x"] - 1.25).square() + (v["y"] + 2.5).square(),
+        name="convex-real",
+    )
+    result = problem.solve(sol_size=16, num_epochs=250, verbose=False)
+    assert result.best_obj < 1e-4
+    assert result.best_sol[0].item() == pytest.approx(1.25, abs=0.02)
+    assert result.best_sol[1].item() == pytest.approx(-2.5, abs=0.02)
+
+
+def test_integer_problem_projects_to_exact_grid_optimum():
+    qqa.fix_seed(1)
+    problem = qqa.MixedProblem(
+        [qqa.Integer("quantity", lower=-10, upper=10)],
+        lambda v: (v["quantity"] - 3).square(),
+        name="integer-quadratic",
+    )
+    result = problem.solve(sol_size=8, num_epochs=100, verbose=False)
+    assert result.best_obj == 0.0
+    assert result.best_sol.item() == 3.0
+
+
+def test_float64_preserves_large_integer_grid_points():
+    problem = qqa.MixedProblem(
+        [qqa.Integer("identifier", 100_000_000, 100_000_010)],
+        lambda v: (v["identifier"] - 100_000_003).square(),
+        dtype=torch.float64,
+    )
+    packed = problem.pack({"identifier": 100_000_003})
+    assert packed.dtype == torch.float64
+    projected = problem.relaxation.project(problem.relaxation.encode(packed))
+    assert projected.item() == 100_000_003
+
+
+def test_practical_mixed_factory_problem_finds_known_optimum():
+    """Binary activation + integer batches + real overtime (MINLP)."""
+    qqa.fix_seed(0)
+    problem = qqa.MixedProblem(
+        [
+            qqa.Binary("machine", size=2),
+            qqa.Integer("batches", lower=0, upper=6, size=2),
+            qqa.Real("overtime", lower=0.0, upper=4.0),
+        ],
+        lambda v: (
+            10 * v["machine"].sum(dim=-1)
+            + 3 * v["batches"].sum(dim=-1)
+            + 2 * v["overtime"].square()
+        ),
+        constraints=[
+            qqa.Constraint(
+                lambda v: 4 * v["batches"].sum(dim=-1) + v["overtime"],
+                sense=">=",
+                rhs=28,
+                weight=100,
+                name="demand",
+            ),
+            qqa.Constraint(
+                lambda v: (v["batches"] - 6 * v["machine"]).clamp_min(0).sum(dim=-1),
+                sense="<=",
+                rhs=0,
+                weight=100,
+                name="activation_link",
+            ),
+        ],
+        name="factory-planning",
+        objective_label="cost",
+        objective_unit="kUSD",
+    )
+    result = problem.solve(sol_size=128, num_epochs=600, verbose=False)
+
+    assert result.best_obj == pytest.approx(41.0)
+    assert result.score["value"] == pytest.approx(41.0)
+    assert result.score["feasible"] is True
+    assert result.score["extra"]["variables"]["machine"] == [1.0, 1.0]
+    assert sum(result.score["extra"]["variables"]["batches"]) == 7.0
+    assert result.score["extra"]["variables"]["overtime"] == pytest.approx(0.0)
+
+
+def test_mixed_objective_must_preserve_population_axis():
+    problem = qqa.MixedProblem(
+        [qqa.Real("x", 0.0, 1.0)],
+        lambda v: v["x"].sum(),
+    )
+    with pytest.raises(ValueError, match="leading population"):
+        problem.loss_fn(torch.rand(4, 1))
+
+
+def test_anneal_validates_dangerous_numeric_options():
+    problem = qqa.MixedProblem([qqa.Real("x", 0.0, 1.0)], lambda v: v["x"].square())
+    with pytest.raises(ValueError, match="curve_rate"):
+        qqa.anneal(problem, curve_rate=0, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="check_interval"):
+        qqa.anneal(problem, check_interval=0, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="div_param"):
+        qqa.anneal(problem, div_param=1.1, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="sol_size"):
+        qqa.anneal(problem, sol_size=1.5, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="num_epochs"):
+        qqa.anneal(problem, num_epochs=1.5, verbose=False)
+    with pytest.raises(ValueError, match="learning_rate"):
+        qqa.anneal(problem, learning_rate=float("nan"), num_epochs=0, verbose=False)
+
+
+@pytest.mark.parametrize(
+    "diversity,expected",
+    [
+        (0.1, 0.8),  # below target -> stronger diversity pressure
+        (0.5, 0.4),  # above target -> weaker diversity pressure
+    ],
+)
+def test_auto_div_tuner_is_population_invariant_negative_feedback(diversity, expected):
+    problem = qqa.MixedProblem([qqa.Real("x", 0.0, 1.0)], lambda v: v["x"].square())
+    tuner = qqa.AutoDivTuner(target=0.4, lr=1.0)
+    state = qqa.CallbackState(
+        epoch=0,
+        num_epochs=1,
+        bg=0.0,
+        x=torch.zeros(100, 1),
+        losses=torch.zeros(100),
+        penalties=torch.zeros(100),
+        diversity=torch.tensor(diversity),
+        best_obj=0.0,
+        hyperparams={"div_param": 0.5},
+        problem=problem,
+        relaxation=problem.relaxation,
+    )
+    tuner.on_epoch_end(state)
+    assert state.hyperparams["div_param"] == pytest.approx(expected)

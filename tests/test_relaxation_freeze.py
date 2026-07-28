@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import torch
 
-from qqa.relaxation import BinaryRelaxation, SpinRelaxation
+from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
 
 
 def test_binary_forward_clamps_to_unit_cube():
@@ -63,6 +63,19 @@ def test_spin_project_clamps_before_threshold():
     x = torch.tensor([[-10.0, 0.4, 0.6, 12.0]])
     out = relax.project(x)
     assert torch.equal(out, torch.tensor([[-1.0, -1.0, 1.0, 1.0]]))
+
+
+def test_categorical_forward_and_perturb_restore_simplex_domain():
+    """Categorical AdamW drift must not create negative probabilities."""
+    relax = CategoricalRelaxation()
+    x = torch.tensor([[[-4.0, -2.0, 3.0], [0.0, 0.0, 0.0]]])
+    probabilities = relax.forward(x)
+    assert torch.isfinite(probabilities).all()
+    assert (probabilities >= 0.0).all()
+    torch.testing.assert_close(probabilities.sum(dim=-1), torch.ones((1, 2)))
+
+    relax.perturb_(x, learning_rate=0.1, temp=0.0)
+    assert (x >= 1e-5).all() and (x <= 1.0).all()
 
 
 def test_anneal_does_not_freeze_at_zero_temperature():

@@ -51,9 +51,9 @@ Three equivalent ways to run the benchmark:
     from qqa import bench
 
     payload = bench.run(
-        "all",                      # or a specific suite id
+        "all",  # or a specific suite id
         backend="qqa",
-        instances=None,             # None = every instance on disk
+        instances=None,  # None = every instance on disk
         output="mine.json",
     )
     ```
@@ -137,9 +137,10 @@ well-represented in the family-level radar.
 
     ```python
     from qqa import datasets
+
     ds = datasets.discs_mis(graph_type="satlib", subset="uf")
     for problem, best_known in zip(ds.problems, ds.best_known):
-        x_star = my_solver(problem)       # your code
+        x_star = my_solver(problem)  # your code
         ...
     ```
 

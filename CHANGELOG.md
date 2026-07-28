@@ -8,6 +8,32 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Universal optimisation layer**: one-shot reference-direction Pareto
+  annealing for mixed variables, RBF/trust-region black-box optimisation,
+  optional QQA→SCIP QUBO refinement with multiple primal starts and
+  optimality gaps, plus interactive 2-D/3-D/many-objective and black-box
+  diagnostics.
+- **Safe TeX modelling and `qqa tex` CLI** using OpenAI-compatible Responses
+  or Messages endpoints. Structured JSON is validated and interpreted by a
+  restricted arithmetic AST without `eval`/`exec`; credentials are accepted
+  only from the environment and local `.env` files are ignored.
+- **First-class mixed-variable optimisation** through `qqa.MixedProblem`,
+  typed `Binary` / `Integer` / `Real` declarations, differentiable named
+  `Constraint` objects, integer-grid relaxation, physical-unit warm starts,
+  constraint-aware scoring, pure-real and pure-integer support, and the
+  `solve_mixed` convenience entry point.
+- **Advanced result diagnostics and offline reports**:
+  `plot_result_dashboard`, `plot_variable_solution`,
+  `plot_constraint_diagnostics`, plus `save_html_report` for a single
+  self-contained interactive artifact with embedded machine-readable JSON.
+  Backend-neutral data extraction and plotting are separated under
+  `qqa.visuals`.
+- **Mixed optimisation Colab walkthrough** covering convex real, bounded
+  integer, and practical binary/integer/real factory planning with brute-force
+  verification.
+- A `py.typed` marker now makes the package's inline annotations visible to
+  downstream type checkers, matching the existing `Typing :: Typed`
+  classifier.
 - **First-class iSCO sampler support** via `qqa.discrete_langevin`
   (paper-faithful alias `qqa.isco_anneal`). Faithful, GPU-parallel
   implementation of **Algorithm 1 + Appendix C (PAS-MH-Step)** of
@@ -42,6 +68,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Categorical relaxations now restore non-negative bounded coordinates after
+  every AdamW step even at `temp=0`, normalise a valid simplex, and measure
+  diversity in probability rather than arbitrary raw-logit scale.
+- `AutoDivTuner` no longer divides a population standard deviation by
+  `sol_size` a second time and now uses negative rather than positive
+  feedback; adaptive diversity control works consistently across population
+  sizes and moves the diversity weight in the correct direction.
+- `anneal` rejects zero/negative `curve_rate`, invalid `check_interval`,
+  negative temperature/learning rate, and out-of-range `div_param` with clear
+  errors.
+- Graph normalisation now accepts heterogeneous, non-orderable node labels
+  such as integers mixed with strings.
 - **iSCO `_plackett_luce_logprob` NaN bug (silent detailed-balance
   violation).** The Plackett-Luce log-prob recursion used
   `diff.clamp(max=-1e-12)` to keep `log1p(-exp(diff))` finite, but

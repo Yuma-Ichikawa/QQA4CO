@@ -10,6 +10,7 @@ problems all share this same loop.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
@@ -73,6 +74,11 @@ class AnnealResult:
     For QUBO problems ``best_sol`` / ``best_obj`` / ``score`` are *replaced*
     by the polished result whenever it is strictly better, so callers that
     just read ``best_sol`` automatically benefit from the polish."""
+    final_population: torch.Tensor | None = None
+    """Projected final replica population, populated only when
+    :func:`anneal` is called with ``return_population=True``. Hybrid solvers
+    use it to pass several diverse QQA incumbents to exact solvers without
+    making ordinary results unnecessarily large."""
 
 
 def _is_instance_problem(problem) -> bool:
@@ -99,6 +105,7 @@ def anneal(
     mixed_precision: Literal["fp32", "bf16"] = "fp32",
     initial_state: torch.Tensor | None = None,
     polish: bool = True,
+    return_population: bool = False,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -157,11 +164,27 @@ def anneal(
         strictly better. The polish costs ``O(N · #flips)`` and is silently
         skipped for problems without a ``Q_mat`` (Spin / Categorical /
         batched-instance), so it is safe to leave on globally.
+    return_population:
+        If true, retain the projected final replica population in
+        :attr:`AnnealResult.final_population`. Defaults to false to keep
+        result objects compact.
     """
-    if sol_size < 1:
+    if not isinstance(sol_size, int) or isinstance(sol_size, bool) or sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
-    if num_epochs < 0:
+    if not isinstance(num_epochs, int) or isinstance(num_epochs, bool) or num_epochs < 0:
         raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
+    if not math.isfinite(learning_rate) or learning_rate <= 0:
+        raise ValueError(f"learning_rate must be > 0, got {learning_rate}.")
+    if not math.isfinite(temp) or temp < 0:
+        raise ValueError(f"temp must be >= 0, got {temp}.")
+    if (
+        not isinstance(check_interval, int)
+        or isinstance(check_interval, bool)
+        or check_interval < 1
+    ):
+        raise ValueError(f"check_interval must be >= 1, got {check_interval}.")
+    if not math.isfinite(div_param) or not 0.0 <= div_param <= 1.0:
+        raise ValueError(f"div_param must be in [0, 1], got {div_param}.")
     if mixed_precision not in ("fp32", "bf16"):
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
     # Mirror the validation that the pignn / cpra trainers already enforce:
@@ -171,6 +194,8 @@ def anneal(
     # odd c, so it is exempted.
     from qqa.relaxation import CategoricalRelaxation  # noqa: PLC0415
 
+    if not isinstance(curve_rate, int) or isinstance(curve_rate, bool) or curve_rate < 1:
+        raise ValueError(f"curve_rate must be a positive integer, got {curve_rate}.")
     if curve_rate % 2 != 0 and not isinstance(
         getattr(problem, "relaxation", None), CategoricalRelaxation
     ):
@@ -216,7 +241,11 @@ def anneal(
     if initial_state is None:
         x = relax.init(sol_size, problem, device)
     else:
-        seed = initial_state.detach().to(device=device, dtype=torch.float32)
+        seed_dtype = getattr(problem, "dtype", torch.float32)
+        seed = initial_state.detach().to(device=device, dtype=seed_dtype)
+        encode = getattr(relax, "encode", None)
+        if encode is not None:
+            seed = encode(seed)
         if seed.dim() == 1:
             seed = seed.unsqueeze(0).expand(sol_size, -1).contiguous()
         if seed.shape[0] != sol_size:
@@ -272,11 +301,11 @@ def anneal(
     # problems. We only sync it to the host on the (rare) ``check_interval``
     # tick or when an actual improvement happens, instead of every epoch.
     if not is_batch:
-        best_obj_gpu = torch.tensor(best_obj, device=x.device, dtype=torch.float32)
+        best_obj_gpu = torch.tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
     else:
         # Batched problems: keep ``best_obj`` on GPU as well so per-epoch
         # comparisons skip the cpu().numpy() roundtrip.
-        best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=torch.float32)
+        best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
 
     for epoch in range(num_epochs):
         optimizer.zero_grad(set_to_none=True)
@@ -397,6 +426,7 @@ def anneal(
         callbacks=cb_list,
         score=score,
         polished_sol=polished_sol,
+        final_population=x_disc.detach().clone() if return_population else None,
     )
 
 

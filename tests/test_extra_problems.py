@@ -177,6 +177,13 @@ def test_non_contiguous_node_labels(cls, kwargs):
     assert torch.is_tensor(result.best_sol)
 
 
+def test_mixed_type_node_labels_are_normalized_without_sorting():
+    graph = nx.Graph()
+    graph.add_edges_from([(1, "depot"), ("depot", ("customer", 2))])
+    problem = qqa.MaxCut(graph)
+    assert problem.Q_mat.shape == (3, 3)
+
+
 # ---------------------------------------------------------------------------
 # ``qqa.anneal`` edge cases
 # ---------------------------------------------------------------------------

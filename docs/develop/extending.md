@@ -264,9 +264,7 @@ def my_backend(problem, *, num_epochs: int = 1000, device: str = "cpu") -> Annea
     bits = (x.detach() >= 0.5).float()
     best_obj = float(problem.loss_fn(bits.unsqueeze(0)).item())
     score = problem.score_summary(bits)
-    return AnnealResult(
-        best_sol=bits, best_obj=best_obj, runtime=time() - t0, score=score
-    )
+    return AnnealResult(best_sol=bits, best_obj=best_obj, runtime=time() - t0, score=score)
 ```
 
 By returning `AnnealResult`, downstream tooling — the Streamlit GUI,

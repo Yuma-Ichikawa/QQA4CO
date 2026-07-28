@@ -15,6 +15,7 @@ extra runtime dependency.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pickle
 import shutil
@@ -143,6 +144,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="If given, save the AnnealResult (pickle) to this path.",
     )
+    solve.add_argument(
+        "--report",
+        type=str,
+        default=None,
+        help="If given, write a self-contained interactive HTML result report.",
+    )
     # ------------------------------------------------------------------
     # Optional CRA-PI-GNN backend (PyTorch Geometric). Requires installing
     # the ``pignn`` extra: ``pip install qqa[pignn]``. Defaults to ``qqa``,
@@ -150,11 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     solve.add_argument(
         "--backend",
-        choices=["qqa", "pignn", "cpra", "sa"],
+        choices=["qqa", "scip", "pignn", "cpra", "sa"],
         default="qqa",
         help=(
             "Solver backend. 'qqa' (default) uses the parallel-replica "
-            "annealing loop; 'pignn' uses the optional CRA-PI-GNN "
+            "annealing loop; 'scip' refines QQA QUBO solutions and can prove "
+            "optimality (requires qqa[scip]); 'pignn' uses the optional CRA-PI-GNN "
             "(PyTorch Geometric) trainer — graph problems only "
             "(mis/maxcut/maxclique/vertex_cover/graph_bisection); "
             "'cpra' uses the multi-head CPRA extension that produces "
@@ -162,6 +170,30 @@ def build_parser() -> argparse.ArgumentParser:
             "'sa' is the GPU-parallel Simulated Annealing baseline used in "
             "the QQA papers — no learning, pure Metropolis on the same problem."
         ),
+    )
+    solve.add_argument(
+        "--scip-time-limit",
+        type=float,
+        default=60.0,
+        help="SCIP proof-phase time limit in seconds (only --backend scip).",
+    )
+    solve.add_argument(
+        "--scip-gap",
+        type=float,
+        default=0.0,
+        help="Target relative optimality gap (only --backend scip).",
+    )
+    solve.add_argument(
+        "--scip-warm-starts",
+        type=int,
+        default=32,
+        help="Maximum diverse QQA primal starts passed to SCIP.",
+    )
+    solve.add_argument(
+        "--scip-threads",
+        type=int,
+        default=1,
+        help="Maximum SCIP threads (QQA GPU exploration is unaffected).",
     )
     solve.add_argument(
         "--sa-num-sweeps",
@@ -320,6 +352,59 @@ def build_parser() -> argparse.ArgumentParser:
     bench_plot.add_argument("--theme", default="light", choices=("light", "dark"))
     bench_plot.add_argument("--dpi", type=int, default=160)
     bench_plot.add_argument("--format", default=None, dest="fmt")
+
+    tex = sub.add_parser(
+        "tex",
+        help="Translate a TeX optimisation model and solve it automatically.",
+    )
+    tex.add_argument(
+        "tex",
+        nargs="?",
+        help="TeX string, or '-' to read TeX from stdin. Quote backslashes in your shell.",
+    )
+    tex.add_argument(
+        "--spec",
+        type=str,
+        default=None,
+        help="Solve an already-audited QQA model JSON file without calling an API.",
+    )
+    tex.add_argument("--api-base", type=str, default=None, help="OpenAI-compatible API base URL.")
+    tex.add_argument("--model", type=str, default=None, help="Model id used for TeX translation.")
+    tex.add_argument(
+        "--api-style",
+        choices=("responses", "messages"),
+        default="responses",
+        help="Compatible endpoint style (default: responses).",
+    )
+    tex.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification for a private development gateway.",
+    )
+    tex.add_argument("--timeout", type=float, default=120.0)
+    tex.add_argument("--sol-size", type=int, default=256)
+    tex.add_argument("--epochs", type=int, default=1500)
+    tex.add_argument("--device", type=str, default="cpu")
+    tex.add_argument("--seed", type=int, default=0)
+    tex.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Translate and validate the model but do not solve it.",
+    )
+    tex.add_argument(
+        "--output-model",
+        type=str,
+        default=None,
+        help="Write the audited declarative model JSON (never includes credentials).",
+    )
+    tex.add_argument(
+        "--output-result",
+        type=str,
+        default=None,
+        help="Write complete solution/front JSON instead of flooding stdout.",
+    )
+    tex.add_argument("--report", type=str, default=None, help="Write an interactive HTML report.")
+    tex.add_argument("--quiet", action="store_true")
 
     gui = sub.add_parser("gui", help="Launch the Streamlit GUI.")
     gui.add_argument("--port", type=int, default=8501)
@@ -493,7 +578,33 @@ def _cmd_solve(args: argparse.Namespace) -> int:
     problem = _build_problem(args)
 
     backend = getattr(args, "backend", "qqa")
-    if backend in {"pignn", "cpra"}:
+    if backend == "scip":
+        qqa_lr = args.learning_rate if args.learning_rate is not None else 1.0
+        try:
+            result = qqa.solve_qqa_scip(
+                problem,
+                qqa_kwargs={
+                    "sol_size": args.sol_size,
+                    "learning_rate": qqa_lr,
+                    "temp": args.temp,
+                    "min_bg": args.min_bg,
+                    "max_bg": args.max_bg,
+                    "curve_rate": args.curve_rate,
+                    "div_param": args.div_param,
+                    "num_epochs": args.epochs,
+                    "device": args.device,
+                    "polish": not args.no_polish,
+                    "verbose": not args.quiet,
+                },
+                time_limit=args.scip_time_limit,
+                relative_gap=args.scip_gap,
+                max_warm_starts=args.scip_warm_starts,
+                threads=args.scip_threads,
+                verbose=not args.quiet,
+            )
+        except TypeError as exc:
+            raise SystemExit(f"[qqa solve] --backend scip requires a QUBO problem: {exc}") from exc
+    elif backend in {"pignn", "cpra"}:
         kind = args.problem
         if kind is None:
             raise SystemExit(
@@ -568,7 +679,8 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             verbose=not args.quiet,
         )
     else:
-        qqa_lr = args.learning_rate if args.learning_rate is not None else 1.0
+        default_lr = 0.05 if isinstance(problem, qqa.MixedProblem) else 1.0
+        qqa_lr = args.learning_rate if args.learning_rate is not None else default_lr
         result = qqa.anneal(
             problem,
             sol_size=args.sol_size,
@@ -595,6 +707,10 @@ def _cmd_solve(args: argparse.Namespace) -> int:
     print(f"backend    : {backend}")
     print(f"size       : {size}")
     print(f"best_obj   : {result.best_obj}")
+    if backend == "scip":
+        print(f"scip_status: {result.scip_status}")
+        print(f"gap        : {result.gap}")
+        print(f"dual_bound : {result.dual_bound}")
     if result.score:
         score = result.score
         feas = "feasible" if score.get("feasible", True) else "INFEASIBLE"
@@ -616,6 +732,9 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                 fh,
             )
         print(f"saved      : {out}")
+    if args.report:
+        report = qqa.save_html_report(result, problem, args.report)
+        print(f"report     : {report}")
     return 0
 
 
@@ -849,6 +968,94 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return subprocess.call(cmd, env=env)
 
 
+def _cmd_tex(args: argparse.Namespace) -> int:
+    import qqa
+
+    if bool(args.tex) == bool(args.spec):
+        raise SystemExit("[qqa tex] provide exactly one TeX string (or '-') or --spec FILE.")
+    qqa.fix_seed(args.seed)
+    if args.spec:
+        spec_path = Path(args.spec).expanduser().resolve()
+        spec = qqa.ModelSpec.from_json(spec_path.read_text(encoding="utf-8"))
+    else:
+        source = sys.stdin.read() if args.tex == "-" else args.tex
+        client = qqa.OpenAICompatibleClient(
+            base_url=args.api_base,
+            model=args.model,
+            api_style=args.api_style,
+            verify_ssl=not args.insecure,
+            timeout=args.timeout,
+        )
+        spec = qqa.compile_tex(source, client=client)
+
+    if args.output_model:
+        output = Path(args.output_model).expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(spec.to_json() + "\n", encoding="utf-8")
+        print(f"model_json : {output}")
+
+    problem = qqa.problem_from_spec(spec)
+    print(f"model      : {spec.name}")
+    print(f"variables  : {sum(variable.size for variable in spec.variables)}")
+    print(f"objectives : {len(spec.objectives)}")
+    print(f"constraints: {len(spec.constraints)}")
+    if args.dry_run:
+        print("status     : validated (dry run)")
+        return 0
+
+    if isinstance(problem, qqa.MultiObjectiveProblem):
+        result = problem.solve_pareto(
+            sol_size=args.sol_size,
+            num_epochs=args.epochs,
+            device=args.device,
+            seed=args.seed,
+            verbose=not args.quiet,
+        )
+        print(f"pareto_size: {len(result.solutions)}")
+        print(f"runtime    : {result.runtime:.4f} s")
+        result_payload = {
+            "objectives": list(result.objective_names),
+            "front": result.objectives.detach().cpu().tolist(),
+            "solutions": result.solutions.detach().cpu().tolist(),
+        }
+        print(
+            "preview    : " + json.dumps(result_payload["front"][: min(10, len(result.solutions))])
+        )
+        if args.report:
+            report_path = Path(args.report).expanduser().resolve()
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            figure = qqa.plot_pareto(result, backend="plotly", show=False)
+            figure.write_html(report_path, include_plotlyjs=True, full_html=True)
+            print(f"report     : {report_path}")
+    else:
+        result = problem.solve(
+            sol_size=args.sol_size,
+            num_epochs=args.epochs,
+            device=args.device,
+            verbose=not args.quiet,
+        )
+        print(f"best_loss  : {result.best_obj}")
+        print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+        print(f"runtime    : {result.runtime:.4f} s")
+        result_payload = {
+            "best_loss": result.best_obj,
+            "score": result.score,
+            "solution": result.best_sol.detach().cpu().tolist(),
+        }
+        if args.report:
+            report = qqa.save_html_report(result, problem, args.report)
+            print(f"report     : {report}")
+    if args.output_result:
+        result_path = Path(args.output_result).expanduser().resolve()
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(result_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"result_json: {result_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -867,6 +1074,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bench_run(args)
     if args.command == "bench-plot":
         return _cmd_bench_plot(args)
+    if args.command == "tex":
+        return _cmd_tex(args)
     if args.command == "gui":
         return _cmd_gui(args)
     parser.error(f"Unknown command {args.command!r}")

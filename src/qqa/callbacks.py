@@ -6,6 +6,7 @@ can record metrics, adjust hyper-parameters, or track auxiliary objectives.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -163,11 +164,19 @@ class HistoryRecorder(Callback):
 class AutoDivTuner(Callback):
     """Adaptively tune ``div_param`` to target a desired diversity ratio.
 
-    At each epoch: ``ratio = diversity / (sol_size * N)``. The controller
+    At each epoch: ``ratio = diversity / N``. The controller
     nudges ``div_param`` by ``lr * (ratio - target)`` and clips to ``[0, 1]``.
+
+    ``Relaxation.diversity`` is already a standard deviation over the
+    population axis, so dividing by ``sol_size`` a second time would make the
+    measured ratio shrink as more replicas are added.
     """
 
     def __init__(self, target: float = 0.3, lr: float = 1e-3) -> None:
+        if not 0.0 <= target <= 1.0:
+            raise ValueError(f"target must be in [0, 1], got {target}.")
+        if not math.isfinite(lr) or lr <= 0:
+            raise ValueError(f"lr must be > 0, got {lr}.")
         self.target = target
         self.lr = lr
 
@@ -185,8 +194,10 @@ class AutoDivTuner(Callback):
             if torch.is_tensor(state.diversity)
             else float(state.diversity)
         )
-        ratio = div_val / (sol_size * num_vars * num_inst)
-        diff = ratio - self.target
+        ratio = div_val / (num_vars * num_inst)
+        # Negative feedback: increase the diversity weight when observed
+        # diversity is below target and decrease it when diversity is high.
+        diff = self.target - ratio
         dp = state.hyperparams.get("div_param", 0.0)
         dp = max(0.0, min(1.0, dp + self.lr * diff))
         state.hyperparams["div_param"] = dp

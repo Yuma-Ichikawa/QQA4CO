@@ -41,6 +41,7 @@ score or pickles the full `AnnealResult` to disk.
 | `--seed` | `0` | Seed passed to `qqa.fix_seed` |
 | `--quiet` | off | Suppress per-epoch progress logs |
 | `--output` | (none) | If given, pickle the full `AnnealResult` to this path |
+| `--report` | (none) | Write a self-contained interactive HTML diagnostic report |
 
 ### Hyper-parameter flags
 
@@ -56,7 +57,9 @@ score or pickles the full `AnnealResult` to disk.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--backend` | `qqa` | `qqa` (default annealer), `pignn` (CRA-PI-GNN), `cpra` (CPRA) — last two require `qqa[pignn]` |
+| `--backend` | `qqa` | `qqa`, `scip` (QQA→exact QUBO refinement), `pignn`, `cpra`, or `sa` |
+| `--scip-time-limit` / `--scip-gap` | `60` / `0` | SCIP proof budget and target relative gap |
+| `--scip-warm-starts` / `--scip-threads` | `32` / `1` | Diverse QQA incumbents and exact-solver threads |
 | `--pignn-init-reg-param` | `-20.0` | CRA initial γ (only `--backend pignn`/`cpra`) |
 | `--pignn-annealing-rate` | `1e-3` | CRA γ increment per epoch |
 | `--pignn-tol` / `--pignn-patience` | `1e-4` / `1000` | Early-stopping (loss-stagnation) |
@@ -86,6 +89,7 @@ and `qqa.pignn.train_cpra_pi_gnn` respectively. Pass an explicit
 | Backend | Supported `--problem` values |
 |---|---|
 | `qqa` | All 17 problems in the catalogue |
+| `scip` | Single-instance `QUBOProblem` models |
 | `pignn` | `mis`, `maxcut`, `maxclique`, `vertex_cover`, `graph_bisection` |
 | `cpra` | Same as `pignn` (penalty diversification works for `mis`, `vertex_cover` only) |
 
@@ -111,8 +115,13 @@ qqa solve --problem mis --graph-file data/my_graph.gpickle \
           --cpra-penalty-levels 1.0,1.5,2.0,2.5 \
           --epochs 5000 --device cuda --output results/mis_cpra.pkl
 
+# QQA GPU exploration followed by SCIP improvement/certification.
+qqa solve --problem maxcut --size 80 --backend scip --device cuda \
+          --epochs 1500 --scip-time-limit 120 --scip-warm-starts 64
+
 # A user-defined problem.
-qqa solve --problem-file my_problem.py --sol-size 128 --epochs 1500
+qqa solve --problem-file my_problem.py --sol-size 128 --epochs 1500 \
+          --report results/model-report.html
 ```
 
 ## `qqa bench`
@@ -130,6 +139,28 @@ sanity check.
 
 ```bash
 qqa bench --preset er-small
+```
+
+## `qqa tex`
+
+Translate a TeX optimisation problem through an OpenAI-compatible Responses
+or Messages endpoint, validate the declarative model locally, and solve it:
+
+```bash
+export QQA_LLM_API_KEY='…'
+qqa tex '\min_{x\in[-5,5]} (x-1.5)^2' \
+  --device cuda --output-model model.json --report result.html
+```
+
+The key has no CLI flag by design, so it does not leak into shell history.
+`--dry-run` validates without solving. `qqa tex --spec model.json` solves an
+audited model offline. `--api-base`, `--model`, and `--api-style` configure a
+compatible gateway; `--insecure` explicitly disables TLS verification.
+
+TeX may also be piped through stdin:
+
+```bash
+printf '%s' '\min_{n\in\mathbb{Z},0\le n\le 10}(n-4)^2' | qqa tex -
 ```
 
 ## `qqa gui`

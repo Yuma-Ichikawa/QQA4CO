@@ -206,16 +206,15 @@ class CategoricalRelaxation:
         )
 
     def forward(self, x):
-        # ``x / x.sum`` is the normal simplex normalisation. The only failure
-        # mode is the (rare) pathological case where the sum across categories
-        # becomes ~0 or negative, which would produce NaN/Inf and corrupt the
-        # AdamW state. Guard *only* the denominator so the typical positive
-        # case is bit-for-bit identical to the historical implementation.
-        s = x.sum(dim=2, keepdim=True)
-        return x / s.clamp(min=1e-8)
+        # AdamW is unconstrained and can push entries below zero even when
+        # Langevin noise is disabled. Normalising those raw values can produce
+        # negative "probabilities" or an almost-zero denominator. Clamp first
+        # so the tensor remains on the non-negative simplex by construction.
+        x_pos = x.clamp(min=1e-8)
+        return x_pos / x_pos.sum(dim=2, keepdim=True)
 
     def project(self, x):
-        idx = torch.argmax(x, dim=2)
+        idx = torch.argmax(self.forward(x), dim=2)
         out = torch.zeros_like(x)
         out.scatter_(2, idx.unsqueeze(2), 1)
         return out
@@ -245,15 +244,19 @@ class CategoricalRelaxation:
         return torch.sum(1 - num / denom, dim=1)
 
     def diversity(self, x):
-        # Mean across categories -> sum across nodes (matches legacy formulation).
-        return x.std(dim=0).mean(dim=1).sum()
+        # Measure diversity in probability space. Raw logits have arbitrary
+        # scale, so using them directly lets the optimiser manufacture
+        # "diversity" without changing any categorical distribution.
+        return self.forward(x).std(dim=0).mean(dim=1).sum()
 
     def perturb_(self, x, learning_rate, temp):
-        if temp <= 0:
-            return
         with torch.no_grad():
-            noise = torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5)
-            x.add_(noise).clamp_(1e-5, 1.0)
+            if temp > 0:
+                noise = torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5)
+                x.add_(noise)
+            # Always restore the domain after AdamW, including the common
+            # ``temp == 0`` path.
+            x.clamp_(1e-5, 1.0)
 
     def num_variables(self, problem):
         return problem.num_node

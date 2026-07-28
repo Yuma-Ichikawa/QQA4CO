@@ -34,6 +34,8 @@ theme:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Mixed optimisation: mixed-optimization.md
+  - Universal optimisation: universal-optimization.md
   - How-to:
     - Run on GPU: how-to/gpu.md
     - Tune hyper-parameters: how-to/tuning.md

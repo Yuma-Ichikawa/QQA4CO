@@ -43,20 +43,25 @@ Or programmatically:
 import qqa
 
 # Single instance with known factors
-prob = qqa.IntegerFactorizationIsing(p=11, q=13)        # N = 143
-print(prob.num_nodes, prob.num_and, prob.num_xor)        # ~150 spins
+prob = qqa.IntegerFactorizationIsing(p=11, q=13)  # N = 143
+print(prob.num_nodes, prob.num_and, prob.num_xor)  # ~150 spins
 
 # Random benchmark suite
 suite = qqa.random_factorization_problems(
-    bit_length=5, num_instances=10, seed=0,
+    bit_length=5,
+    num_instances=10,
+    seed=0,
 )
 
 # Solve with QQA
 result = qqa.anneal(
     prob,
-    sol_size=500, num_epochs=3000, learning_rate=0.5,
+    sol_size=500,
+    num_epochs=3000,
+    learning_rate=0.5,
     schedule=qqa.LinearBGSchedule(min_bg=-2, max_bg=0.5),
-    curve_rate=4, div_param=0.2,
+    curve_rate=4,
+    div_param=0.2,
 )
 print(result.score["extra"]["p_hat"], result.score["extra"]["q_hat"])
 ```
