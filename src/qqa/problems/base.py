@@ -37,7 +37,11 @@ def normalize_graph(graph: nx.Graph) -> nx.Graph:
     labels = list(graph.nodes())
     if labels == list(range(N)):
         return graph
-    return nx.convert_node_labels_to_integers(graph, ordering="sorted")
+    # ``ordering="sorted"`` raises for perfectly valid graphs whose labels
+    # are not mutually orderable (for example ``{1, "depot"}`` on Python 3).
+    # NetworkX preserves insertion order, which is deterministic for a given
+    # graph and works for arbitrary hashable labels.
+    return nx.convert_node_labels_to_integers(graph, ordering="default")
 
 
 class COProblem(ABC):

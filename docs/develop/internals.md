@@ -12,7 +12,7 @@ code.
 QQA4CO/
 ├── src/qqa/             # The Python package (everything ships in the wheel)
 ├── app/                 # Streamlit dashboard (also shipped in the wheel)
-├── tests/               # 11 pytest files, < 60 s on CPU
+├── tests/               # Unit, integration, CLI, security, and UI tests
 ├── notebooks/           # Curated walkthroughs (CRA-PI-GNN, CPRA)
 ├── examples/            # Auto-generated per-problem notebooks
 ├── scripts/             # Demos, benchmarks, gallery / verification regen
@@ -46,6 +46,7 @@ src/qqa/
 ├── utils.py             # fix_seed, generate_graph, MIS / MaxCut analytics
 ├── datasets.py          # Bundled MIS-ER loaders + benchmark constants
 ├── visualization.py     # Plot helpers (matplotlib + optional plotly)
+├── reporting.py         # Self-contained HTML result export
 ├── cli.py               # The qqa command (argparse, no third-party deps)
 ├── legacy.py            # Deprecated 0.2.x batch_annealing_* shims
 ├── problems/
@@ -57,6 +58,29 @@ src/qqa/
 │   ├── extras.py        # Knapsack, NumberPartitioning, VertexCover, GraphBisection,
 │   │                    # MaxSAT3, TSP, QAP, NQueens
 │   └── user.py          # UserProblem + load_problem_from_file (--problem-file CLI hook)
+├── mixed/               # Typed binary/integer/real modelling
+│   ├── variables.py     # Declarations, bounds, pack/unpack layout
+│   ├── relaxation.py    # Normalised mixed-domain relaxation
+│   ├── problem.py       # Objective + constraint model
+│   └── solve.py         # Mixed-friendly high-level entry point
+├── multiobjective/      # Reference directions, Pareto archive, front plots
+│   ├── problem.py       # Objective directions + mixed-variable model
+│   ├── solver.py        # One-run augmented-Tchebycheff optimiser
+│   └── visualization.py # 2-D, 3-D, and parallel-coordinate views
+├── blackbox/            # Gradient-free expensive-function optimisation
+│   ├── problem.py       # Plain-Python objective/constraint contract
+│   ├── solver.py        # RBF surrogate + adaptive batch trust region
+│   └── visualization.py # Convergence/feasibility/trust diagnostics
+├── hybrid/
+│   └── scip.py          # Optional QQA population → SCIP exact refinement
+├── tex/                 # TeX → audited declarative model → QQA
+│   ├── client.py        # Credential-safe Responses/Messages transport
+│   ├── schema.py        # Exact JSON model schema and validation
+│   ├── expressions.py   # Restricted AST interpreter (no eval/exec)
+│   └── compiler.py      # Translation, repair, compilation, solve API
+├── visuals/             # Advanced visualisation internals
+│   ├── _data.py         # Backend-neutral diagnostics extraction
+│   └── dashboard.py     # Plotly / Matplotlib result dashboards
 └── pignn/               # Optional CRA-PI-GNN / CPRA backends (PyG)
     ├── __init__.py      # Re-exports train_cra_pi_gnn / train_cpra_pi_gnn
     ├── _import.py       # require_pyg() with an actionable ImportError
@@ -80,6 +104,9 @@ src/qqa/
 4. **Public function signatures are append-only.** Add a new keyword
    with a sensible default — never reorder, rename, or remove an
    existing argument without a deprecation cycle.
+5. **Feature-specific code stays in a feature package.** Transport, schema,
+   numerical algorithm, and visualisation are separate modules; importing the
+   top-level package must never require optional SCIP or an API credential.
 
 ## `app/` — Streamlit dashboard
 
@@ -113,9 +140,12 @@ The wheel ships this directory under `qqa/_app/` (see
 | `test_gui_apptest.py` | `streamlit.testing` harness on the multi-page app |
 | `test_visualization.py` | Plot helpers do not crash with a minimal `AnnealResult` |
 | `test_legacy.py` | Deprecated `batch_annealing_*` aliases still emit a `DeprecationWarning` |
+| `test_mixed.py` | Binary/integer/real modelling and constraint diagnostics |
+| `test_advanced_optimization.py` | Pareto, black-box, SCIP, and population hand-off |
+| `test_tex.py` | TeX schema safety, API fallback/redaction, and offline CLI |
 
-The full suite finishes in well under a minute on CPU because every
-problem instance is intentionally tiny.
+Every numerical test uses a deliberately small problem. Optional backends are
+skipped only when their declared extra is unavailable.
 
 ## `scripts/` — runnable demos and reproducibility
 

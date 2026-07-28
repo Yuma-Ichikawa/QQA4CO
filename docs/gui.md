@@ -47,9 +47,7 @@ import it from there:
 import importlib.util
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location(
-    "solve_page", Path("app/pages/1_Solve.py")
-)
+spec = importlib.util.spec_from_file_location("solve_page", Path("app/pages/1_Solve.py"))
 solve_page = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(solve_page)
 cb = solve_page.StreamlitCallback(...)

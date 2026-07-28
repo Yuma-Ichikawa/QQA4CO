@@ -9,6 +9,10 @@ behind a single, GPU-friendly API. One installation gives you the PQQA
 solver, an optional GNN backend that plugs in CRA-PI-GNN-style methods,
 GPU-parallel **SA** and **Population Annealing** baselines for honest
 comparisons, a 20+ class problem catalogue, a Streamlit dashboard and a CLI.
+The same GPU-parallel engine now covers the full practical optimisation
+spectrum: **single- and multi-objective**, **binary, integer, real, and mixed
+variables**, constrained nonlinear and **black-box** objectives, plus optional
+exact **SCIP** refinement and TeX-to-solver modelling.
 
 The package is published on PyPI as **`qqa`** for backwards compatibility
 with earlier QQA4CO releases (``import qqa``).
@@ -57,17 +61,18 @@ with earlier QQA4CO releases (``import qqa``).
   </a>
 </p>
 
-The dashboard is a four-page Streamlit app that drives the same `qqa.anneal`
-solver this README documents — pick a problem, watch the relaxed variables
+The dashboard is a five-page Streamlit app that drives the same solver APIs
+this README documents — pick a problem, watch the relaxed variables
 discretise live, race PQQA against simulated annealing, and inspect the
 parallel population in 3D solution-space PCA / loss-spectrogram views.
 
 | Page | What you can do |
 | --- | --- |
-| **Home** | Pick from 19 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware. |
+| **Home** | Pick from 21 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware; the arbitrary-Python editor is trusted-local opt-in only. |
 | **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, polish (1-flip local search) and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
+| **Universal** | Solve a realistic mixed microgrid, generate a cost/emissions/resilience Pareto front on GPU, tune a constrained black-box process, or review and solve a TeX/JSON model with optional SCIP certification. |
 
 ### Or run it locally — same UI, your hardware
 
@@ -75,6 +80,11 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 pip install "qqa[gui]"        # pulls Streamlit + Plotly
 qqa gui                       # opens http://localhost:8501
 ```
+
+To enable the arbitrary-Python problem editor on a trusted local machine,
+launch with `QQA_ALLOW_CUSTOM=1 qqa gui`. It is disabled by default on public
+or shared deployments; the TeX/JSON modeller remains available through its
+restricted, non-evaluating expression grammar.
 
 Or with uv:
 
@@ -102,6 +112,9 @@ CUDA is picked up automatically when available.
    (BinaryPerceptron, HopfieldMemory). Every class implements the same
    `loss_fn` / `score_summary` contract, so the solver, CLI and dashboard
    are completely problem-agnostic.
+   For custom planning and engineering models, `MixedProblem` combines
+   named `Binary`, `Integer`, and `Real` variables plus differentiable
+   `Constraint` objects in one GPU-vectorised solve.
 3. **An optional GNN backend** (`qqa.pignn`, install with `qqa[pignn]`) that
    plugs **GNN-based unsupervised-learning CO solvers** into the same API.
    PQQA, the **CRA-PI-GNN** baseline (NeurIPS 2024) and the **CPRA**
@@ -121,12 +134,18 @@ CUDA is picked up automatically when available.
    same `best_sol` / `best_obj` / `history` / `polished_sol` surface as
    `qqa.anneal`, so the Streamlit *Compare* page can race PQQA against
    any of them at a matched compute budget.
-5. **A polished Streamlit dashboard** (light / dark, live progress, parallel
+5. **Universal optimisation workflows**: a one-run GPU-parallel Pareto solver
+   with adaptive feasibility and restart recovery, resumable mixed-variable
+   black-box optimisation with expected improvement, optional QQA→SCIP QUBO
+   and mixed nonlinear refinement with optimality gaps, and a safe `qqa tex`
+   interface that turns TeX into an auditable declarative model through an
+   OpenAI-compatible API.
+6. **A polished Streamlit dashboard** (light / dark, live progress, parallel
    population view, per-problem solution viz, hyper-parameter sweeps) and a
-   `qqa` **CLI** (`solve / bench / gui / version`) for reproducible
+   `qqa` **CLI** (`solve / tex / example / doctor / bench / gui / version`) for reproducible
    experiments. A hosted instance lives at
    <https://parallelquasiquantum4co.streamlit.app/>.
-6. **MkDocs + Material reference docs** with auto-generated API pages, a
+7. **MkDocs + Material reference docs** with auto-generated API pages, a
    runnable `examples/` notebook gallery (Open-in-Colab badges) and a
    `scripts/verify_all_problems.py` correctness sweep that benchmarks every
    problem against ground truth or a strong baseline (29 / 29 instances pass
@@ -180,6 +199,15 @@ pip install "qqa[gui]"         # + Streamlit dashboard
 pip install "qqa[all]"         # everything
 ```
 
+Check the installed capabilities, then run a complete real-world workflow:
+
+```bash
+qqa doctor
+qqa example list
+qqa example run microgrid-pareto --device auto --output-dir results/microgrid
+qqa example run process-blackbox --device auto --output-dir results/process
+```
+
 ## Quickstart
 
 ```python
@@ -200,6 +228,95 @@ problem = qqa.SherringtonKirkpatrick(N=100, seed=0)
 result = qqa.anneal(problem, sol_size=200, num_epochs=2000, verbose=False)
 print(f"E_0 / N  ≈  {result.best_obj / 100:.4f}   (target ≈ -0.7632)")
 ```
+
+### Mixed binary + integer + real optimisation
+
+Unlike binary-only annealers, QQA can optimise heterogeneous bounded
+variables together. Objectives and constraints receive named batched tensors,
+so the model remains readable while all replicas execute in parallel on
+CPU or GPU:
+
+```python
+import qqa
+
+factory = qqa.MixedProblem(
+    variables=[
+        qqa.Binary("machine", size=2),
+        qqa.Integer("batches", lower=0, upper=6, size=2),
+        qqa.Real("overtime", lower=0.0, upper=4.0),
+    ],
+    objective=lambda v: (
+        10 * v["machine"].sum(-1) + 3 * v["batches"].sum(-1) + 2 * v["overtime"].square()
+    ),
+    constraints=[
+        qqa.Constraint(
+            lambda v: 4 * v["batches"].sum(-1) + v["overtime"],
+            sense=">=",
+            rhs=28,
+            weight=100,
+            name="demand",
+        ),
+        qqa.Constraint(
+            lambda v: (v["batches"] - 6 * v["machine"]).clamp_min(0).sum(-1),
+            sense="<=",
+            rhs=0,
+            weight=100,
+            name="activation_link",
+        ),
+    ],
+    name="factory-planning",
+    objective_label="cost",
+)
+
+result = factory.solve(device="cuda", verbose=False)
+print(result.score["extra"]["variables"])
+print(result.score["feasible"])
+
+# A shareable, offline interactive report in one call.
+qqa.save_html_report(result, factory, "factory-report.html")
+```
+
+See the [mixed optimisation guide](docs/mixed-optimization.md) and the
+[Colab notebook](examples/09_mixed_integer_real_optimization.ipynb) for pure
+integer, pure real, and practical mixed examples.
+
+### Pareto, black-box, SCIP, and TeX
+
+```python
+# One GPU run, many trade-offs — including non-convex Pareto fronts.
+model = qqa.MultiObjectiveProblem(
+    [qqa.Integer("x", 0, 10)],
+    [
+        qqa.Objective(lambda v: v["x"].square(), "cost"),
+        qqa.Objective(lambda v: (v["x"] - 10).square(), "delay"),
+    ],
+)
+front = model.solve_pareto(device="cuda")
+qqa.plot_pareto(front)
+
+# Expensive simulator/API with no gradients; binary/integer/real can be mixed.
+blackbox = qqa.BlackBoxProblem(
+    [qqa.Integer("units", 0, 20), qqa.Real("ratio", 0, 1)],
+    lambda p: expensive_simulator(p["units"], p["ratio"]),
+)
+best = blackbox.solve(budget=100, batch_size=8, workers=8)
+```
+
+For exact QUBO improvement/certification, install `qqa[scip]` and call
+`qqa.solve_qqa_scip(problem)`. To solve TeX directly, keep the API key only in
+your environment and use:
+
+```bash
+export QQA_LLM_API_KEY='…'  # never put this in Git
+qqa tex '\min_{x\in\mathbb{R},\,n\in\mathbb{Z}} (x-2)^2+(n-3)^2' --insecure
+```
+
+The generated JSON is schema-validated and interpreted without `eval` or
+`exec`; `--insecure` is needed only for the configured private development
+gateway's non-standard certificate. Add `--output-model model.json --dry-run`
+to audit the model before solving.
+See the [universal optimisation guide](docs/universal-optimization.md) and
+[Colab notebook](examples/10_universal_optimization_colab.ipynb).
 
 ## Optional CRA-PI-GNN backend (PyTorch Geometric)
 
@@ -235,7 +352,7 @@ result = train_cra_pi_gnn(
     annealing_rate=5e-4,
     num_epochs=5000,
 )
-print(result.score)   # {'label': 'IS size', 'value': ..., 'feasible': True, ...}
+print(result.score)  # {'label': 'IS size', 'value': ..., 'feasible': True, ...}
 ```
 
 CLI — same problem builders, just add `--backend pignn`:
@@ -307,7 +424,7 @@ Variation diversification on a fixed problem is the same call without
 result = train_cpra_pi_gnn(
     qqa.MaxCut(g),
     num_replicas=4,
-    vari_param=0.4,            # encourages between-replica spread
+    vari_param=0.4,  # encourages between-replica spread
     learning_rate=1e-3,
     init_reg_param=-2.0,
     annealing_rate=5e-4,
@@ -453,27 +570,32 @@ problem = qqa.MaximumIndependentSet(g, penalty=2)
 
 result = qqa.discrete_langevin(
     problem,
-    sol_size=256,          # number of parallel chains (num_chains in iSCO paper)
-    num_steps=500,         # outer annealing steps (m)
-    num_inner=4,           # inner MH steps per temperature (n)
-    t_max=None,            # auto-calibrate from |Δ| quantile (DISCS adaptive-step recipe)
+    sol_size=256,  # number of parallel chains (num_chains in iSCO paper)
+    num_steps=500,  # outer annealing steps (m)
+    num_inner=4,  # inner MH steps per temperature (n)
+    t_max=None,  # auto-calibrate from |Δ| quantile (DISCS adaptive-step recipe)
     t_min=0.01,
-    schedule="exp",        # paper §5 default (exponential decay). "lin" = Alg 1 literal form
-    mu0=1.0,               # initial Poisson mean for path length
+    schedule="exp",  # paper §5 default (exponential decay). "lin" = Alg 1 literal form
+    mu0=1.0,  # initial Poisson mean for path length
     device="cuda",
     seed=0,
 )
-print(f"MIS size: {-int(result.best_obj)}  acc={result.accept_rate:.2f}  "
-      f"μ_final={result.mu_final:.2f}  mean_L={result.mean_path_length:.2f}  "
-      f"runtime={result.runtime:.2f}s")
+print(
+    f"MIS size: {-int(result.best_obj)}  acc={result.accept_rate:.2f}  "
+    f"μ_final={result.mu_final:.2f}  mean_L={result.mean_path_length:.2f}  "
+    f"runtime={result.runtime:.2f}s"
+)
 ```
 
 ### Batched instances (same API)
 
 ```python
 result = qqa.discrete_langevin(
-    batched_problem,       # e.g. MaximumIndependentSetInstance(graphs, ...)
-    sol_size=128, num_steps=500, num_inner=4, device="cuda",
+    batched_problem,  # e.g. MaximumIndependentSetInstance(graphs, ...)
+    sol_size=128,
+    num_steps=500,
+    num_inner=4,
+    device="cuda",
 )
 # result.best_sol: (I, N);  result.best_obj: numpy array of shape (I,)
 ```
@@ -577,7 +699,8 @@ coverage):
 
 ```python
 from qqa import bench
-bench.list_suites()                                # dict view of available suites
+
+bench.list_suites()  # dict view of available suites
 bench.run("mis-satlib", instances=3, output="mine.json")
 bench.plot(["bench_results/mine.json"], output="report.png")
 ```
@@ -676,10 +799,15 @@ gadgets whose unique ground state is the bit-string of ``(p, q)``, so
 
 ```python
 import qqa
-prob = qqa.IntegerFactorizationIsing(p=11, q=13)         # N = 143
-result = qqa.anneal(prob, sol_size=500, num_epochs=3000,
-                    learning_rate=0.5,
-                    schedule=qqa.LinearBGSchedule(min_bg=-2, max_bg=0.5))
+
+prob = qqa.IntegerFactorizationIsing(p=11, q=13)  # N = 143
+result = qqa.anneal(
+    prob,
+    sol_size=500,
+    num_epochs=3000,
+    learning_rate=0.5,
+    schedule=qqa.LinearBGSchedule(min_bg=-2, max_bg=0.5),
+)
 print(result.score["extra"]["p_hat"], result.score["extra"]["q_hat"])
 ```
 
@@ -794,7 +922,7 @@ Each platform issues a permanent HTTPS URL out of the box.
 ```python
 from qqa import visualization as viz
 
-viz.plot_history(result)                       # loss / penalty / diversity
+viz.plot_history(result)  # loss / penalty / diversity
 viz.plot_best_trajectory(result, backend="plotly")
 viz.plot_schedule(qqa.LinearBGSchedule(-2, 0.1), num_epochs=2000)
 viz.plot_run_comparison([r1, r2, r3], labels=["lr=1", "lr=0.5", "lr=2"])

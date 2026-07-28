@@ -10,13 +10,23 @@ matplotlib with a warning.
 ```python
 from qqa import visualization as viz
 
-viz.plot_history(result)                 # loss / penalty / diversity
-viz.plot_best_trajectory(result)         # best objective over epochs
+viz.plot_history(result)  # loss / penalty / diversity
+viz.plot_best_trajectory(result)  # best objective over epochs
 viz.plot_schedule(schedule, num_epochs)  # bg annealing schedule
 viz.plot_run_comparison(results, labels=[...])
 viz.plot_parallel_coordinates(df, objective="best_obj", backend="plotly")
 viz.plot_solution_heatmap(result, problem)
+viz.plot_result_dashboard(result, problem)  # four-panel diagnosis
+viz.plot_variable_solution(result, problem)  # values vs declared bounds
+viz.plot_constraint_diagnostics(result, problem)  # violation vs tolerance
+
+# Offline-ready interactive HTML + embedded JSON.
+qqa.save_html_report(result, problem, "report.html")
 ```
+
+The advanced dashboard implementation lives in the responsibility-separated
+`qqa.visuals` package; the stable public functions remain available from
+`qqa.visualization`.
 
 ## Example: compare multiple runs
 

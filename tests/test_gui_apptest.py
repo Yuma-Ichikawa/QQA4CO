@@ -118,6 +118,49 @@ def test_visualize_page_handles_missing_run():
     )
 
 
+def test_universal_studio_renders_all_workflows_without_running():
+    at = AppTest.from_file(str(PAGE_DIR / "4_Universal.py"), default_timeout=60)
+    at.run()
+    assert not at.exception, at.exception
+    assert any("Universal Optimization Studio" in title.body for title in at.title)
+    tab_labels = [tab.label for tab in at.tabs]
+    for label in ("⚡ Mixed planning", "◎ Pareto studio", "◇ Black-box lab", "∑ TeX model"):
+        assert label in tab_labels
+
+
+def test_universal_studio_routes_reviewed_multiobjective_models_to_pareto():
+    import qqa  # noqa: PLC0415
+
+    spec = qqa.ModelSpec.from_dict(
+        {
+            "name": "ui-pareto",
+            "variables": [{"name": "x", "kind": "integer", "lower": 0, "upper": 4, "size": 1}],
+            "objectives": [
+                {
+                    "name": "cost",
+                    "direction": "min",
+                    "expression": "x",
+                    "unit": "",
+                },
+                {
+                    "name": "quality",
+                    "direction": "max",
+                    "expression": "x",
+                    "unit": "",
+                },
+            ],
+            "constraints": [],
+            "notes": "",
+        }
+    )
+    at = AppTest.from_file(str(PAGE_DIR / "4_Universal.py"), default_timeout=60)
+    at.session_state["universal_spec"] = spec
+    at.run()
+    assert not at.exception, at.exception
+    assert any("parallel Pareto solver" in info.body for info in at.info)
+    assert not any(toggle.label == "SCIP proof phase" for toggle in at.toggle)
+
+
 def test_solve_page_end_to_end_run():
     """Full Solve flow: wire up a tiny problem and click Run.
 
@@ -494,25 +537,16 @@ def test_solve_runs_with_default_mis():
     assert not at.exception, at.exception
 
 
-def test_custom_problem_available_by_default(monkeypatch):
-    """Custom-problem editor must be reachable from the UI without
-    requiring the ``QQA_ALLOW_CUSTOM`` env var (regression for the
-    deployment usability gap). The toggle and the snippet text area must
-    both render once Custom mode is enabled."""
+def test_custom_problem_disabled_by_default_on_shared_deployments(monkeypatch):
+    """Arbitrary Python execution must require an explicit operator opt-in."""
     monkeypatch.delenv("QQA_ALLOW_CUSTOM", raising=False)
     at = AppTest.from_file(str(APP), default_timeout=60)
     at.run()
     assert not at.exception
     toggles = [t for t in at.sidebar.toggle if "custom" in t.label.lower()]
-    assert toggles, "Custom-problem toggle should be available by default"
-    toggles[0].set_value(True)
-    at.run()
-    assert not at.exception
-    # The dropdown of curated examples should be on the page.
-    select_labels = [s.label for s in at.selectbox]
-    assert any("Template" in lab for lab in select_labels), (
-        "Curated example dropdown should be present in Custom mode"
-    )
+    assert not toggles, "Custom-problem execution must be opt-in"
+    captions = [caption.value for caption in at.sidebar.caption]
+    assert any("disabled" in caption.lower() for caption in captions)
 
 
 def test_visualize_tab_order_solution_first(tmp_path):

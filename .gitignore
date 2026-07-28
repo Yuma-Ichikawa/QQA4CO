@@ -16,6 +16,11 @@ dist/
 venv/
 env/
 
+# Local credentials and API configuration.  Keep the documented placeholder.
+.env
+.env.*
+!.env.example
+
 # Testing / coverage
 .pytest_cache/
 .ruff_cache/

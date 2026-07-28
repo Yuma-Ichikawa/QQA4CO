@@ -63,7 +63,8 @@ with open("result.pkl", "rb") as f:
     result = pickle.load(f)
 
 import qqa.visualization as viz
-viz.plot_history(result.history)   # or any other helper
+
+viz.plot_history(result.history)  # or any other helper
 ```
 
 The CLI does exactly this when you pass `--output result.pkl`. Use it
@@ -98,9 +99,11 @@ If your problem is not in the catalogue, wrap it in `qqa.UserProblem`:
 ```python
 import torch, qqa
 
+
 def my_loss(x: torch.Tensor) -> torch.Tensor:
     # x has shape (B, N) for binary problems
     return -x.sum(dim=-1) + 5 * (x[:, 0] - x[:, -1]).pow(2)
+
 
 problem = qqa.UserProblem(num_vars=64, variable_kind="binary", loss_fn=my_loss)
 result = qqa.anneal(problem, sol_size=128, num_epochs=1500)

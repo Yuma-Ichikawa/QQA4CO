@@ -78,6 +78,19 @@ NEW_PUBLIC_NAMES = [
     "MaxCliqueInstance",
     "MaxCutInstance",
     "MaximumIndependentSetInstance",
+    # Mixed binary/integer/real modelling API.
+    "Binary",
+    "Integer",
+    "Real",
+    "BinaryVariable",
+    "IntegerVariable",
+    "RealVariable",
+    "VariableSpace",
+    "Constraint",
+    "MixedProblem",
+    "MixedRelaxation",
+    "solve_mixed",
+    "save_html_report",
 ]
 
 

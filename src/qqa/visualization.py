@@ -18,6 +18,10 @@ Plot catalog:
 * :func:`plot_solution_heatmap` — spins / bits of the best solution.
 * :func:`plot_population_evolution` — parallel-population loss heat-map.
 * :func:`plot_population_embedding` — PCA trajectory of the population.
+* :func:`plot_result_dashboard` — one-screen convergence / solution /
+  constraint / schedule diagnostics.
+* :func:`plot_variable_solution` — domain-aware mixed-variable view.
+* :func:`plot_constraint_diagnostics` — feasibility and tolerance view.
 """
 
 from __future__ import annotations
@@ -873,3 +877,65 @@ def plot_population_embedding(
     if show:
         plt.show()
     return fig, ax
+
+
+# ---------------------------------------------------------------------------
+# Advanced diagnostics — implementation lives in qqa.visuals
+# ---------------------------------------------------------------------------
+
+
+def plot_result_dashboard(
+    result: AnnealResult,
+    problem: Any | None = None,
+    title: str = "QQA optimisation diagnostics",
+    backend: str = "plotly",
+    show: bool = True,
+):
+    """Plot convergence, solution values, constraints, and search dynamics."""
+    from qqa.visuals.dashboard import plot_result_dashboard as _plot
+
+    return _plot(
+        result,
+        problem,
+        backend=_resolve_backend(backend),
+        title=title,
+        show=show,
+    )
+
+
+def plot_variable_solution(
+    result: AnnealResult,
+    problem: Any | None = None,
+    title: str = "Solution by variable domain",
+    backend: str = "plotly",
+    show: bool = True,
+):
+    """Plot each value relative to its declared binary/integer/real bounds."""
+    from qqa.visuals.dashboard import plot_variable_solution as _plot
+
+    return _plot(
+        result,
+        problem,
+        backend=_resolve_backend(backend),
+        title=title,
+        show=show,
+    )
+
+
+def plot_constraint_diagnostics(
+    result: AnnealResult,
+    problem: Any | None = None,
+    title: str = "Constraint diagnostics",
+    backend: str = "plotly",
+    show: bool = True,
+):
+    """Plot raw constraint violations against their feasibility tolerances."""
+    from qqa.visuals.dashboard import plot_constraint_diagnostics as _plot
+
+    return _plot(
+        result,
+        problem,
+        backend=_resolve_backend(backend),
+        title=title,
+        show=show,
+    )

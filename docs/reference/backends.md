@@ -1,29 +1,28 @@
 # Backend reference
 
-QQA4CO ships three solver backends. They share the problem catalogue
-and the `AnnealResult` interface, so swapping between them is one
-function call (or one CLI flag).
+QQA4CO ships a core gradient solver, optional GNN variants, an exact SCIP
+hybrid, and sampling baselines. The high-level optimisation layer additionally
+provides dedicated Pareto and black-box solvers.
 
 ## At a glance
 
-| | **PQQA** | **CRA-PI-GNN** | **CPRA** |
-|---|---|---|---|
-| **Module** | `qqa.anneal` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
-| **CLI flag** | `--backend qqa` (default) | `--backend pignn` | `--backend cpra` |
-| **Install** | core `pip install qqa` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
-| **Returns** | `AnnealResult` | `AnnealResult` | `AnnealResult` (with `score["extra"]["replicas"]`) |
-| **Variable kinds** | binary, spin, categorical, batched-instance | binary (graph QUBO only) | binary (graph QUBO only) |
-| **Supported problems** | All 17 in catalogue | `mis`, `maxcut`, `maxclique`, `vertex_cover`, `graph_bisection` | Same as CRA-PI-GNN |
-| **Diversity** | Optional (`div_param`) | Single solution per run | R diverse solutions per run (`vari_param` or `replica_problems`) |
-| **Default LR** | `1.0` | `1e-4` | `1e-4` |
-| **Optimiser** | AdamW on raw `(B, N)` tensor | AdamW on a 2-layer GCN | AdamW on a multi-head GCN |
-| **GPU** | CUDA, MPS | CUDA (PyG-backed) | CUDA (PyG-backed) |
-| **Reference paper** | [arXiv 2409.00184](https://arxiv.org/abs/2409.00184) | [NeurIPS 2024](https://openreview.net/forum?id=ykACV1IhjD) | [TMLR 2025](https://openreview.net/forum?id=ix33zd5zCw) |
+| | **PQQA** | **QQA→SCIP** | **CRA-PI-GNN** | **CPRA** |
+|---|---|---|---|---|
+| **Module** | `qqa.anneal` | `qqa.solve_qqa_scip` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
+| **CLI flag** | `--backend qqa` | `--backend scip` | `--backend pignn` | `--backend cpra` |
+| **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
+| **Returns** | `AnnealResult` | `SCIPHybridResult` | `AnnealResult` | `AnnealResult` |
+| **Variables** | binary, integer, real, mixed, spin, categorical | binary QUBO | graph QUBO | graph QUBO |
+| **Role** | massively parallel heuristic | improve and certify | graph inductive bias | diverse GNN heads |
+| **GPU** | CUDA, MPS | QQA on GPU; SCIP on CPU | CUDA | CUDA |
 
 ## When to use which
 
 * **Default — PQQA.** The cheapest, most thoroughly tested, and works
   on every problem in the catalogue.
+* **QQA→SCIP** when the model is a QUBO and a proof, dual bound, or target
+  optimality gap matters. QQA supplies multiple incumbents; SCIP is never
+  allowed to worsen the returned solution.
 * **CRA-PI-GNN** when you specifically want the GNN inductive bias
   (smoothness over the graph) on large sparse graph problems and you
   can afford a long training run.
@@ -44,20 +43,29 @@ The same intuition appears under different names:
 | Per-replica penalty | n/a | n/a | `replica_problems=[...]` |
 | Early stopping | not yet | `tol`, `patience` | `tol`, `patience` |
 
-## API contract — the same `AnnealResult`
+## Result contracts
 
-All three backends populate at least these fields:
+The gradient-based trio populates at least these `AnnealResult` fields:
 
 ```python
 result.best_sol  # torch.Tensor, the winning configuration
 result.best_obj  # float, the loss value
-result.runtime   # float, wall-clock seconds
-result.score     # dict, human-readable summary
-result.history   # dict[str, list], per-epoch metrics
+result.runtime  # float, wall-clock seconds
+result.score  # dict, human-readable summary
+result.history  # dict[str, list], per-epoch metrics
 ```
 
 CPRA additionally fills `result.score["extra"]["replicas"]` with
 per-replica records.
+
+`SCIPHybridResult` keeps the same `best_sol`, `best_obj`, `runtime`, `score`,
+and `history` access while adding `scip_status`, `dual_bound`, `gap`,
+`proven_optimal`, `n_warm_starts`, and the complete `qqa_result`.
+
+`pareto_anneal` returns aligned nondominated `solutions` / `objectives`.
+`blackbox_optimize` returns every evaluated point plus a feasibility-first
+incumbent. These deliberately use feature-specific result types rather than
+forcing non-scalar optimisation into `AnnealResult`.
 
 ## Performance picture
 
@@ -76,7 +84,7 @@ ER-small, N=200), see the table reproduced from
   with `vari_param > 0`, which neither QQA nor CRA can do without
   multiple runs.
 
-## Adding a fourth backend
+## Adding another backend
 
 `qqa.pignn` is the canonical example of how a third-party can ship a
 backend that plugs into the same tooling. See [Extending QQA4CO →

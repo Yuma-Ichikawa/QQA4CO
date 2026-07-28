@@ -29,6 +29,48 @@ comparison if you only need to pick one entry point.
 
 ::: qqa.problems.user
 
+## Mixed-variable optimisation
+
+::: qqa.mixed
+
+::: qqa.mixed.problem
+
+::: qqa.mixed.variables
+
+::: qqa.reporting
+
+## Multi-objective optimisation
+
+::: qqa.multiobjective
+
+::: qqa.multiobjective.problem
+
+::: qqa.multiobjective.solver
+
+## Black-box optimisation
+
+::: qqa.blackbox
+
+::: qqa.blackbox.problem
+
+::: qqa.blackbox.solver
+
+## QQA × SCIP
+
+The functions below require `pip install "qqa[scip]"`.
+
+::: qqa.hybrid
+
+::: qqa.hybrid.scip
+
+## TeX modelling
+
+::: qqa.tex
+
+::: qqa.tex.schema
+
+::: qqa.tex.client
+
 ## Relaxations
 
 ::: qqa.relaxation

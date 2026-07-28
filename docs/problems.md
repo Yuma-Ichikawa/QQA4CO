@@ -96,6 +96,21 @@ onto a hard permutation after annealing (Sinkhorn-style projection).
 | `user_problem_from_source(src, name=...)` | parse a Python snippet that defines `problem = UserProblem(...)` or a `make_problem()` factory |
 | `load_problem_from_file(path)` | file-based counterpart used by the CLI via `--problem-file` |
 
+## Mixed binary, integer, and real models
+
+`MixedProblem` is the declarative API for bounded heterogeneous models.
+Variables have stable names and may be vectors:
+
+| Declaration | Domain |
+| --- | --- |
+| `Binary(name, size=1)` | `{0, 1}` |
+| `Integer(name, lower, upper, size=1)` | bounded integer grid |
+| `Real(name, lower, upper, size=1)` | bounded real interval |
+
+Objectives and `Constraint` functions receive a mapping of named, batched
+PyTorch tensors. See the [mixed optimisation guide](mixed-optimization.md)
+for complete examples, constraint scaling, warm starts, and GPU execution.
+
 ## Spin-glass and physics problems
 
 All spin problems use :class:`qqa.relaxation.SpinRelaxation`: internally

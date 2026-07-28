@@ -94,3 +94,50 @@ def test_fallback_warns_when_plotly_missing(monkeypatch, small_result):
         fig, _ = viz.plot_history(result, backend="plotly", show=False)
         assert any("plotly" in str(x.message).lower() for x in w)
     plt.close(fig)
+
+
+@pytest.fixture(scope="module")
+def mixed_result():
+    qqa.fix_seed(0)
+    problem = qqa.MixedProblem(
+        [qqa.Integer("units", 0, 8), qqa.Real("slack", 0.0, 2.0)],
+        lambda v: (v["units"] - 4).square() + v["slack"].square(),
+        constraints=[
+            qqa.Constraint(
+                lambda v: v["units"] + v["slack"],
+                sense=">=",
+                rhs=4,
+                name="minimum",
+            )
+        ],
+    )
+    return problem.solve(sol_size=16, num_epochs=100, verbose=False), problem
+
+
+def test_result_dashboard_matplotlib(mixed_result):
+    result, problem = mixed_result
+    fig, axes = viz.plot_result_dashboard(
+        result,
+        problem,
+        backend="matplotlib",
+        show=False,
+    )
+    assert axes.shape == (2, 2)
+    plt.close(fig)
+
+
+@pytest.mark.skipif(not _have_plotly(), reason="plotly not installed")
+def test_mixed_diagnostics_plotly_and_html_report(mixed_result, tmp_path):
+    import plotly.graph_objects as go
+
+    result, problem = mixed_result
+    dashboard = viz.plot_result_dashboard(result, problem, backend="plotly", show=False)
+    variables = viz.plot_variable_solution(result, problem, backend="plotly", show=False)
+    constraints = viz.plot_constraint_diagnostics(result, problem, backend="plotly", show=False)
+    assert all(isinstance(fig, go.Figure) for fig in (dashboard, variables, constraints))
+
+    output = qqa.save_html_report(result, problem, tmp_path / "report.html")
+    document = output.read_text(encoding="utf-8")
+    assert output.is_file()
+    assert "Machine-readable result JSON" in document
+    assert '"feasible": true' in document

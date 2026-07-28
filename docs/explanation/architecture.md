@@ -31,9 +31,20 @@ QQA4CO is a thin set of orthogonal contracts plus one solver loop:
                             └─────────────────────────────────────┘
 ```
 
-Everything else — the CLI, the Streamlit dashboard, the visualisation
-module, the optional `qqa.pignn` backend — is a *consumer* of these
-four contracts.
+The standard annealer remains the core engine. Specialised orchestrators are
+kept beside it rather than added as branches inside its hot loop:
+
+* `multiobjective/` assigns a scalarisation to each parallel replica and owns
+  its nondominated archive.
+* `blackbox/` replaces gradients with a surrogate and evaluation budget while
+  reusing typed mixed-variable domains.
+* `hybrid/scip.py` consumes a QQA population and hands it to an optional exact
+  solver.
+* `tex/` is a modelling front-end: it emits `MixedProblem` or
+  `MultiObjectiveProblem`, never executable model code.
+
+The CLI, Streamlit dashboard, visualisation modules, and optional backends are
+consumers of these public result contracts.
 
 ## Data flow for a single solve
 
@@ -89,6 +100,8 @@ four contracts.
 | New schedule | anywhere | n/a | Any `(epoch, T) -> float` callable |
 | New callback | `src/qqa/callbacks.py` (or external) | ~170 | Subclass `Callback` |
 | New backend | `src/qqa/<name>/` (e.g. `pignn/`) | ~700 reference | Return `AnnealResult` |
+| New modelling front-end | `src/qqa/<name>/` | varies | Compile into an existing problem contract |
+| New specialised optimiser | feature package `solver.py` | varies | Keep its result and plots beside the feature |
 
 See [Extending QQA4CO](../develop/extending.md) for worked examples of
 each.
