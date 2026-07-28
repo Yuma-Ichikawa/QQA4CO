@@ -126,6 +126,11 @@ class MixedProblem(COProblem):
         self.objective_label = objective_label
         self.objective_unit = objective_unit
         self.dtype = dtype
+        # ``solve_mixed`` may calibrate this once before annealing so
+        # constraint units cannot be dwarfed by a large monetary/scientific
+        # objective. Direct ``loss_fn`` users retain the exact declared
+        # weights because the default is one.
+        self.penalty_multiplier = 1.0
         self.num_vars = self.space.dimension
         self.num_nodes = self.space.dimension
         self.relaxation = MixedRelaxation(self.space)
@@ -171,7 +176,9 @@ class MixedProblem(COProblem):
 
     def loss_fn(self, values: torch.Tensor) -> torch.Tensor:
         values = self._ensure_batched(values)
-        return self.objective_values(values) + self.constraint_penalty(values)
+        return self.objective_values(values) + self.penalty_multiplier * self.constraint_penalty(
+            values
+        )
 
     def pack(self, values: dict, **kwargs) -> torch.Tensor:
         """Pack and validate one named solution."""
@@ -217,6 +224,7 @@ class MixedProblem(COProblem):
             "feasible": feasible,
             "extra": {
                 "penalized_loss": float(self.loss_fn(values)[0].item()),
+                "penalty_multiplier": float(self.penalty_multiplier),
                 "variables": solution,
                 "constraints": constraint_report,
             },

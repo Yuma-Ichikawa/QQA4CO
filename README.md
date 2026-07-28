@@ -61,17 +61,18 @@ with earlier QQA4CO releases (``import qqa``).
   </a>
 </p>
 
-The dashboard is a four-page Streamlit app that drives the same `qqa.anneal`
-solver this README documents — pick a problem, watch the relaxed variables
+The dashboard is a five-page Streamlit app that drives the same solver APIs
+this README documents — pick a problem, watch the relaxed variables
 discretise live, race PQQA against simulated annealing, and inspect the
 parallel population in 3D solution-space PCA / loss-spectrogram views.
 
 | Page | What you can do |
 | --- | --- |
-| **Home** | Pick from 19 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware. |
+| **Home** | Pick from 21 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware; the arbitrary-Python editor is trusted-local opt-in only. |
 | **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, polish (1-flip local search) and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
+| **Universal** | Solve a realistic mixed microgrid, generate a cost/emissions/resilience Pareto front on GPU, tune a constrained black-box process, or review and solve a TeX/JSON model with optional SCIP certification. |
 
 ### Or run it locally — same UI, your hardware
 
@@ -79,6 +80,11 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 pip install "qqa[gui]"        # pulls Streamlit + Plotly
 qqa gui                       # opens http://localhost:8501
 ```
+
+To enable the arbitrary-Python problem editor on a trusted local machine,
+launch with `QQA_ALLOW_CUSTOM=1 qqa gui`. It is disabled by default on public
+or shared deployments; the TeX/JSON modeller remains available through its
+restricted, non-evaluating expression grammar.
 
 Or with uv:
 
@@ -128,13 +134,15 @@ CUDA is picked up automatically when available.
    same `best_sol` / `best_obj` / `history` / `polished_sol` surface as
    `qqa.anneal`, so the Streamlit *Compare* page can race PQQA against
    any of them at a matched compute budget.
-5. **Universal optimisation workflows**: a one-run parallel Pareto solver,
-   budget-aware mixed-variable black-box optimisation, optional QQA→SCIP
-   refinement with optimality gaps, and a safe `qqa tex` interface that turns
-   TeX into an auditable declarative model through an OpenAI-compatible API.
+5. **Universal optimisation workflows**: a one-run GPU-parallel Pareto solver
+   with adaptive feasibility and restart recovery, resumable mixed-variable
+   black-box optimisation with expected improvement, optional QQA→SCIP QUBO
+   and mixed nonlinear refinement with optimality gaps, and a safe `qqa tex`
+   interface that turns TeX into an auditable declarative model through an
+   OpenAI-compatible API.
 6. **A polished Streamlit dashboard** (light / dark, live progress, parallel
    population view, per-problem solution viz, hyper-parameter sweeps) and a
-   `qqa` **CLI** (`solve / bench / gui / version`) for reproducible
+   `qqa` **CLI** (`solve / tex / example / doctor / bench / gui / version`) for reproducible
    experiments. A hosted instance lives at
    <https://parallelquasiquantum4co.streamlit.app/>.
 7. **MkDocs + Material reference docs** with auto-generated API pages, a
@@ -189,6 +197,15 @@ pip install qqa                # core
 pip install "qqa[plotly]"      # + interactive plots
 pip install "qqa[gui]"         # + Streamlit dashboard
 pip install "qqa[all]"         # everything
+```
+
+Check the installed capabilities, then run a complete real-world workflow:
+
+```bash
+qqa doctor
+qqa example list
+qqa example run microgrid-pareto --device auto --output-dir results/microgrid
+qqa example run process-blackbox --device auto --output-dir results/process
 ```
 
 ## Quickstart

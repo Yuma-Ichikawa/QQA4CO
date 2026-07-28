@@ -34,8 +34,79 @@ class ParetoResult:
         """Return variable-name views for every Pareto solution."""
         return problem.unpack(self.solutions)
 
-    def to_frame(self):
-        """Return a tidy pandas DataFrame for export or dashboards."""
+    @property
+    def minimize_objectives(self) -> torch.Tensor:
+        """Objectives transformed to a common minimisation convention."""
+        signs = self.objectives.new_tensor(
+            [1.0 if direction == "min" else -1.0 for direction in self.directions]
+        )
+        return self.objectives * signs
+
+    def knee_index(self) -> int:
+        """Return a scale-invariant compromise point nearest the ideal vector."""
+        values = self.minimize_objectives
+        lower = values.amin(dim=0)
+        span = (values.amax(dim=0) - lower).clamp_min(1e-12)
+        distance = ((values - lower) / span).square().sum(dim=1).sqrt()
+        return int(torch.argmin(distance).item())
+
+    def select(self, weights: list[float] | tuple[float, ...] | torch.Tensor | None = None) -> int:
+        """Select a compromise by normalised weighted achievement.
+
+        Passing no weights returns the geometric knee.  Positive weights are
+        normalised automatically and work for mixed min/max directions.
+        """
+        if weights is None:
+            return self.knee_index()
+        weights = torch.as_tensor(
+            weights, device=self.objectives.device, dtype=self.objectives.dtype
+        )
+        if weights.ndim != 1 or weights.numel() != self.objectives.shape[1]:
+            raise ValueError(f"weights must contain {self.objectives.shape[1]} values.")
+        if not torch.isfinite(weights).all() or torch.any(weights < 0) or weights.sum() <= 0:
+            raise ValueError("weights must be finite, non-negative, and not all zero.")
+        weights = weights / weights.sum()
+        values = self.minimize_objectives
+        lower = values.amin(dim=0)
+        normalised = (values - lower) / (values.amax(dim=0) - lower).clamp_min(1e-12)
+        return int(torch.argmin((normalised * weights).sum(dim=1)).item())
+
+    def hypervolume(
+        self, reference_point: list[float] | tuple[float, float] | torch.Tensor
+    ) -> float:
+        """Return exact dominated hypervolume for a two-objective front.
+
+        ``reference_point`` uses the original reported objective directions.
+        It must be weakly worse than every point in the front.
+        """
+        if self.objectives.shape[1] != 2:
+            raise ValueError("Exact hypervolume currently requires exactly two objectives.")
+        reference = torch.as_tensor(
+            reference_point,
+            device=self.objectives.device,
+            dtype=self.objectives.dtype,
+        )
+        if reference.shape != (2,) or not torch.isfinite(reference).all():
+            raise ValueError("reference_point must contain two finite values.")
+        signs = reference.new_tensor(
+            [1.0 if direction == "min" else -1.0 for direction in self.directions]
+        )
+        reference = reference * signs
+        values = self.minimize_objectives
+        if torch.any(values > reference + 1e-8):
+            raise ValueError("reference_point must be no better than every Pareto point.")
+        order = torch.argsort(values[:, 0])
+        ordered = values[order]
+        area = ordered.new_zeros(())
+        previous_y = reference[1]
+        for point in ordered:
+            height = (previous_y - point[1]).clamp_min(0)
+            area = area + (reference[0] - point[0]).clamp_min(0) * height
+            previous_y = torch.minimum(previous_y, point[1])
+        return float(area.item())
+
+    def to_frame(self, problem: MultiObjectiveProblem | None = None):
+        """Return objectives and, optionally, named decision variables."""
         try:
             import pandas as pd
         except ImportError as exc:  # pragma: no cover - core currently includes pandas
@@ -44,6 +115,17 @@ class ParetoResult:
             name: self.objectives[:, index].detach().cpu().numpy()
             for index, name in enumerate(self.objective_names)
         }
+        if problem is not None:
+            if not isinstance(problem, MultiObjectiveProblem):
+                raise TypeError("problem must be a MultiObjectiveProblem.")
+            named = self.named_solutions(problem)
+            for variable in problem.variables:
+                values = named[variable.name].detach().cpu()
+                if variable.size == 1:
+                    data[variable.name] = values.numpy()
+                else:
+                    for index in range(variable.size):
+                        data[f"{variable.name}[{index}]"] = values[:, index].numpy()
         return pd.DataFrame(data)
 
 
@@ -66,17 +148,33 @@ def _feasible_mask(problem: MultiObjectiveProblem, values: torch.Tensor) -> torc
     return feasible
 
 
-def nondominated_mask(values: torch.Tensor, *, tolerance: float = 1e-8) -> torch.Tensor:
-    """Return the Pareto-efficient rows of an all-minimisation matrix."""
+def nondominated_mask(
+    values: torch.Tensor,
+    *,
+    tolerance: float = 1e-8,
+    chunk_size: int = 1024,
+) -> torch.Tensor:
+    """Return the Pareto-efficient rows of an all-minimisation matrix.
+
+    Comparisons are chunked along the candidate axis.  This preserves exact
+    dominance while avoiding the ``O(points²*objectives)`` temporary tensor
+    that previously exhausted GPU memory on large archives.
+    """
     if values.ndim != 2:
         raise ValueError("values must have shape (points, objectives).")
+    if not isinstance(chunk_size, int) or chunk_size < 1:
+        raise ValueError("chunk_size must be a positive integer.")
     if values.shape[0] == 0:
         return torch.zeros(0, dtype=torch.bool, device=values.device)
-    left = values[:, None, :]
+    efficient = torch.ones(values.shape[0], dtype=torch.bool, device=values.device)
     right = values[None, :, :]
-    # right[j] dominates left[i]
-    dominates = (right <= left + tolerance).all(dim=2) & (right < left - tolerance).any(dim=2)
-    return ~dominates.any(dim=1)
+    for start in range(0, values.shape[0], chunk_size):
+        stop = min(start + chunk_size, values.shape[0])
+        left = values[start:stop, None, :]
+        # right[j] dominates left[i]
+        dominates = (right <= left + tolerance).all(dim=2) & (right < left - tolerance).any(dim=2)
+        efficient[start:stop] = ~dominates.any(dim=1)
+    return efficient
 
 
 def _crowding_distance(values: torch.Tensor) -> torch.Tensor:
@@ -98,6 +196,7 @@ def _update_archive(
     archive_solutions: torch.Tensor | None,
     *,
     max_size: int,
+    dominance_chunk_size: int,
 ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
     with torch.no_grad():
         feasible = _feasible_mask(problem, solutions)
@@ -111,7 +210,7 @@ def _update_archive(
             solutions = torch.cat([archive_solutions.to(solutions.device), solutions])
         solutions = torch.unique(solutions, dim=0)
         objective_min = problem.objective_matrix(solutions, minimize=True)
-        keep = nondominated_mask(objective_min)
+        keep = nondominated_mask(objective_min, chunk_size=dominance_chunk_size)
         solutions = solutions[keep]
         objective_min = objective_min[keep]
         if solutions.shape[0] > max_size:
@@ -135,12 +234,23 @@ def pareto_anneal(
     div_param: float = 0.01,
     archive_interval: int = 25,
     archive_size: int = 2048,
+    dominance_chunk_size: int = 1024,
     history_stride: int = 10,
+    constraint_strategy: str = "adaptive",
+    penalty_growth: float = 2.0,
+    restart_patience: int = 8,
+    restart_fraction: float = 0.15,
     seed: int = 0,
     device: str | torch.device = "cpu",
     verbose: bool = False,
 ) -> ParetoResult:
-    """Find a diverse Pareto front in one GPU-parallel optimisation run."""
+    """Find a diverse Pareto front in one GPU-parallel optimisation run.
+
+    Adaptive augmented-Lagrangian penalties focus replicas on feasibility
+    without requiring users to hand-tune one global coefficient.  When the
+    archive stagnates, a bounded fraction of the weakest replicas is restarted
+    to recover exploration while the live nondominated archive is preserved.
+    """
     if not isinstance(problem, MultiObjectiveProblem):
         raise TypeError("problem must be a MultiObjectiveProblem.")
     if not isinstance(sol_size, int) or sol_size < problem.num_objectives:
@@ -160,10 +270,18 @@ def pareto_anneal(
     for name, value in (
         ("archive_interval", archive_interval),
         ("archive_size", archive_size),
+        ("dominance_chunk_size", dominance_chunk_size),
         ("history_stride", history_stride),
+        ("restart_patience", restart_patience),
     ):
         if not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer.")
+    if constraint_strategy not in {"adaptive", "fixed"}:
+        raise ValueError("constraint_strategy must be 'adaptive' or 'fixed'.")
+    if not math.isfinite(penalty_growth) or penalty_growth < 1:
+        raise ValueError("penalty_growth must be finite and >= 1.")
+    if not math.isfinite(restart_fraction) or not 0 <= restart_fraction < 1:
+        raise ValueError("restart_fraction must be in [0, 1).")
 
     require_cuda_if_requested(device)
     torch.manual_seed(seed)
@@ -185,17 +303,30 @@ def pareto_anneal(
 
     archive_solutions: torch.Tensor | None = None
     archive_objectives: torch.Tensor | None = None
+    multipliers = latent.new_zeros(len(problem.constraints))
+    penalty_rho = 1.0
+    previous_mean_violation: torch.Tensor | None = None
+    best_archive_size = 0
+    stagnation_intervals = 0
+    restart_count = 0
     history: dict[str, list] = {
         "epoch": [],
         "pareto_size": [],
         "ideal": [],
         "nadir": [],
         "loss": [],
+        "feasible_ratio": [],
+        "penalty_rho": [],
+        "restarts": [],
     }
 
     projected = relaxation.project(latent)
     archive_solutions, archive_objectives = _update_archive(
-        problem, projected, archive_solutions, max_size=archive_size
+        problem,
+        projected,
+        archive_solutions,
+        max_size=archive_size,
+        dominance_chunk_size=dominance_chunk_size,
     )
 
     for epoch in range(num_epochs):
@@ -208,7 +339,26 @@ def pareto_anneal(
         normalised = (objective_min - ideal) / (nadir - ideal).clamp_min(1e-8)
         weighted = weights * normalised
         scalar = weighted.amax(dim=1) + augmentation * weighted.sum(dim=1)
-        constraint_loss = problem.constraint_penalty(values)
+        if problem.constraints:
+            violations = problem.constraint_violations(values)
+            violation_matrix = torch.stack(
+                [
+                    violations[constraint.name] / constraint.scale
+                    for constraint in problem.constraints
+                ],
+                dim=1,
+            )
+            feasible_ratio = float((violation_matrix <= 1e-8).all(dim=1).float().mean().item())
+            if constraint_strategy == "adaptive":
+                constraint_loss = (
+                    violation_matrix * multipliers + 0.5 * penalty_rho * violation_matrix.square()
+                ).sum(dim=1)
+            else:
+                constraint_loss = problem.constraint_penalty(values)
+        else:
+            violation_matrix = values.new_zeros((len(values), 0))
+            feasible_ratio = 1.0
+            constraint_loss = values.new_zeros(len(values))
         discrete_penalty = relaxation.penalty(latent, curve_rate)
         diversity = relaxation.diversity(latent)
         bg = float(schedule(epoch, num_epochs))
@@ -221,8 +371,43 @@ def pareto_anneal(
         if (epoch + 1) % archive_interval == 0 or epoch == num_epochs - 1:
             projected = relaxation.project(latent)
             archive_solutions, archive_objectives = _update_archive(
-                problem, projected, archive_solutions, max_size=archive_size
+                problem,
+                projected,
+                archive_solutions,
+                max_size=archive_size,
+                dominance_chunk_size=dominance_chunk_size,
             )
+            if problem.constraints and constraint_strategy == "adaptive":
+                mean_violation = violation_matrix.detach().mean(dim=0)
+                multipliers = (multipliers + penalty_rho * mean_violation).clamp_max(1e6)
+                if previous_mean_violation is not None and not bool(
+                    torch.all(mean_violation <= 0.9 * previous_mean_violation + 1e-10)
+                ):
+                    penalty_rho = min(1e6, penalty_rho * penalty_growth)
+                previous_mean_violation = mean_violation
+
+            current_archive_size = 0 if archive_solutions is None else len(archive_solutions)
+            if current_archive_size > best_archive_size:
+                best_archive_size = current_archive_size
+                stagnation_intervals = 0
+            else:
+                stagnation_intervals += 1
+            if (
+                restart_fraction > 0
+                and stagnation_intervals >= restart_patience
+                and sol_size > problem.num_objectives
+            ):
+                count = max(1, int(sol_size * restart_fraction))
+                worst = torch.topk(scalar.detach(), k=count).indices
+                with torch.no_grad():
+                    latent[worst].uniform_(0.0, 1.0)
+                    state = optimizer.state.get(latent, {})
+                    for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+                        value = state.get(key)
+                        if torch.is_tensor(value) and value.shape == latent.shape:
+                            value[worst].zero_()
+                restart_count += count
+                stagnation_intervals = 0
         if epoch % history_stride == 0 or epoch == num_epochs - 1:
             history["epoch"].append(epoch)
             history["pareto_size"].append(
@@ -231,6 +416,9 @@ def pareto_anneal(
             history["ideal"].append(ideal.detach().cpu().tolist())
             history["nadir"].append(nadir.detach().cpu().tolist())
             history["loss"].append(float(loss.detach().item()))
+            history["feasible_ratio"].append(feasible_ratio)
+            history["penalty_rho"].append(penalty_rho)
+            history["restarts"].append(restart_count)
         if verbose and (epoch % max(1, num_epochs // 10) == 0 or epoch == num_epochs - 1):
             size = 0 if archive_solutions is None else len(archive_solutions)
             print(f"[Pareto] epoch={epoch:5d} front={size:4d} loss={loss.item():.5g}")

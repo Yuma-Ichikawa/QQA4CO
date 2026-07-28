@@ -28,8 +28,17 @@ def test_cli_version_prints_version():
 def test_cli_help_describes_subcommands():
     out = _run("--help")
     assert out.returncode == 0
-    for cmd in ("solve", "tex", "bench", "gui", "version"):
+    for cmd in ("solve", "tex", "example", "doctor", "bench", "gui", "version"):
         assert cmd in out.stdout
+
+
+def test_cli_lists_realistic_examples_and_doctor_json():
+    listed = _run("example", "list")
+    assert listed.returncode == 0, listed.stderr
+    assert "microgrid-pareto" in listed.stdout
+    doctor = _run("doctor", "--json")
+    assert doctor.returncode == 0, doctor.stderr
+    assert '"recommended_device"' in doctor.stdout
 
 
 def test_cli_solve_small_mis():

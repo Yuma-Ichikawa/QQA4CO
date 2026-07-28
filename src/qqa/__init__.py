@@ -30,6 +30,13 @@ from importlib.metadata import version as _pkg_version
 
 from qqa import polish, warmstart
 from qqa.annealing import AnnealResult, anneal
+from qqa.applications import (
+    APPLICATIONS,
+    build_application,
+    build_microgrid_dispatch,
+    build_microgrid_pareto,
+    build_process_blackbox,
+)
 from qqa.blackbox import (
     BlackBoxConstraint,
     BlackBoxProblem,
@@ -45,7 +52,13 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
-from qqa.hybrid import SCIPHybridResult, solve_qqa_scip
+from qqa.hybrid import (
+    SCIPExpressionError,
+    SCIPHybridResult,
+    SCIPModelResult,
+    solve_qqa_scip,
+    solve_spec_scip,
+)
 from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
 from qqa.mixed import (
     Binary,
@@ -141,6 +154,7 @@ __all__ = [
     "QAP",
     "TSP",
     "AnnealResult",
+    "APPLICATIONS",
     "AutoDivTuner",
     "BalancedGraphPartition",
     "BlackBoxConstraint",
@@ -198,6 +212,8 @@ __all__ = [
     "Relaxation",
     "SAResult",
     "SCIPHybridResult",
+    "SCIPExpressionError",
+    "SCIPModelResult",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
@@ -209,6 +225,10 @@ __all__ = [
     "__version__",
     "anneal",
     "blackbox_optimize",
+    "build_application",
+    "build_microgrid_dispatch",
+    "build_microgrid_pareto",
+    "build_process_blackbox",
     "compile_tex",
     "discrete_langevin",
     "enable_tf32",
@@ -228,6 +248,7 @@ __all__ = [
     "simulated_annealing",
     "save_html_report",
     "solve_qqa_scip",
+    "solve_spec_scip",
     "solve_tex",
     "solve_mixed",
     "user_problem_from_source",

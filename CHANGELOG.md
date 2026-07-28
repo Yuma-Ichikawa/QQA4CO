@@ -6,6 +6,21 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Universal optimisation studio
+
+- Add realistic microgrid dispatch/Pareto and constrained process black-box
+  application builders plus `qqa example list|run`.
+- Add adaptive augmented-Lagrangian Pareto feasibility, stagnation restarts,
+  chunked exact dominance, knee/weighted selection, hypervolume, and
+  decision-variable DataFrame export.
+- Add expected-improvement and probability-of-feasibility black-box
+  acquisition, resumable campaigns, bounded local RBF fitting, GPU float32
+  surrogate auto-selection, metadata, and full evaluation export.
+- Add safe mixed nonlinear `ModelSpec` → PySCIPOpt compilation with QQA
+  multi-starts, exact constraints, dual bounds, gaps, and proof status.
+- Add `qqa doctor`, TeX file input, automatic QQA/SCIP routing, reviewed-model
+  printing, and the Streamlit Universal Optimization Studio.
+
 ### Added
 
 - **Universal optimisation layer**: one-shot reference-direction Pareto

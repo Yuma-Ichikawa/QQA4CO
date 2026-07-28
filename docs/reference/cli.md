@@ -163,6 +163,37 @@ TeX may also be piped through stdin:
 printf '%s' '\min_{n\in\mathbb{Z},0\le n\le 10}(n-4)^2' | qqa tex -
 ```
 
+Production-style file input and exact refinement:
+
+```bash
+qqa tex --file production-plan.tex --solver auto --device auto \
+  --output-model audited-model.json --output-result result.json \
+  --report result.html
+```
+
+`--solver auto` uses QQA→SCIP for a single objective when the `scip` extra is
+installed. `--show-model` prints the strict intermediate JSON. Use
+`--spec audited-model.json` for repeatable offline solving without an API key.
+
+## `qqa example`
+
+List and run packaged realistic applications:
+
+```bash
+qqa example list
+qqa example run microgrid-dispatch --output-dir results/dispatch
+qqa example run microgrid-pareto --device auto --output-dir results/pareto
+qqa example run process-blackbox --device auto --output-dir results/process
+```
+
+Each output directory contains machine-readable JSON plus CSV and/or a
+self-contained interactive HTML report.
+
+## `qqa doctor`
+
+`qqa doctor` reports Python, Torch, CUDA/GPU, SCIP, PyG, Streamlit, Plotly, and
+pandas capability. `qqa doctor --json` is suitable for support bundles and CI.
+
 ## `qqa gui`
 
 Launch the Streamlit dashboard in a subprocess. Reads the dashboard

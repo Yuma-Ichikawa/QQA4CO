@@ -4,12 +4,13 @@ Launch with ``uv run qqa gui`` or::
 
     uv run streamlit run app/streamlit_app.py
 
-The dashboard is a 4-page app:
+The dashboard is a 5-page app:
 
 * Home (this file) — pick a built-in or custom problem, set parameters, preview.
 * Solve — run QQA with live progress and a live parallel-population view.
 * Visualize — inspect history, best trajectory, and the best solution.
 * Compare — run a small sweep and inspect parallel-coordinates.
+* Universal — mixed, Pareto, black-box, and TeX/SCIP workflows.
 """
 
 from __future__ import annotations
@@ -36,11 +37,10 @@ from _common import (  # noqa: E402
 import qqa  # noqa: E402
 
 # The custom-problem editor runs user-supplied Python via ``exec`` inside
-# the Streamlit process. We expose it from the UI by default — this is a
-# public research tool, not a multi-tenant service — but make the security
-# trade-off explicit via a banner and an opt-out env var
-# (``QQA_ALLOW_CUSTOM=0`` hides the editor on shared deployments).
-ALLOW_CUSTOM = os.getenv("QQA_ALLOW_CUSTOM", "1") == "1"
+# the Streamlit process. Keep it disabled unless the operator explicitly
+# enables it on a trusted local deployment; a browser user must never gain
+# code execution on a shared/public server by default.
+ALLOW_CUSTOM = os.getenv("QQA_ALLOW_CUSTOM", "0") == "1"
 
 st.set_page_config(
     page_title="QQA dashboard",

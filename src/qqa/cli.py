@@ -15,9 +15,11 @@ extra runtime dependency.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import pickle
+import platform
 import shutil
 import subprocess
 import sys
@@ -368,6 +370,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Solve an already-audited QQA model JSON file without calling an API.",
     )
+    tex.add_argument(
+        "--file",
+        type=str,
+        default=None,
+        help="Read a TeX model from a UTF-8 .tex file and translate it through the API.",
+    )
     tex.add_argument("--api-base", type=str, default=None, help="OpenAI-compatible API base URL.")
     tex.add_argument("--model", type=str, default=None, help="Model id used for TeX translation.")
     tex.add_argument(
@@ -387,6 +395,19 @@ def build_parser() -> argparse.ArgumentParser:
     tex.add_argument("--device", type=str, default="cpu")
     tex.add_argument("--seed", type=int, default=0)
     tex.add_argument(
+        "--solver",
+        choices=("auto", "qqa", "scip"),
+        default="auto",
+        help=(
+            "Numerical solver. auto uses QQA→SCIP for single-objective models "
+            "when qqa[scip] is installed, otherwise QQA."
+        ),
+    )
+    tex.add_argument("--scip-time-limit", type=float, default=60.0)
+    tex.add_argument("--scip-gap", type=float, default=0.0)
+    tex.add_argument("--scip-threads", type=int, default=1)
+    tex.add_argument("--scip-warm-starts", type=int, default=32)
+    tex.add_argument(
         "--dry-run",
         action="store_true",
         help="Translate and validate the model but do not solve it.",
@@ -404,7 +425,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write complete solution/front JSON instead of flooding stdout.",
     )
     tex.add_argument("--report", type=str, default=None, help="Write an interactive HTML report.")
+    tex.add_argument(
+        "--show-model",
+        action="store_true",
+        help="Print the validated declarative model before solving.",
+    )
     tex.add_argument("--quiet", action="store_true")
+
+    example = sub.add_parser(
+        "example",
+        help="List or run realistic mixed, Pareto, and black-box applications.",
+    )
+    example.add_argument("action", choices=("list", "run"), nargs="?", default="list")
+    example.add_argument(
+        "name",
+        nargs="?",
+        choices=("microgrid-dispatch", "microgrid-pareto", "process-blackbox"),
+    )
+    example.add_argument("--device", default="auto")
+    example.add_argument("--sol-size", type=int, default=512)
+    example.add_argument("--epochs", type=int, default=1200)
+    example.add_argument("--budget", type=int, default=96)
+    example.add_argument("--batch-size", type=int, default=8)
+    example.add_argument("--workers", type=int, default=4)
+    example.add_argument("--seed", type=int, default=0)
+    example.add_argument(
+        "--output-dir",
+        default=None,
+        help="Write JSON, CSV, and an interactive HTML report into this directory.",
+    )
+    example.add_argument("--quiet", action="store_true")
+
+    doctor = sub.add_parser("doctor", help="Check devices and optional solver/UI capabilities.")
+    doctor.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     gui = sub.add_parser("gui", help="Launch the Streamlit GUI.")
     gui.add_argument("--port", type=int, default=8501)
@@ -424,6 +477,14 @@ def _cmd_version() -> int:
 
     print(qqa.__version__)
     return 0
+
+
+def _resolve_device(device: str) -> str:
+    if device != "auto":
+        return device
+    import torch
+
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _build_problem(args: argparse.Namespace):
@@ -575,6 +636,7 @@ def _build_replica_problems(args: argparse.Namespace, base_problem) -> list | No
 def _cmd_solve(args: argparse.Namespace) -> int:
     import qqa
 
+    args.device = _resolve_device(args.device)
     problem = _build_problem(args)
 
     backend = getattr(args, "backend", "qqa")
@@ -681,20 +743,23 @@ def _cmd_solve(args: argparse.Namespace) -> int:
     else:
         default_lr = 0.05 if isinstance(problem, qqa.MixedProblem) else 1.0
         qqa_lr = args.learning_rate if args.learning_rate is not None else default_lr
-        result = qqa.anneal(
-            problem,
-            sol_size=args.sol_size,
-            learning_rate=qqa_lr,
-            temp=args.temp,
-            min_bg=args.min_bg,
-            max_bg=args.max_bg,
-            curve_rate=args.curve_rate,
-            div_param=args.div_param,
-            num_epochs=args.epochs,
-            device=args.device,
-            polish=not args.no_polish,
-            verbose=not args.quiet,
-        )
+        solver_kwargs = {
+            "sol_size": args.sol_size,
+            "learning_rate": qqa_lr,
+            "temp": args.temp,
+            "min_bg": args.min_bg,
+            "max_bg": args.max_bg,
+            "curve_rate": args.curve_rate,
+            "div_param": args.div_param,
+            "num_epochs": args.epochs,
+            "device": args.device,
+            "polish": not args.no_polish,
+            "verbose": not args.quiet,
+        }
+        if isinstance(problem, qqa.MixedProblem):
+            result = problem.solve(**solver_kwargs)
+        else:
+            result = qqa.anneal(problem, **solver_kwargs)
     print("")
     label = args.problem or f"file:{args.problem_file}"
     size = (
@@ -741,6 +806,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
 def _cmd_bench(args: argparse.Namespace) -> int:
     import qqa
 
+    args.device = _resolve_device(args.device)
     qqa.fix_seed(args.seed)
     if args.preset == "er-small":
         from qqa import datasets
@@ -905,6 +971,148 @@ def _cmd_bench_plot(args: argparse.Namespace) -> int:
     return rc
 
 
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    import torch
+
+    optional = {
+        "scip": importlib.util.find_spec("pyscipopt") is not None,
+        "pignn": importlib.util.find_spec("torch_geometric") is not None,
+        "streamlit": importlib.util.find_spec("streamlit") is not None,
+        "plotly": importlib.util.find_spec("plotly") is not None,
+        "pandas": importlib.util.find_spec("pandas") is not None,
+    }
+    payload = {
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_version": torch.version.cuda,
+        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "recommended_device": _resolve_device("auto"),
+        "optional": optional,
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(f"python     : {payload['python']}")
+        print(f"torch      : {payload['torch']}")
+        print(f"device     : {payload['recommended_device']}")
+        print(f"gpu        : {payload['gpu'] or 'not available'}")
+        for name, available in optional.items():
+            print(f"{name:<11}: {'ready' if available else 'not installed'}")
+    return 0
+
+
+def _cmd_example(args: argparse.Namespace) -> int:
+    import qqa
+
+    if args.action == "list":
+        descriptions = {
+            "microgrid-dispatch": "mixed unit commitment, storage, reserve, and dispatch",
+            "microgrid-pareto": "cost/emissions/resilience Pareto planning",
+            "process-blackbox": "constrained simulator-style process tuning",
+        }
+        for name in qqa.APPLICATIONS:
+            print(f"{name:<22} {descriptions[name]}")
+        return 0
+    if args.name is None:
+        raise SystemExit("[qqa example] `run` requires an application name.")
+
+    device = _resolve_device(args.device)
+    qqa.fix_seed(args.seed)
+    problem = qqa.build_application(args.name)
+    output_dir = None
+    if args.output_dir:
+        output_dir = Path(args.output_dir).expanduser().resolve()
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    if isinstance(problem, qqa.MultiObjectiveProblem):
+        result = problem.solve_pareto(
+            sol_size=args.sol_size,
+            num_epochs=args.epochs,
+            device=device,
+            seed=args.seed,
+            verbose=not args.quiet,
+        )
+        knee = result.select()
+        payload = {
+            "application": args.name,
+            "device": device,
+            "pareto_size": len(result.solutions),
+            "objective_names": list(result.objective_names),
+            "knee_index": knee,
+            "knee_objectives": result.objectives[knee].detach().cpu().tolist(),
+            "knee_solution": result.solutions[knee].detach().cpu().tolist(),
+            "runtime": result.runtime,
+        }
+        print(f"pareto_size: {payload['pareto_size']}")
+        print(f"knee       : {json.dumps(payload['knee_objectives'])}")
+        if output_dir is not None:
+            result.to_frame(problem).to_csv(output_dir / "pareto.csv", index=False)
+            figure = qqa.plot_pareto(result, show=False, title="Microgrid planning Pareto front")
+            figure.write_html(output_dir / "pareto.html", include_plotlyjs=True, full_html=True)
+    elif isinstance(problem, qqa.BlackBoxProblem):
+        result = problem.solve(
+            budget=args.budget,
+            batch_size=args.batch_size,
+            workers=args.workers,
+            device=device,
+            seed=args.seed,
+            verbose=not args.quiet,
+        )
+        payload = {
+            "application": args.name,
+            "device": device,
+            "best_point": result.best_point,
+            "best_value": result.best_value,
+            "feasible": result.feasible,
+            "total_violation": result.total_violation,
+            "evaluations": result.evaluations,
+            "runtime": result.runtime,
+            "metadata": result.metadata,
+        }
+        print(f"best_value : {result.best_value:.8g}")
+        print(f"feasible   : {result.feasible}")
+        print(f"best_point : {json.dumps(result.best_point)}")
+        if output_dir is not None:
+            result.to_frame(problem).to_csv(output_dir / "evaluations.csv", index=False)
+            figure = qqa.plot_blackbox(
+                result,
+                show=False,
+                title="Process black-box optimisation",
+            )
+            figure.write_html(output_dir / "blackbox.html", include_plotlyjs=True, full_html=True)
+    else:
+        result = problem.solve(
+            sol_size=args.sol_size,
+            num_epochs=args.epochs,
+            device=device,
+            verbose=not args.quiet,
+        )
+        payload = {
+            "application": args.name,
+            "device": device,
+            "best_loss": result.best_obj,
+            "score": result.score,
+            "solution": result.best_sol.detach().cpu().tolist(),
+            "runtime": result.runtime,
+        }
+        print(f"best_loss  : {result.best_obj:.8g}")
+        print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+        if output_dir is not None:
+            qqa.save_html_report(result, problem, output_dir / "dispatch.html")
+
+    print(f"runtime    : {result.runtime:.4f} s")
+    if output_dir is not None:
+        result_path = output_dir / "result.json"
+        result_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"artifacts  : {output_dir}")
+    return 0
+
+
 def _resolve_streamlit_app() -> Path | None:
     """Locate ``app/streamlit_app.py`` for both wheel and source installs.
 
@@ -971,14 +1179,23 @@ def _cmd_gui(args: argparse.Namespace) -> int:
 def _cmd_tex(args: argparse.Namespace) -> int:
     import qqa
 
-    if bool(args.tex) == bool(args.spec):
-        raise SystemExit("[qqa tex] provide exactly one TeX string (or '-') or --spec FILE.")
+    sources = sum(value is not None for value in (args.tex, args.spec, args.file))
+    if sources != 1:
+        raise SystemExit(
+            "[qqa tex] provide exactly one TeX string (or '-'), --file MODEL.tex, "
+            "or --spec MODEL.json."
+        )
+    args.device = _resolve_device(args.device)
     qqa.fix_seed(args.seed)
     if args.spec:
         spec_path = Path(args.spec).expanduser().resolve()
         spec = qqa.ModelSpec.from_json(spec_path.read_text(encoding="utf-8"))
     else:
-        source = sys.stdin.read() if args.tex == "-" else args.tex
+        if args.file:
+            tex_path = Path(args.file).expanduser().resolve()
+            source = tex_path.read_text(encoding="utf-8")
+        else:
+            source = sys.stdin.read() if args.tex == "-" else args.tex
         client = qqa.OpenAICompatibleClient(
             base_url=args.api_base,
             model=args.model,
@@ -987,6 +1204,8 @@ def _cmd_tex(args: argparse.Namespace) -> int:
             timeout=args.timeout,
         )
         spec = qqa.compile_tex(source, client=client)
+    if args.show_model:
+        print(spec.to_json())
 
     if args.output_model:
         output = Path(args.output_model).expanduser().resolve()
@@ -1004,6 +1223,11 @@ def _cmd_tex(args: argparse.Namespace) -> int:
         return 0
 
     if isinstance(problem, qqa.MultiObjectiveProblem):
+        if args.solver == "scip":
+            raise SystemExit(
+                "[qqa tex] --solver scip currently accepts one objective; "
+                "use --solver qqa for a one-run parallel Pareto front."
+            )
         result = problem.solve_pareto(
             sol_size=args.sol_size,
             num_epochs=args.epochs,
@@ -1028,20 +1252,62 @@ def _cmd_tex(args: argparse.Namespace) -> int:
             figure.write_html(report_path, include_plotlyjs=True, full_html=True)
             print(f"report     : {report_path}")
     else:
-        result = problem.solve(
-            sol_size=args.sol_size,
-            num_epochs=args.epochs,
-            device=args.device,
-            verbose=not args.quiet,
+        use_scip = args.solver == "scip" or (
+            args.solver == "auto" and importlib.util.find_spec("pyscipopt") is not None
         )
-        print(f"best_loss  : {result.best_obj}")
-        print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
-        print(f"runtime    : {result.runtime:.4f} s")
-        result_payload = {
-            "best_loss": result.best_obj,
-            "score": result.score,
-            "solution": result.best_sol.detach().cpu().tolist(),
-        }
+        if use_scip:
+            result = qqa.solve_spec_scip(
+                spec,
+                qqa_kwargs={
+                    "sol_size": args.sol_size,
+                    "num_epochs": args.epochs,
+                    "device": args.device,
+                    "verbose": not args.quiet,
+                },
+                time_limit=args.scip_time_limit,
+                relative_gap=args.scip_gap,
+                max_warm_starts=args.scip_warm_starts,
+                threads=args.scip_threads,
+                verbose=not args.quiet,
+            )
+            print("solver     : qqa+scip")
+            print(f"scip_status: {result.scip_status}")
+            print(f"gap        : {result.gap}")
+            print(f"dual_bound : {result.dual_bound}")
+            print(f"best_value : {result.objective_value}")
+            print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+            print(f"runtime    : {result.runtime:.4f} s")
+            result_payload = {
+                "solver": "qqa+scip",
+                "best_value": result.objective_value,
+                "solver_loss": result.solver_loss,
+                "score": result.score,
+                "solution": result.best_sol.detach().cpu().tolist(),
+                "scip_status": result.scip_status,
+                "gap": result.gap,
+                "dual_bound": result.dual_bound,
+                "proven_optimal": result.proven_optimal,
+            }
+        else:
+            if args.solver == "auto":
+                print("solver     : qqa (SCIP extra not installed)")
+            else:
+                print("solver     : qqa")
+            result = problem.solve(
+                sol_size=args.sol_size,
+                num_epochs=args.epochs,
+                device=args.device,
+                verbose=not args.quiet,
+            )
+            print(f"best_loss  : {result.best_obj}")
+            print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+            print(f"runtime    : {result.runtime:.4f} s")
+            result_payload = {
+                "solver": "qqa",
+                "best_loss": result.best_obj,
+                "score": result.score,
+                "solution": result.best_sol.detach().cpu().tolist(),
+            }
         if args.report:
             report = qqa.save_html_report(result, problem, args.report)
             print(f"report     : {report}")
@@ -1076,6 +1342,10 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bench_plot(args)
     if args.command == "tex":
         return _cmd_tex(args)
+    if args.command == "example":
+        return _cmd_example(args)
+    if args.command == "doctor":
+        return _cmd_doctor(args)
     if args.command == "gui":
         return _cmd_gui(args)
     parser.error(f"Unknown command {args.command!r}")
