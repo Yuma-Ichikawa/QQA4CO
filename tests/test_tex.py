@@ -12,6 +12,13 @@ from qqa.tex.expressions import UnsafeExpressionError
 from qqa.tex.schema import MAX_CONSTRAINTS, MAX_OBJECTIVES, MAX_TOTAL_DIMENSION
 
 
+@pytest.fixture(autouse=True)
+def _generic_llm_profile(monkeypatch):
+    """Keep transport tests provider-neutral and independent of user config."""
+    monkeypatch.setenv("QQA_LLM_BASE_URL", "https://api.example.com")
+    monkeypatch.setenv("QQA_LLM_MODEL", "test-model")
+
+
 def _spec_dict(expression: str = "square(x - 2) + square(n - 3)") -> dict:
     return {
         "name": "tex-quadratic",
@@ -97,8 +104,19 @@ def test_cli_solves_audited_spec_without_api_key(tmp_path, capsys):
 
 def test_client_requires_environment_key(monkeypatch):
     monkeypatch.delenv("QQA_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("QQA_LLM_API_KEY", raising=False)
     with pytest.raises(ValueError, match="QQA_LLM_API_KEY"):
+        qqa.OpenAICompatibleClient()
+
+
+def test_client_requires_provider_neutral_endpoint_profile(monkeypatch):
+    monkeypatch.setenv("QQA_LLM_API_KEY", "test-key")
+    monkeypatch.delenv("QQA_LLM_BASE_URL")
+    with pytest.raises(ValueError, match="QQA_LLM_BASE_URL"):
+        qqa.OpenAICompatibleClient()
+
+    monkeypatch.setenv("QQA_LLM_BASE_URL", "https://api.example.com")
+    monkeypatch.delenv("QQA_LLM_MODEL")
+    with pytest.raises(ValueError, match="QQA_LLM_MODEL"):
         qqa.OpenAICompatibleClient()
 
 

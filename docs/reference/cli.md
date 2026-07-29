@@ -153,6 +153,8 @@ route chosen by trusted code, and solve:
 
 ```bash
 export QQA_LLM_API_KEY='…'
+export QQA_LLM_BASE_URL='https://api.example.com'
+export QQA_LLM_MODEL='your-model-id'
 
 qqa ask \
   "Choose integer batches in [0,20] and real overtime in [0,8]. \
@@ -205,10 +207,10 @@ through `qqa.BlackBoxProblem`. QQA must not invent a missing evaluator. Use
 execution.
 
 The API key deliberately has no command-line flag, avoiding shell-history and
-process-list exposure. `QQA_LLM_API_KEY` is preferred;
-`QQA_LLM_API_KEY` is accepted only as a legacy fallback. Endpoint and
-model profiles use `QQA_LLM_BASE_URL` and `QQA_LLM_MODEL`, or the corresponding
-`--api-base`, `--model`, and `--api-style` options.
+process-list exposure. Configure it as `QQA_LLM_API_KEY`. Endpoint and model
+profiles use `QQA_LLM_BASE_URL` and `QQA_LLM_MODEL`, or the corresponding
+`--api-base`, `--model`, and `--api-style` options. QQA embeds no
+provider-specific endpoint or model default.
 
 The full reviewed workflow is also available in the
 [natural-language optimisation Colab](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/12_natural_language_optimization_colab.ipynb).
@@ -220,6 +222,8 @@ or Messages endpoint, validate the declarative model locally, and solve it:
 
 ```bash
 export QQA_LLM_API_KEY='…'
+export QQA_LLM_BASE_URL='https://api.example.com'
+export QQA_LLM_MODEL='your-model-id'
 qqa tex '\min_{x\in[-5,5]} (x-1.5)^2' \
   --device cuda --output-model model.json --report result.html
 ```

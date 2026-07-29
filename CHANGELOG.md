@@ -8,6 +8,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Universal optimisation studio
 
+- Remove provider-specific endpoint, model, and legacy credential identifiers
+  from the library, UI, documentation, and notebooks; API profiles now use
+  only the generic `QQA_LLM_*` configuration.
 - Harden optional SCIP capability detection, TeX/API trust boundaries, model
   size/type validation, finite mixed-variable inputs, Pareto result contracts,
   and black-box resume/output validation; stabilise zero-regularisation RBF

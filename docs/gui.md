@@ -109,7 +109,7 @@ export QQA_LLM_MODEL='your-model'
 qqa gui
 ```
 
-`QQA_LLM_API_KEY` remains a legacy fallback. Never commit `.env` or
+QQA embeds no provider-specific endpoint or model. Never commit `.env` or
 `.streamlit/secrets.toml`; both are ignored by this repository. A key entered
 in the password widget is used for the translation request and is not included
 in the model, downloads, reports, or logs. TLS verification is enabled by

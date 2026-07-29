@@ -194,7 +194,7 @@ with ask_tab:
             "Black-box": "blackbox",
         }[workflow_label]
         with st.expander("Model API", expanded=False):
-            configured_key = bool(os.getenv("QQA_LLM_API_KEY") or os.getenv("QQA_LLM_API_KEY"))
+            configured_key = bool(os.getenv("QQA_LLM_API_KEY"))
             api_key = st.text_input(
                 "API key",
                 type="password",
@@ -209,13 +209,22 @@ with ask_tab:
             api_base = st.text_input(
                 "Compatible base URL",
                 value=qqa.tex.DEFAULT_BASE_URL,
+                placeholder="https://api.example.com",
                 key="ask_api_base",
             )
             model_name = st.text_input(
                 "Model",
                 value=qqa.tex.DEFAULT_MODEL,
+                placeholder="your-model-id",
                 key="ask_model",
             )
+            if (
+                os.getenv("QQA_LLM_BASE_URL")
+                and os.getenv("QQA_LLM_MODEL")
+                and not api_base
+                and not model_name
+            ):
+                st.caption("Using the endpoint profile from the server environment.")
             insecure = st.checkbox(
                 "Trusted private gateway uses a non-standard certificate",
                 key="ask_insecure",
@@ -575,14 +584,22 @@ with tex_tab:
             height=170,
         )
         api_key = st.text_input("API key", type="password")
-        api_base = st.text_input("OpenAI-compatible base URL", value=qqa.tex.DEFAULT_BASE_URL)
-        model_name = st.text_input("Model", value=qqa.tex.DEFAULT_MODEL)
+        api_base = st.text_input(
+            "OpenAI-compatible base URL",
+            value=qqa.tex.DEFAULT_BASE_URL,
+            placeholder="https://api.example.com",
+        )
+        model_name = st.text_input(
+            "Model",
+            value=qqa.tex.DEFAULT_MODEL,
+            placeholder="your-model-id",
+        )
         insecure = st.checkbox("Trusted private gateway uses a non-standard certificate")
         spec_digest = hashlib.sha256(
             ("tex\0" + tex_source + "\0" + api_base + "\0" + model_name).encode()
         ).hexdigest()
         if st.button("Translate & validate TeX", use_container_width=True):
-            configured_key = bool(os.getenv("QQA_LLM_API_KEY") or os.getenv("QQA_LLM_API_KEY"))
+            configured_key = bool(os.getenv("QQA_LLM_API_KEY"))
             if not api_key and not configured_key:
                 st.error("Enter an API key for this in-memory request.")
             else:

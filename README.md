@@ -21,6 +21,8 @@ The shortest entry point is now a description of the decision itself:
 
 ```bash
 export QQA_LLM_API_KEY='…'  # environment only; never commit API keys
+export QQA_LLM_BASE_URL='https://api.example.com'
+export QQA_LLM_MODEL='your-model-id'
 qqa ask "Choose integer batches from 0 to 20 and real overtime from 0 to 8. \
 Minimize 3*batches + square(overtime), subject to 4*batches + overtime >= 45."
 ```
@@ -234,11 +236,17 @@ qqa example run process-blackbox --device auto --output-dir results/process
 ### Natural language to an audited solver plan
 
 Natural-language translation requires an OpenAI-compatible endpoint. Keep its
-key in `QQA_LLM_API_KEY`; the legacy `QQA_LLM_API_KEY` name remains
-accepted for compatibility.
+key, base URL, and model ID in the provider-neutral `QQA_LLM_*` environment
+variables.
 
 ```python
+import os
 import qqa
+
+# Configure these in the shell or a secret manager, never in source control.
+assert os.environ.get("QQA_LLM_API_KEY")
+assert os.environ.get("QQA_LLM_BASE_URL")
+assert os.environ.get("QQA_LLM_MODEL")
 
 answer = qqa.ask(
     """
@@ -369,13 +377,15 @@ your environment and use:
 
 ```bash
 export QQA_LLM_API_KEY='…'  # never put this in Git
-qqa tex '\min_{x\in\mathbb{R},\,n\in\mathbb{Z}} (x-2)^2+(n-3)^2' --insecure
+export QQA_LLM_BASE_URL='https://api.example.com'
+export QQA_LLM_MODEL='your-model-id'
+qqa tex '\min_{x\in\mathbb{R},\,n\in\mathbb{Z}} (x-2)^2+(n-3)^2'
 ```
 
 The generated JSON is schema-validated and interpreted without `eval` or
-`exec`; `--insecure` is needed only for the configured private development
-gateway's non-standard certificate. Add `--output-model model.json --dry-run`
-to audit the model before solving.
+`exec`. TLS verification is enabled by default; use `--insecure` only for a
+trusted development endpoint with a non-standard certificate. Add
+`--output-model model.json --dry-run` to audit the model before solving.
 See the [universal optimisation guide](docs/universal-optimization.md) and
 [real-world Colab notebook](examples/11_real_world_optimization_studio.ipynb),
 which runs mixed microgrid dispatch, cost/emissions/resilience planning,

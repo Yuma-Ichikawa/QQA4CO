@@ -377,7 +377,20 @@ def nb12():
             'if not os.environ.get("QQA_LLM_API_KEY"):\n'
             '    key = getpass.getpass("Compatible API key (leave blank for offline cells): ")\n'
             "    if key:\n"
-            '        os.environ["QQA_LLM_API_KEY"] = key',
+            '        os.environ["QQA_LLM_API_KEY"] = key\n'
+            'if os.environ.get("QQA_LLM_API_KEY") and not os.environ.get("QQA_LLM_BASE_URL"):\n'
+            '    base_url = input("OpenAI-compatible base URL: ").strip()\n'
+            "    if base_url:\n"
+            '        os.environ["QQA_LLM_BASE_URL"] = base_url\n'
+            'if os.environ.get("QQA_LLM_API_KEY") and not os.environ.get("QQA_LLM_MODEL"):\n'
+            '    model_id = input("Model ID: ").strip()\n'
+            "    if model_id:\n"
+            '        os.environ["QQA_LLM_MODEL"] = model_id\n'
+            "live_api_ready = all(\n"
+            "    os.environ.get(name)\n"
+            '    for name in ("QQA_LLM_API_KEY", "QQA_LLM_BASE_URL", "QQA_LLM_MODEL")\n'
+            ")\n"
+            'print("Live API profile ready:", live_api_ready)',
         ),
         (
             "md",
@@ -443,7 +456,7 @@ def nb12():
             "plant's production to its opening decision. Use the numerical bounds and\n"
             "coefficients from the reviewed production example above.\n"
             '"""\n'
-            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "if live_api_ready:\n"
             "    single = qqa.ask(\n"
             "        single_request,\n"
             '        solver="auto",\n'
@@ -455,7 +468,7 @@ def nb12():
             '    display(single.plan.to_dict()["routing"])\n'
             "    display(single.result.score)\n"
             "else:\n"
-            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+            '    print("Set the QQA_LLM_* API profile to run this live translation.")',
         ),
         (
             "md",
@@ -472,7 +485,7 @@ def nb12():
             "activation, and demand constraints. Give every variable an explicit,\n"
             "realistic finite bound and record assumptions.\n"
             '"""\n'
-            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "if live_api_ready:\n"
             "    pareto = qqa.ask(\n"
             "        pareto_request,\n"
             '        solver="auto",\n'
@@ -484,7 +497,7 @@ def nb12():
             "    qqa.plot_pareto(pareto.result)\n"
             "    qqa.plot_pareto_diagnostics(pareto.result)\n"
             "else:\n"
-            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+            '    print("Set the QQA_LLM_* API profile to run this live translation.")',
         ),
         (
             "md",
@@ -501,7 +514,7 @@ def nb12():
             "Minimize (reactors-4)^2 + ((temperature-410)/30)^2 with at most 96\n"
             "parallelizable evaluations, subject to reactors*temperature <= 2800.\n"
             '"""\n'
-            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "if live_api_ready:\n"
             "    blackbox = qqa.ask(\n"
             "        blackbox_request,\n"
             '        solver="auto",\n'
@@ -514,13 +527,14 @@ def nb12():
             "    display(blackbox.result.best_point)\n"
             "    qqa.plot_blackbox(blackbox.result)\n"
             "else:\n"
-            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+            '    print("Set the QQA_LLM_* API profile to run this live translation.")',
         ),
         (
             "md",
             "## CLI equivalents\n\n"
-            "The key is read from `QQA_LLM_API_KEY`; it never appears in the command "
-            "line, generated model, result JSON, or report.",
+            "The provider-neutral profile is read from `QQA_LLM_API_KEY`, "
+            "`QQA_LLM_BASE_URL`, and `QQA_LLM_MODEL`. The key never appears in the "
+            "command line, generated model, result JSON, or report.",
         ),
         (
             "code",

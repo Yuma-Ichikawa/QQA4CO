@@ -15,8 +15,11 @@ from typing import Literal
 
 from qqa.tex.schema import MODEL_JSON_SCHEMA
 
-DEFAULT_BASE_URL = "https://api.example.com"
-DEFAULT_MODEL = "your-model-id"
+# QQA intentionally ships no provider-specific endpoint or model. Empty
+# constants preserve the public configuration surface while requiring users
+# to select their own OpenAI-compatible profile explicitly.
+DEFAULT_BASE_URL = ""
+DEFAULT_MODEL = ""
 MAX_PROMPT_CHARACTERS = 250_000
 
 
@@ -130,18 +133,19 @@ class OpenAICompatibleClient:
         max_output_tokens: int = 4096,
         max_response_bytes: int = 2_000_000,
     ):
-        resolved_api_key = (
-            api_key
-            or os.environ.get("QQA_LLM_API_KEY", "")
-            or os.environ.get("QQA_LLM_API_KEY", "")
-        )
+        resolved_api_key = api_key or os.environ.get("QQA_LLM_API_KEY", "")
         if not resolved_api_key:
             raise ValueError(
-                "QQA_LLM_API_KEY (or the legacy QQA_LLM_API_KEY) is not set. "
-                "Export it in your shell; do not pass credentials in source code."
+                "QQA_LLM_API_KEY is not set. Export it in your shell; "
+                "do not pass credentials in source code."
             )
         self.api_key = _validated_text(resolved_api_key, "api_key", maximum=16_384)
         resolved_base_url = base_url or os.environ.get("QQA_LLM_BASE_URL") or DEFAULT_BASE_URL
+        if not resolved_base_url:
+            raise ValueError(
+                "QQA_LLM_BASE_URL is not set. Configure the base URL of your "
+                "OpenAI-compatible endpoint."
+            )
         if not isinstance(resolved_base_url, str):
             raise TypeError("base_url must be a string.")
         self.base_url = resolved_base_url.rstrip("/")
@@ -158,11 +162,12 @@ class OpenAICompatibleClient:
                 "base_url must be an HTTPS URL with a host and without credentials, "
                 "query parameters, or a fragment."
             )
-        self.model = _validated_text(
-            model or os.environ.get("QQA_LLM_MODEL") or DEFAULT_MODEL,
-            "model",
-            maximum=512,
-        )
+        resolved_model = model or os.environ.get("QQA_LLM_MODEL") or DEFAULT_MODEL
+        if not resolved_model:
+            raise ValueError(
+                "QQA_LLM_MODEL is not set. Configure a model supported by your endpoint."
+            )
+        self.model = _validated_text(resolved_model, "model", maximum=512)
         if api_style not in ("responses", "messages"):
             raise ValueError("api_style must be 'responses' or 'messages'.")
         if not isinstance(verify_ssl, bool):

@@ -409,8 +409,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Read a TeX model from a UTF-8 .tex file and translate it through the API.",
     )
-    tex.add_argument("--api-base", type=str, default=None, help="OpenAI-compatible API base URL.")
-    tex.add_argument("--model", type=str, default=None, help="Model id used for TeX translation.")
+    tex.add_argument(
+        "--api-base",
+        type=str,
+        default=None,
+        help="OpenAI-compatible API base URL (or QQA_LLM_BASE_URL).",
+    )
+    tex.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model id used for TeX translation (or QQA_LLM_MODEL).",
+    )
     tex.add_argument(
         "--api-style",
         choices=("responses", "messages"),
@@ -489,8 +499,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Workflow override. auto routes from the validated model and request intent.",
     )
-    ask.add_argument("--api-base", default=None, help="OpenAI-compatible API base URL.")
-    ask.add_argument("--model", default=None, help="Model id used for request compilation.")
+    ask.add_argument(
+        "--api-base",
+        default=None,
+        help="OpenAI-compatible API base URL (or QQA_LLM_BASE_URL).",
+    )
+    ask.add_argument(
+        "--model",
+        default=None,
+        help="Model id used for request compilation (or QQA_LLM_MODEL).",
+    )
     ask.add_argument(
         "--api-style",
         choices=("responses", "messages"),

@@ -13,6 +13,8 @@ workflow:
 
 ```bash
 export QQA_LLM_API_KEY='your-key'
+export QQA_LLM_BASE_URL='https://api.example.com'
+export QQA_LLM_MODEL='your-model-id'
 
 qqa ask \
   "Choose integer units in [0,20] and real overtime in [0,8]. \
@@ -253,8 +255,10 @@ directions, constraint scales and finite constants, then interprets a small
 arithmetic AST. Imports, attributes, comprehensions, strings, indirect calls,
 and unknown functions are rejected. No credential is written into model JSON,
 reports, notebooks, or error messages.
-`QQA_LLM_API_KEY` remains a legacy fallback, but new setups should use the
-provider-neutral `QQA_LLM_API_KEY` name.
+QQA embeds no provider-specific endpoint or model. Configure
+`QQA_LLM_API_KEY`, `QQA_LLM_BASE_URL`, and `QQA_LLM_MODEL` in the environment
+or pass the non-secret endpoint and model through the corresponding API/CLI
+options.
 
 ## Reproducible examples
 
