@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import sys
@@ -614,7 +613,7 @@ with tex_tab:
         left, right = st.columns(2)
         with left:
             if len(spec.objectives) == 1:
-                scip_ready = importlib.util.find_spec("pyscipopt") is not None
+                scip_ready = qqa.scip_available()
                 use_scip = st.toggle(
                     "SCIP proof phase",
                     value=False,

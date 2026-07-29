@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import keyword
 from dataclasses import dataclass
+from numbers import Real as RealNumber
 from typing import ClassVar, Literal, Protocol
 
 import torch
@@ -79,6 +80,13 @@ class RealVariable:
 
     def __post_init__(self) -> None:
         _validate_name_and_size(self.name, self.size)
+        if (
+            isinstance(self.lower, bool)
+            or not isinstance(self.lower, RealNumber)
+            or isinstance(self.upper, bool)
+            or not isinstance(self.upper, RealNumber)
+        ):
+            raise TypeError("RealVariable bounds must be real numbers.")
         lower = float(self.lower)
         upper = float(self.upper)
         if not torch.isfinite(torch.tensor([lower, upper])).all().item():
@@ -193,6 +201,10 @@ class VariableSpace:
     def validate(self, values: torch.Tensor, *, atol: float = 1e-6) -> None:
         """Validate shape, bounds, and integrality of a user-unit solution."""
         self._check_last_dimension(values)
+        if values.dtype == torch.bool or values.is_complex():
+            raise TypeError("Solution values must use a real numeric tensor dtype.")
+        if not torch.isfinite(values).all():
+            raise ValueError("Solution contains NaN or infinity.")
         lower, upper = self._bounds_like(values)
         if torch.any(values < lower - atol) or torch.any(values > upper + atol):
             raise ValueError("Solution contains values outside declared bounds.")

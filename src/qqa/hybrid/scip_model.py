@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import math
 from dataclasses import dataclass, field
+from numbers import Real
 from time import perf_counter
 from typing import Any
 
@@ -49,7 +50,7 @@ def _require_scip():
         import pyscipopt
         from pyscipopt import Model, quicksum
         from pyscipopt.recipes.nonlinear import set_nonlinear_objective
-    except ImportError as exc:  # pragma: no cover - environment dependent
+    except (ImportError, OSError) as exc:  # pragma: no cover - environment dependent
         raise ImportError(
             "SCIP model solving requires the optional dependency. "
             "Install it with `pip install 'qqa[scip]'`."
@@ -199,13 +200,27 @@ def solve_spec_scip(
         raise TypeError("spec must be a ModelSpec or dict.")
     if len(spec.objectives) != 1:
         raise ValueError("solve_spec_scip currently requires exactly one objective.")
-    if not math.isfinite(time_limit) or time_limit <= 0:
+    if (
+        isinstance(time_limit, bool)
+        or not isinstance(time_limit, Real)
+        or not math.isfinite(time_limit)
+        or time_limit <= 0
+    ):
         raise ValueError("time_limit must be finite and > 0.")
-    if not math.isfinite(relative_gap) or relative_gap < 0:
+    if (
+        isinstance(relative_gap, bool)
+        or not isinstance(relative_gap, Real)
+        or not math.isfinite(relative_gap)
+        or relative_gap < 0
+    ):
         raise ValueError("relative_gap must be finite and >= 0.")
-    if not isinstance(max_warm_starts, int) or max_warm_starts < 1:
+    if (
+        isinstance(max_warm_starts, bool)
+        or not isinstance(max_warm_starts, int)
+        or max_warm_starts < 1
+    ):
         raise ValueError("max_warm_starts must be a positive integer.")
-    if not isinstance(threads, int) or threads < 1:
+    if isinstance(threads, bool) or not isinstance(threads, int) or threads < 1:
         raise ValueError("threads must be a positive integer.")
 
     started = perf_counter()

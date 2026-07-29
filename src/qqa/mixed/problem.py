@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from numbers import Real
 from typing import Literal
 
 import torch
@@ -60,10 +61,10 @@ class Constraint:
         if self.sense not in ("<=", ">=", "=="):
             raise ValueError(f"Unknown constraint sense {self.sense!r}.")
         for field_name in ("rhs", "weight", "scale", "tolerance"):
-            try:
-                value = float(getattr(self, field_name))
-            except (TypeError, ValueError) as exc:
-                raise TypeError(f"Constraint {field_name} must be a real number.") from exc
+            raw_value = getattr(self, field_name)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, Real):
+                raise TypeError(f"Constraint {field_name} must be a real number.")
+            value = float(raw_value)
             if not math.isfinite(value):
                 raise ValueError(f"Constraint {field_name} must be finite, got {value}.")
             object.__setattr__(self, field_name, value)
@@ -73,7 +74,7 @@ class Constraint:
             raise ValueError(f"Constraint scale must be > 0, got {self.scale}.")
         if self.tolerance < 0:
             raise ValueError(f"Constraint tolerance must be >= 0, got {self.tolerance}.")
-        if not isinstance(self.name, str) or not self.name:
+        if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("Constraint name must be a non-empty string.")
 
     def violation(self, lhs: torch.Tensor) -> torch.Tensor:
@@ -108,8 +109,12 @@ class MixedProblem(COProblem):
         super().__init__()
         if not callable(objective):
             raise TypeError("objective must be callable.")
-        if not name:
-            raise ValueError("name must not be empty.")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name must be a non-empty string.")
+        if not isinstance(objective_label, str) or not objective_label.strip():
+            raise ValueError("objective_label must be a non-empty string.")
+        if not isinstance(objective_unit, str):
+            raise TypeError("objective_unit must be a string.")
         if dtype not in (torch.float32, torch.float64):
             raise ValueError(f"dtype must be torch.float32 or torch.float64, got {dtype}.")
         self.space = VariableSpace(tuple(variables))

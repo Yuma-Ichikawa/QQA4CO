@@ -36,7 +36,12 @@ def blackbox_from_spec(spec: ModelSpec | dict) -> BlackBoxProblem:
             named = space.unpack(packed)
             with torch.no_grad():
                 value = compiled(named)
-            return float(torch.as_tensor(value).reshape(-1)[0].item())
+            tensor = torch.as_tensor(value)
+            if tensor.numel() != 1 or tensor.is_complex() or tensor.dtype == torch.bool:
+                raise TypeError("Compiled black-box expressions must return one real scalar.")
+            if not torch.isfinite(tensor).all():
+                raise FloatingPointError("Compiled black-box expression returned NaN or infinity.")
+            return float(tensor.item())
 
         return evaluate
 

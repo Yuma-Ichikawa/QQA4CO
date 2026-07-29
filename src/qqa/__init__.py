@@ -57,6 +57,7 @@ from qqa.hybrid import (
     SCIPExpressionError,
     SCIPHybridResult,
     SCIPModelResult,
+    scip_available,
     solve_qqa_scip,
     solve_spec_scip,
 )
@@ -142,6 +143,7 @@ from qqa.reporting import save_html_report
 from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
 from qqa.tex import (
+    TEX_SYSTEM_PROMPT,
     LLMAPIError,
     ModelSpec,
     OpenAICompatibleClient,
@@ -229,9 +231,11 @@ __all__ = [
     "SCIPHybridResult",
     "SCIPExpressionError",
     "SCIPModelResult",
+    "scip_available",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
+    "TEX_SYSTEM_PROMPT",
     "TexSolveResult",
     "TrajectoryTracker",
     "UserProblem",

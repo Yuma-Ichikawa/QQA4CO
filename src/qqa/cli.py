@@ -1114,8 +1114,10 @@ def _cmd_bench_plot(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     import torch
 
+    from qqa.hybrid import scip_available
+
     optional = {
-        "scip": importlib.util.find_spec("pyscipopt") is not None,
+        "scip": scip_available(),
         "pignn": importlib.util.find_spec("torch_geometric") is not None,
         "streamlit": importlib.util.find_spec("streamlit") is not None,
         "plotly": importlib.util.find_spec("plotly") is not None,
@@ -1397,9 +1399,7 @@ def _cmd_tex(args: argparse.Namespace) -> int:
             figure.write_html(report_path, include_plotlyjs=True, full_html=True)
             print(f"report     : {report_path}")
     else:
-        use_scip = args.solver == "scip" or (
-            args.solver == "auto" and importlib.util.find_spec("pyscipopt") is not None
-        )
+        use_scip = args.solver == "scip" or (args.solver == "auto" and qqa.scip_available())
         if use_scip:
             result = qqa.solve_spec_scip(
                 spec,

@@ -6,6 +6,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from numbers import Real
 from typing import Literal
 
 import torch
@@ -16,6 +17,30 @@ ScalarPoint = Mapping[str, float | int | list[float] | list[int]]
 ScalarFunction = Callable[[ScalarPoint], float]
 ConstraintSense = Literal["<=", ">=", "=="]
 Direction = Literal["min", "max"]
+
+
+def _finite_number(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{label} must be a real number.")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{label} must be finite.")
+    return number
+
+
+def _scalar_result(value: object, label: str) -> float:
+    if isinstance(value, bool):
+        raise TypeError(f"{label} must return a real scalar, not bool.")
+    try:
+        tensor = torch.as_tensor(value)
+    except (RuntimeError, TypeError, ValueError) as exc:
+        raise TypeError(f"{label} must return a real scalar.") from exc
+    if tensor.numel() != 1 or tensor.is_complex() or tensor.dtype == torch.bool:
+        raise TypeError(f"{label} must return exactly one real scalar.")
+    number = float(tensor.item())
+    if not math.isfinite(number):
+        raise FloatingPointError(f"{label} returned NaN or infinity.")
+    return number
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,19 +60,17 @@ class BlackBoxConstraint:
         if self.sense not in ("<=", ">=", "=="):
             raise ValueError("constraint sense must be '<=', '>=', or '=='.")
         for field_name in ("rhs", "tolerance", "scale"):
-            value = float(getattr(self, field_name))
-            if not math.isfinite(value):
-                raise ValueError(f"{field_name} must be finite.")
+            value = _finite_number(getattr(self, field_name), field_name)
             object.__setattr__(self, field_name, value)
         if self.tolerance < 0:
             raise ValueError("tolerance must be >= 0.")
         if self.scale <= 0:
             raise ValueError("scale must be > 0.")
-        if not self.name:
-            raise ValueError("constraint name must not be empty.")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("constraint name must be a non-empty string.")
 
     def violation(self, value: float) -> float:
-        residual = float(value) - self.rhs
+        residual = _finite_number(value, "constraint value") - self.rhs
         if self.sense == "<=":
             return max(0.0, residual)
         if self.sense == ">=":
@@ -76,8 +99,8 @@ class BlackBoxProblem:
             raise TypeError("objective must be callable.")
         if direction not in ("min", "max"):
             raise ValueError("direction must be 'min' or 'max'.")
-        if not name:
-            raise ValueError("name must not be empty.")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name must be a non-empty string.")
         self.space = VariableSpace(tuple(variables))
         self.variables = self.space.variables
         self.objective = objective
@@ -110,16 +133,13 @@ class BlackBoxProblem:
             raise ValueError("values must be a one-dimensional packed point.")
         self.space.validate(values)
         point = self._named_point(values)
-        objective = float(self.objective(point))
-        if not math.isfinite(objective):
-            raise FloatingPointError("black-box objective returned NaN or infinity.")
+        objective = _scalar_result(self.objective(point), "black-box objective")
         violations: list[float] = []
         for constraint in self.constraints:
-            lhs = float(constraint.function(point))
-            if not math.isfinite(lhs):
-                raise FloatingPointError(
-                    f"black-box constraint {constraint.name!r} returned NaN or infinity."
-                )
+            lhs = _scalar_result(
+                constraint.function(point),
+                f"black-box constraint {constraint.name!r}",
+            )
             violations.append(
                 max(0.0, constraint.violation(lhs) - constraint.tolerance) / constraint.scale
             )
@@ -133,7 +153,9 @@ class BlackBoxProblem:
             raise ValueError(
                 f"values must have shape (B, {self.space.dimension}), got {tuple(values.shape)}."
             )
-        if not isinstance(workers, int) or workers < 1:
+        if values.shape[0] == 0:
+            raise ValueError("values must contain at least one point.")
+        if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
             raise ValueError("workers must be a positive integer.")
         cpu_values = values.detach().to(device="cpu", dtype=torch.float64)
         if workers == 1:

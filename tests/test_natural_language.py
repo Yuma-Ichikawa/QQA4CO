@@ -72,6 +72,16 @@ def test_multiobjective_routing_is_local_and_deterministic():
         qqa.plan_spec(spec, solver="blackbox")
 
 
+def test_auto_routing_uses_a_real_scip_import_probe(monkeypatch):
+    spec = qqa.ModelSpec.from_dict(_spec())
+    monkeypatch.setattr("qqa.natural_language.planner.scip_available", lambda: False)
+    plan = qqa.plan_spec(spec, solver="auto")
+    assert plan.selected_solver == "qqa"
+    assert "SCIP is unavailable" in plan.rationale
+    with pytest.raises(ImportError, match="PySCIPOpt is unavailable"):
+        qqa.plan_spec(spec, solver="scip")
+
+
 def test_blackbox_adapter_handles_vector_reductions_and_constraints():
     spec = qqa.ModelSpec.from_dict(
         {

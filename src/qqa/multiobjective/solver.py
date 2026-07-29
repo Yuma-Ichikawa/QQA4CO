@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from numbers import Real
 from time import perf_counter
 
 import torch
@@ -39,12 +40,18 @@ class ParetoResult:
     search_reference_directions: torch.Tensor | None = None
 
     def __post_init__(self) -> None:
+        if not all(
+            torch.is_tensor(tensor) for tensor in (self.solutions, self.objectives, self.weights)
+        ):
+            raise TypeError("solutions, objectives, and weights must be torch tensors.")
         if self.solutions.ndim != 2:
             raise ValueError("solutions must have shape (points, variables).")
         if self.objectives.ndim != 2:
             raise ValueError("objectives must have shape (points, objectives).")
         point_count = self.solutions.shape[0]
         objective_count = self.objectives.shape[1]
+        if point_count == 0 or objective_count == 0:
+            raise ValueError("A Pareto result must contain at least one point and objective.")
         if self.objectives.shape[0] != point_count:
             raise ValueError("objectives must have shape (points, objectives).")
         if self.weights.shape != (point_count, objective_count):
@@ -53,11 +60,59 @@ class ParetoResult:
             )
         if len(self.objective_names) != objective_count or len(self.directions) != objective_count:
             raise ValueError("objective metadata must match the objective matrix width.")
-        if self.search_reference_directions is not None and (
-            self.search_reference_directions.ndim != 2
-            or self.search_reference_directions.shape[1] != objective_count
+        if len(set(self.objective_names)) != objective_count or any(
+            not isinstance(name, str) or not name.strip() for name in self.objective_names
         ):
-            raise ValueError("search_reference_directions must have shape (replicas, objectives).")
+            raise ValueError("objective_names must be unique non-empty strings.")
+        if any(direction not in ("min", "max") for direction in self.directions):
+            raise ValueError("directions must contain only 'min' or 'max'.")
+        if not all(
+            torch.isfinite(tensor).all()
+            for tensor in (self.solutions, self.objectives, self.weights)
+        ):
+            raise ValueError("Pareto solutions, objectives, and weights must be finite.")
+        if torch.any(self.weights < 0) or not torch.allclose(
+            self.weights.sum(dim=1),
+            self.weights.new_ones(point_count),
+            atol=1e-5,
+            rtol=1e-5,
+        ):
+            raise ValueError("Pareto weights must be non-negative and sum to one per point.")
+        if (
+            isinstance(self.runtime, bool)
+            or not isinstance(self.runtime, Real)
+            or not math.isfinite(self.runtime)
+            or self.runtime < 0
+        ):
+            raise ValueError("runtime must be finite and non-negative.")
+        if self.search_reference_directions is not None:
+            if not torch.is_tensor(self.search_reference_directions):
+                raise TypeError("search_reference_directions must be a torch tensor or None.")
+            if (
+                self.search_reference_directions.ndim != 2
+                or self.search_reference_directions.shape[0] == 0
+                or self.search_reference_directions.shape[1] != objective_count
+            ):
+                raise ValueError(
+                    "search_reference_directions must have shape (replicas, objectives) "
+                    "with replicas > 0."
+                )
+        if self.search_reference_directions is not None and (
+            not torch.isfinite(self.search_reference_directions).all()
+            or torch.any(self.search_reference_directions < 0)
+            or not torch.allclose(
+                self.search_reference_directions.sum(dim=1),
+                self.search_reference_directions.new_ones(
+                    self.search_reference_directions.shape[0]
+                ),
+                atol=1e-5,
+                rtol=1e-5,
+            )
+        ):
+            raise ValueError(
+                "search_reference_directions must be finite, non-negative, "
+                "and sum to one per replica."
+            )
 
     @property
     def reference_directions(self) -> torch.Tensor:
@@ -237,10 +292,23 @@ def nondominated_mask(
     dominance while avoiding the ``O(points²*objectives)`` temporary tensor
     that previously exhausted GPU memory on large archives.
     """
-    if values.ndim != 2:
+    if not torch.is_tensor(values):
+        raise TypeError("values must be a torch tensor.")
+    if values.ndim != 2 or values.shape[1] == 0:
         raise ValueError("values must have shape (points, objectives).")
-    if not isinstance(chunk_size, int) or chunk_size < 1:
+    if values.is_complex() or values.dtype == torch.bool:
+        raise TypeError("values must use a real numeric tensor dtype.")
+    if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
         raise ValueError("chunk_size must be a positive integer.")
+    if (
+        isinstance(tolerance, bool)
+        or not isinstance(tolerance, Real)
+        or not math.isfinite(tolerance)
+        or tolerance < 0
+    ):
+        raise ValueError("tolerance must be finite and non-negative.")
+    if not torch.isfinite(values).all():
+        raise ValueError("values must contain only finite objective values.")
     if values.shape[0] == 0:
         return torch.zeros(0, dtype=torch.bool, device=values.device)
     efficient = torch.ones(values.shape[0], dtype=torch.bool, device=values.device)
@@ -371,20 +439,45 @@ def pareto_anneal(
     """
     if not isinstance(problem, MultiObjectiveProblem):
         raise TypeError("problem must be a MultiObjectiveProblem.")
-    if not isinstance(sol_size, int) or sol_size < problem.num_objectives:
+    if (
+        isinstance(sol_size, bool)
+        or not isinstance(sol_size, int)
+        or sol_size < problem.num_objectives
+    ):
         raise ValueError("sol_size must be an integer >= the number of objectives.")
-    if not isinstance(num_epochs, int) or num_epochs < 0:
+    if isinstance(num_epochs, bool) or not isinstance(num_epochs, int) or num_epochs < 0:
         raise ValueError("num_epochs must be a non-negative integer.")
-    if not math.isfinite(learning_rate) or learning_rate <= 0:
+    if (
+        isinstance(learning_rate, bool)
+        or not isinstance(learning_rate, Real)
+        or not math.isfinite(learning_rate)
+        or learning_rate <= 0
+    ):
         raise ValueError("learning_rate must be finite and > 0.")
-    if not math.isfinite(temp) or temp < 0:
+    if isinstance(temp, bool) or not isinstance(temp, Real) or not math.isfinite(temp) or temp < 0:
         raise ValueError("temp must be finite and >= 0.")
-    if not isinstance(curve_rate, int) or curve_rate < 2 or curve_rate % 2:
+    if (
+        isinstance(curve_rate, bool)
+        or not isinstance(curve_rate, int)
+        or curve_rate < 2
+        or curve_rate % 2
+    ):
         raise ValueError("curve_rate must be a positive even integer.")
-    if not math.isfinite(augmentation) or augmentation < 0:
-        raise ValueError("augmentation must be finite and >= 0.")
-    if not math.isfinite(div_param) or div_param < 0:
-        raise ValueError("div_param must be finite and >= 0.")
+    for name, value in (
+        ("augmentation", augmentation),
+        ("div_param", div_param),
+        ("weight_decay", weight_decay),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(f"{name} must be finite and >= 0.")
+    for name, value in (("min_bg", min_bg), ("max_bg", max_bg)):
+        if isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value):
+            raise ValueError(f"{name} must be a finite real number.")
     for name, value in (
         ("archive_interval", archive_interval),
         ("archive_size", archive_size),
@@ -392,24 +485,47 @@ def pareto_anneal(
         ("history_stride", history_stride),
         ("restart_patience", restart_patience),
     ):
-        if not isinstance(value, int) or value < 1:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer.")
     if constraint_strategy not in {"adaptive", "fixed"}:
         raise ValueError("constraint_strategy must be 'adaptive' or 'fixed'.")
-    if not math.isfinite(penalty_growth) or penalty_growth < 1:
+    if (
+        isinstance(penalty_growth, bool)
+        or not isinstance(penalty_growth, Real)
+        or not math.isfinite(penalty_growth)
+        or penalty_growth < 1
+    ):
         raise ValueError("penalty_growth must be finite and >= 1.")
-    if not math.isfinite(penalty_progress_ratio) or not 0 < penalty_progress_ratio <= 1:
+    if (
+        isinstance(penalty_progress_ratio, bool)
+        or not isinstance(penalty_progress_ratio, Real)
+        or not math.isfinite(penalty_progress_ratio)
+        or not 0 < penalty_progress_ratio <= 1
+    ):
         raise ValueError("penalty_progress_ratio must be in (0, 1].")
-    if not math.isfinite(restart_fraction) or not 0 <= restart_fraction < 1:
+    if (
+        isinstance(restart_fraction, bool)
+        or not isinstance(restart_fraction, Real)
+        or not math.isfinite(restart_fraction)
+        or not 0 <= restart_fraction < 1
+    ):
         raise ValueError("restart_fraction must be in [0, 1).")
-    if not math.isfinite(restart_jitter) or not 0 <= restart_jitter <= 1:
+    if (
+        isinstance(restart_jitter, bool)
+        or not isinstance(restart_jitter, Real)
+        or not math.isfinite(restart_jitter)
+        or not 0 <= restart_jitter <= 1
+    ):
         raise ValueError("restart_jitter must be in [0, 1].")
     if gradient_clip_norm is not None and (
-        not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
+        isinstance(gradient_clip_norm, bool)
+        or not isinstance(gradient_clip_norm, Real)
+        or not math.isfinite(gradient_clip_norm)
+        or gradient_clip_norm <= 0
     ):
         raise ValueError("gradient_clip_norm must be finite and > 0 or None.")
-    if not math.isfinite(weight_decay) or weight_decay < 0:
-        raise ValueError("weight_decay must be finite and >= 0.")
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**31 - 1:
+        raise ValueError("seed must be an integer in [0, 2147483647].")
 
     device = resolve_device(device)
     require_cuda_if_requested(device)

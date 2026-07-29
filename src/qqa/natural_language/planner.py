@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import importlib.util
 import re
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
+from qqa.hybrid.capabilities import scip_available
 from qqa.natural_language.prompts import MODEL_SYSTEM_PROMPT, natural_language_prompt
 from qqa.tex.client import OpenAICompatibleClient
 from qqa.tex.schema import ModelSpec
@@ -35,7 +35,7 @@ def _normalise_solver(solver: str) -> SolverName:
     valid = {"auto", "qqa", "qqa-scip", "scip", "pareto", "blackbox"}
     if solver not in valid:
         raise ValueError(f"solver must be one of {sorted(valid)}, got {solver!r}.")
-    return solver  # type: ignore[return-value]
+    return cast(SolverName, solver)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +83,7 @@ def plan_spec(
     requested = _normalise_solver(solver)
     multiobjective = len(spec.objectives) > 1
     blackbox_intent = _blackbox_intent(source)
-    scip_available = importlib.util.find_spec("pyscipopt") is not None
+    has_scip = scip_available()
     warnings: list[str] = []
     if spec.notes.strip():
         warnings.append(f"Review model assumptions: {spec.notes.strip()}")
@@ -104,7 +104,7 @@ def plan_spec(
     elif requested in {"qqa-scip", "scip"}:
         if multiobjective:
             raise ValueError("QQA+SCIP currently requires one objective; use solver='pareto'.")
-        if not scip_available:
+        if not has_scip:
             raise ImportError(
                 "QQA+SCIP was requested but PySCIPOpt is unavailable. "
                 "Install it with `pip install 'qqa[scip]'`."
@@ -130,7 +130,7 @@ def plan_spec(
             "The request describes opaque or expensive evaluations, so the budget-aware "
             "parallel black-box solver is selected."
         )
-    elif scip_available:
+    elif has_scip:
         selected = "qqa-scip"
         rationale = (
             "A single symbolic objective and available SCIP select QQA exploration "

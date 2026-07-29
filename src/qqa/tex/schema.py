@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, dataclass
+from numbers import Real as RealNumber
 from typing import Any
 
 import torch
@@ -16,17 +17,37 @@ MAX_VARIABLE_DECLARATIONS = 512
 MAX_TOTAL_DIMENSION = 65_536
 MAX_OBJECTIVES = 32
 MAX_CONSTRAINTS = 4_096
+MAX_NAME_LENGTH = 256
+MAX_EXPRESSION_LENGTH = 2_000
+MAX_TOTAL_EXPRESSION_CHARACTERS = 1_000_000
+MAX_NOTES_LENGTH = 50_000
+MAX_MODEL_JSON_LENGTH = 4_000_000
 _PREFLIGHT_SAMPLES = 5
 
 
 def _finite(value: Any, label: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{label} must be a real number.") from exc
+    if isinstance(value, bool) or not isinstance(value, RealNumber):
+        raise ValueError(f"{label} must be a JSON real number.")
+    number = float(value)
     if not math.isfinite(number):
         raise ValueError(f"{label} must be finite.")
     return number
+
+
+def _text(
+    value: Any,
+    label: str,
+    *,
+    maximum: int,
+    allow_empty: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{label} must be a string.")
+    if not allow_empty and not value.strip():
+        raise ValueError(f"{label} must not be empty.")
+    if len(value) > maximum:
+        raise ValueError(f"{label} is too long (maximum {maximum:,} characters).")
+    return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +62,7 @@ class VariableDeclaration:
     def from_dict(cls, value: dict) -> VariableDeclaration:
         _exact_keys(value, {"name", "kind", "lower", "upper", "size"}, "variable")
         declaration = cls(
-            name=value["name"],
+            name=_text(value["name"], "Variable name", maximum=MAX_NAME_LENGTH),
             kind=value["kind"],
             lower=_finite(value["lower"], "variable lower"),
             upper=_finite(value["upper"], "variable upper"),
@@ -76,11 +97,21 @@ class ObjectiveDeclaration:
         _exact_keys(value, {"name", "direction", "expression", "unit"}, "objective")
         if value["direction"] not in ("min", "max"):
             raise ValueError("Objective direction must be 'min' or 'max'.")
-        if not isinstance(value["name"], str) or not value["name"]:
-            raise ValueError("Objective name must not be empty.")
-        if not isinstance(value["unit"], str):
-            raise TypeError("Objective unit must be a string.")
-        return cls(**value)
+        return cls(
+            name=_text(value["name"], "Objective name", maximum=MAX_NAME_LENGTH),
+            direction=value["direction"],
+            expression=_text(
+                value["expression"],
+                "Objective expression",
+                maximum=MAX_EXPRESSION_LENGTH,
+            ),
+            unit=_text(
+                value["unit"],
+                "Objective unit",
+                maximum=MAX_NAME_LENGTH,
+                allow_empty=True,
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,11 +143,13 @@ class ConstraintDeclaration:
             raise ValueError("Constraint scale must be > 0.")
         if numbers["tolerance"] < 0:
             raise ValueError("Constraint tolerance must be >= 0.")
-        if not isinstance(value["name"], str) or not value["name"]:
-            raise ValueError("Constraint name must not be empty.")
         return cls(
-            name=value["name"],
-            expression=value["expression"],
+            name=_text(value["name"], "Constraint name", maximum=MAX_NAME_LENGTH),
+            expression=_text(
+                value["expression"],
+                "Constraint expression",
+                maximum=MAX_EXPRESSION_LENGTH,
+            ),
             sense=value["sense"],
             **numbers,
         )
@@ -144,10 +177,13 @@ class ModelSpec:
     @classmethod
     def from_dict(cls, value: dict) -> ModelSpec:
         _exact_keys(value, {"name", "variables", "objectives", "constraints", "notes"}, "model")
-        if not isinstance(value["name"], str) or not value["name"]:
-            raise ValueError("Model name must not be empty.")
-        if not isinstance(value["notes"], str):
-            raise TypeError("Model notes must be a string.")
+        model_name = _text(value["name"], "Model name", maximum=MAX_NAME_LENGTH)
+        notes = _text(
+            value["notes"],
+            "Model notes",
+            maximum=MAX_NOTES_LENGTH,
+            allow_empty=True,
+        )
         if not isinstance(value["variables"], list) or not value["variables"]:
             raise ValueError("Model variables must be a non-empty list.")
         if not isinstance(value["objectives"], list) or not value["objectives"]:
@@ -171,6 +207,14 @@ class ModelSpec:
             )
         objectives = tuple(ObjectiveDeclaration.from_dict(item) for item in value["objectives"])
         constraints = tuple(ConstraintDeclaration.from_dict(item) for item in value["constraints"])
+        total_expression_characters = sum(len(item.expression) for item in objectives) + sum(
+            len(item.expression) for item in constraints
+        )
+        if total_expression_characters > MAX_TOTAL_EXPRESSION_CHARACTERS:
+            raise ValueError(
+                "Model expressions contain too much text; the combined limit is "
+                f"{MAX_TOTAL_EXPRESSION_CHARACTERS:,} characters."
+            )
         variable_names = [item.name for item in variables]
         if len(variable_names) != len(set(variable_names)):
             raise ValueError("Variable names must be unique.")
@@ -180,12 +224,18 @@ class ModelSpec:
         constraint_names = [item.name for item in constraints]
         if len(constraint_names) != len(set(constraint_names)):
             raise ValueError("Constraint names must be unique.")
-        model = cls(value["name"], variables, objectives, constraints, value["notes"])
+        model = cls(model_name, variables, objectives, constraints, notes)
         model.validate_semantics()
         return model
 
     @classmethod
     def from_json(cls, source: str) -> ModelSpec:
+        if not isinstance(source, str):
+            raise TypeError("Model response must be a JSON string.")
+        if len(source) > MAX_MODEL_JSON_LENGTH:
+            raise ValueError(
+                f"Model response is too large (maximum {MAX_MODEL_JSON_LENGTH:,} characters)."
+            )
         try:
             value = json.loads(source)
         except json.JSONDecodeError as exc:
@@ -245,7 +295,7 @@ class ModelSpec:
                 function = compile_expression(expression, variable_map)
                 try:
                     result = torch.as_tensor(function(named), dtype=points.dtype)
-                except (ArithmeticError, RuntimeError, ValueError) as exc:
+                except (ArithmeticError, RuntimeError, TypeError, ValueError) as exc:
                     raise ValueError(
                         f"{kind.capitalize()} {name!r} failed numerical preflight: {exc}"
                     ) from exc
@@ -270,7 +320,7 @@ MODEL_JSON_SCHEMA = {
     "additionalProperties": False,
     "required": ["name", "variables", "objectives", "constraints", "notes"],
     "properties": {
-        "name": {"type": "string"},
+        "name": {"type": "string", "minLength": 1, "maxLength": MAX_NAME_LENGTH},
         "variables": {
             "type": "array",
             "minItems": 1,
@@ -280,7 +330,11 @@ MODEL_JSON_SCHEMA = {
                 "additionalProperties": False,
                 "required": ["name", "kind", "lower", "upper", "size"],
                 "properties": {
-                    "name": {"type": "string"},
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_NAME_LENGTH,
+                    },
                     "kind": {"type": "string", "enum": ["binary", "integer", "real"]},
                     "lower": {"type": "number"},
                     "upper": {"type": "number"},
@@ -301,10 +355,18 @@ MODEL_JSON_SCHEMA = {
                 "additionalProperties": False,
                 "required": ["name", "direction", "expression", "unit"],
                 "properties": {
-                    "name": {"type": "string"},
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_NAME_LENGTH,
+                    },
                     "direction": {"type": "string", "enum": ["min", "max"]},
-                    "expression": {"type": "string"},
-                    "unit": {"type": "string"},
+                    "expression": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_EXPRESSION_LENGTH,
+                    },
+                    "unit": {"type": "string", "maxLength": MAX_NAME_LENGTH},
                 },
             },
         },
@@ -324,17 +386,29 @@ MODEL_JSON_SCHEMA = {
                     "tolerance",
                 ],
                 "properties": {
-                    "name": {"type": "string"},
-                    "expression": {"type": "string"},
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_NAME_LENGTH,
+                    },
+                    "expression": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_EXPRESSION_LENGTH,
+                    },
                     "sense": {"type": "string", "enum": ["<=", ">=", "=="]},
                     "rhs": {"type": "number"},
-                    "weight": {"type": "number", "exclusiveMinimum": 0},
+                    "weight": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1e12,
+                    },
                     "scale": {"type": "number", "exclusiveMinimum": 0},
                     "tolerance": {"type": "number", "minimum": 0},
                 },
             },
         },
-        "notes": {"type": "string"},
+        "notes": {"type": "string", "maxLength": MAX_NOTES_LENGTH},
     },
 }
 
@@ -342,7 +416,12 @@ MODEL_JSON_SCHEMA = {
 __all__ = [
     "ConstraintDeclaration",
     "MAX_CONSTRAINTS",
+    "MAX_EXPRESSION_LENGTH",
+    "MAX_MODEL_JSON_LENGTH",
+    "MAX_NAME_LENGTH",
+    "MAX_NOTES_LENGTH",
     "MAX_OBJECTIVES",
+    "MAX_TOTAL_EXPRESSION_CHARACTERS",
     "MAX_TOTAL_DIMENSION",
     "MAX_VARIABLE_DECLARATIONS",
     "MODEL_JSON_SCHEMA",

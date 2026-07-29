@@ -8,6 +8,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Universal optimisation studio
 
+- Harden optional SCIP capability detection, TeX/API trust boundaries, model
+  size/type validation, finite mixed-variable inputs, Pareto result contracts,
+  and black-box resume/output validation; stabilise zero-regularisation RBF
+  fitting for duplicate observations.
 - Add the unified `qqa.ask(...)`, `qqa ask`, and Streamlit **Ask QQA**
   entry points: natural language is compiled with a separate hardened system
   prompt, validated as an auditable `ModelSpec`, routed deterministically to

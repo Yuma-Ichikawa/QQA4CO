@@ -10,12 +10,14 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from numbers import Real
 from typing import Literal
 
 from qqa.tex.schema import MODEL_JSON_SCHEMA
 
 DEFAULT_BASE_URL = "https://api.example.com"
 DEFAULT_MODEL = "your-model-id"
+MAX_PROMPT_CHARACTERS = 250_000
 
 
 class LLMAPIError(RuntimeError):
@@ -30,23 +32,55 @@ def _redact(message: str, secret: str) -> str:
     )
 
 
+def _validated_text(
+    value: str,
+    label: str,
+    *,
+    maximum: int,
+    allow_layout_controls: bool = False,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty string.")
+    if len(value) > maximum:
+        raise ValueError(f"{label} is too long (maximum {maximum:,} characters).")
+    allowed_controls = {"\t", "\n", "\r"} if allow_layout_controls else set()
+    if any(
+        (ord(character) < 32 and character not in allowed_controls) or ord(character) == 127
+        for character in value
+    ):
+        raise ValueError(f"{label} must not contain control characters.")
+    return value
+
+
 def _extract_text(response: dict, style: str) -> str:
     direct = response.get("output_text")
     if isinstance(direct, str) and direct:
         return direct
     if style == "messages":
         content = response.get("content", [])
+        if not isinstance(content, list):
+            raise LLMAPIError("LLM response content must be a list.")
         texts = [
             item.get("text", "")
             for item in content
-            if isinstance(item, dict) and item.get("type") in (None, "text")
+            if (
+                isinstance(item, dict)
+                and item.get("type") in (None, "text")
+                and isinstance(item.get("text", ""), str)
+            )
         ]
     else:
         texts = []
-        for item in response.get("output", []):
+        output = response.get("output", [])
+        if not isinstance(output, list):
+            raise LLMAPIError("LLM response output must be a list.")
+        for item in output:
             if not isinstance(item, dict):
                 continue
-            for content in item.get("content", []):
+            content_items = item.get("content", [])
+            if not isinstance(content_items, list):
+                continue
+            for content in content_items:
                 if (
                     isinstance(content, dict)
                     and content.get("type") in (None, "output_text", "text")
@@ -71,8 +105,12 @@ def _extract_json_text(text: str) -> str:
         start, end = stripped.find("{"), stripped.rfind("}")
         if start >= 0 and end > start:
             candidate = stripped[start : end + 1]
-            json.loads(candidate)
-            return candidate
+            try:
+                json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
+            else:
+                return candidate
         raise LLMAPIError("LLM response did not contain a valid JSON object.") from None
 
 
@@ -92,19 +130,21 @@ class OpenAICompatibleClient:
         max_output_tokens: int = 4096,
         max_response_bytes: int = 2_000_000,
     ):
-        self.api_key = (
+        resolved_api_key = (
             api_key
             or os.environ.get("QQA_LLM_API_KEY", "")
             or os.environ.get("QQA_LLM_API_KEY", "")
         )
-        if not self.api_key:
+        if not resolved_api_key:
             raise ValueError(
                 "QQA_LLM_API_KEY (or the legacy QQA_LLM_API_KEY) is not set. "
                 "Export it in your shell; do not pass credentials in source code."
             )
-        self.base_url = (base_url or os.environ.get("QQA_LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip(
-            "/"
-        )
+        self.api_key = _validated_text(resolved_api_key, "api_key", maximum=16_384)
+        resolved_base_url = base_url or os.environ.get("QQA_LLM_BASE_URL") or DEFAULT_BASE_URL
+        if not isinstance(resolved_base_url, str):
+            raise TypeError("base_url must be a string.")
+        self.base_url = resolved_base_url.rstrip("/")
         parsed = urllib.parse.urlsplit(self.base_url)
         if (
             parsed.scheme != "https"
@@ -118,16 +158,34 @@ class OpenAICompatibleClient:
                 "base_url must be an HTTPS URL with a host and without credentials, "
                 "query parameters, or a fragment."
             )
-        self.model = model or os.environ.get("QQA_LLM_MODEL") or DEFAULT_MODEL
+        self.model = _validated_text(
+            model or os.environ.get("QQA_LLM_MODEL") or DEFAULT_MODEL,
+            "model",
+            maximum=512,
+        )
         if api_style not in ("responses", "messages"):
             raise ValueError("api_style must be 'responses' or 'messages'.")
-        if not isinstance(timeout, (int, float)) or not 0 < timeout <= 600:
+        if not isinstance(verify_ssl, bool):
+            raise TypeError("verify_ssl must be a boolean.")
+        if isinstance(timeout, bool) or not isinstance(timeout, Real) or not 0 < timeout <= 600:
             raise ValueError("timeout must be in (0, 600] seconds.")
-        if not isinstance(max_retries, int) or not 0 <= max_retries <= 10:
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)
+            or not 0 <= max_retries <= 10
+        ):
             raise ValueError("max_retries must be an integer in [0, 10].")
-        if not isinstance(max_output_tokens, int) or not 128 <= max_output_tokens <= 65536:
+        if (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or not 128 <= max_output_tokens <= 65536
+        ):
             raise ValueError("max_output_tokens must be an integer in [128, 65536].")
-        if not isinstance(max_response_bytes, int) or not 1024 <= max_response_bytes <= 20_000_000:
+        if (
+            isinstance(max_response_bytes, bool)
+            or not isinstance(max_response_bytes, int)
+            or not 1024 <= max_response_bytes <= 20_000_000
+        ):
             raise ValueError("max_response_bytes must be an integer in [1024, 20000000].")
         self.api_style = api_style
         self.verify_ssl = verify_ssl
@@ -139,6 +197,19 @@ class OpenAICompatibleClient:
 
     def generate_model_json(self, prompt: str, *, system_prompt: str | None = None) -> str:
         """Generate one model JSON document, preferring Structured Outputs."""
+        prompt = _validated_text(
+            prompt,
+            "prompt",
+            maximum=MAX_PROMPT_CHARACTERS,
+            allow_layout_controls=True,
+        )
+        if system_prompt is not None:
+            system_prompt = _validated_text(
+                system_prompt,
+                "system_prompt",
+                maximum=MAX_PROMPT_CHARACTERS,
+                allow_layout_controls=True,
+            )
         structured = self.api_style == "responses" and self._structured_available is not False
         request_options = {"system_prompt": system_prompt} if system_prompt else {}
         try:
@@ -228,6 +299,17 @@ class OpenAICompatibleClient:
                     timeout=timeout,
                     context=context,
                 ) as response:
+                    content_type = ""
+                    if getattr(response, "headers", None) is not None:
+                        content_type = response.headers.get("Content-Type", "")
+                    if content_type and not (
+                        "application/json" in content_type.lower()
+                        or "+json" in content_type.lower()
+                    ):
+                        raise LLMAPIError(
+                            "LLM endpoint returned a non-JSON Content-Type "
+                            f"({content_type.split(';', 1)[0]})."
+                        )
                     raw = response.read(self.max_response_bytes + 1)
                     if len(raw) > self.max_response_bytes:
                         raise LLMAPIError(f"LLM response exceeded {self.max_response_bytes} bytes.")
@@ -240,7 +322,12 @@ class OpenAICompatibleClient:
                 message = _redact(f"LLM API HTTP {exc.code}: {detail}", self.api_key)
                 if exc.code not in {408, 429, 500, 502, 503, 504} or attempt >= max_retries:
                     raise LLMAPIError(message) from exc
-            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            except (
+                urllib.error.URLError,
+                TimeoutError,
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+            ) as exc:
                 message = _redact(f"LLM API request failed: {exc}", self.api_key)
                 if attempt >= max_retries:
                     raise LLMAPIError(message) from exc

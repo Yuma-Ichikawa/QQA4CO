@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from numbers import Real
 from time import perf_counter
 
 import torch
@@ -55,12 +56,25 @@ class BlackBoxResult:
 
 class _RBFSurrogate:
     def __init__(self, *, ridge: float, noise: float):
-        self.ridge = ridge
-        self.noise = noise
+        for name, value in (("ridge", ridge), ("noise", noise)):
+            if isinstance(value, bool) or not isinstance(value, Real):
+                raise TypeError(f"{name} must be a real number.")
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and >= 0.")
+        self.ridge = float(ridge)
+        self.noise = float(noise)
 
     def fit(self, x: torch.Tensor, y: torch.Tensor) -> None:
+        if not torch.is_tensor(x) or not torch.is_tensor(y):
+            raise TypeError("RBF inputs and targets must be torch tensors.")
+        if x.ndim != 2 or len(x) == 0:
+            raise ValueError("RBF inputs must have shape (points, dimensions) with points > 0.")
         if y.ndim not in (1, 2) or y.shape[0] != len(x):
             raise ValueError("RBF targets must have shape (points,) or (points, outputs).")
+        if not x.is_floating_point() or not y.is_floating_point():
+            raise TypeError("RBF inputs and targets must use a floating-point dtype.")
+        if not torch.isfinite(x).all() or not torch.isfinite(y).all():
+            raise ValueError("RBF inputs and targets must be finite.")
         self.scalar_output = y.ndim == 1
         if self.scalar_output:
             y = y[:, None]
@@ -76,7 +90,10 @@ class _RBFSurrogate:
         squared = torch.cdist(x, x).square()
         kernel = torch.exp(-0.5 * squared / self.lengthscale.square())
         eye = torch.eye(len(x), dtype=x.dtype, device=x.device)
-        jitter = self.ridge + self.noise**2
+        # Starting at exactly zero makes ``jitter *= 10`` remain zero forever
+        # after a failed Cholesky factorisation. A dtype-scale floor lets a
+        # duplicate or nearly duplicate design recover deterministically.
+        jitter = max(self.ridge + self.noise**2, torch.finfo(x.dtype).eps)
         for _ in range(6):
             factor, info = torch.linalg.cholesky_ex(kernel + jitter * eye)
             if int(info.max().item()) == 0:
@@ -246,15 +263,23 @@ def blackbox_optimize(
     if not isinstance(problem, BlackBoxProblem):
         raise TypeError("problem must be a BlackBoxProblem.")
     for name, value in (("budget", budget), ("batch_size", batch_size), ("workers", workers)):
-        if not isinstance(value, int) or value < 1:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer.")
     if budget < 2:
         raise ValueError("budget must be >= 2.")
-    if not isinstance(candidate_pool, int) or candidate_pool < max(32, batch_size):
+    if (
+        isinstance(candidate_pool, bool)
+        or not isinstance(candidate_pool, int)
+        or candidate_pool < max(32, batch_size)
+    ):
         raise ValueError("candidate_pool must be an integer >= max(32, batch_size).")
     if acquisition not in {"expected_improvement", "lcb"}:
         raise ValueError("acquisition must be 'expected_improvement' or 'lcb'.")
-    if not isinstance(max_model_points, int) or max_model_points < 16:
+    if (
+        isinstance(max_model_points, bool)
+        or not isinstance(max_model_points, int)
+        or max_model_points < 16
+    ):
         raise ValueError("max_model_points must be an integer >= 16.")
     if surrogate_dtype not in {"auto", "float32", "float64"}:
         raise ValueError("surrogate_dtype must be 'auto', 'float32', or 'float64'.")
@@ -266,7 +291,12 @@ def blackbox_optimize(
         ("ridge", ridge, 0.0),
         ("noise", noise, 0.0),
     ):
-        if not math.isfinite(value) or value < lower:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(value)
+            or value < lower
+        ):
             raise ValueError(f"{name} must be finite and >= {lower}.")
     if initial_radius <= 0 or initial_radius > 1:
         raise ValueError("initial_radius must be in (0, 1].")
@@ -284,8 +314,14 @@ def blackbox_optimize(
     problem_signature = _problem_signature(problem)
     if initial_points is None:
         initial_points = min(budget, max(4 * (dimension + 1), 2 * batch_size))
-    if not isinstance(initial_points, int) or not 2 <= initial_points <= budget:
+    if (
+        isinstance(initial_points, bool)
+        or not isinstance(initial_points, int)
+        or not 2 <= initial_points <= budget
+    ):
         raise ValueError("initial_points must be an integer in [2, budget].")
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**31 - 1:
+        raise ValueError("seed must be an integer in [0, 2147483647].")
 
     started = perf_counter()
     if resume_from is None:
@@ -327,6 +363,10 @@ def blackbox_optimize(
             raise ValueError("resume_from observation counts are inconsistent.")
         if v_obs.shape != (len(p_obs), len(problem.constraints)):
             raise ValueError("resume_from violations do not match this problem's constraints.")
+        if not torch.isfinite(y_obs).all() or not torch.isfinite(v_obs).all():
+            raise ValueError("resume_from observations must be finite.")
+        if torch.any(v_obs < 0):
+            raise ValueError("resume_from violations must be non-negative.")
         history = {key: list(value) for key, value in resume_from.history.items()}
         for key in (
             "evaluations",
@@ -337,11 +377,16 @@ def blackbox_optimize(
         ):
             history.setdefault(key, [])
     seen = set(_keys(p_obs))
-    radius = (
-        float(history["trust_radius"][-1])
-        if resume_from is not None and history["trust_radius"]
-        else initial_radius
-    )
+    if resume_from is not None and history["trust_radius"]:
+        try:
+            previous_radius = float(history["trust_radius"][-1])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("resume_from trust-radius history is invalid.") from exc
+        if not math.isfinite(previous_radius) or previous_radius <= 0:
+            raise ValueError("resume_from trust-radius history is invalid.")
+        radius = min(1.0, max(min_radius, previous_radius))
+    else:
+        radius = initial_radius
     success_streak = 0
     failure_streak = 0
     iteration = 0

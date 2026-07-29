@@ -33,8 +33,12 @@ def _spec_dict(expression: str = "square(x - 2) + square(n - 3)") -> dict:
 
 
 class _FakeClient:
-    def generate_model_json(self, prompt):
+    def __init__(self):
+        self.system_prompt = None
+
+    def generate_model_json(self, prompt, *, system_prompt=None):
         assert "<tex>" in prompt
+        self.system_prompt = system_prompt
         return json.dumps(_spec_dict())
 
 
@@ -42,7 +46,8 @@ class _RepairingFakeClient:
     def __init__(self):
         self.calls = 0
 
-    def generate_model_json(self, prompt):
+    def generate_model_json(self, prompt, *, system_prompt=None):
+        assert system_prompt == qqa.TEX_SYSTEM_PROMPT
         self.calls += 1
         if self.calls == 1:
             return json.dumps({"objective": "wrong shape"})
@@ -51,7 +56,9 @@ class _RepairingFakeClient:
 
 
 def test_compile_tex_to_safe_mixed_problem_and_solve():
-    spec = qqa.compile_tex(r"\min_{x,n} (x-2)^2 + (n-3)^2", client=_FakeClient())
+    client = _FakeClient()
+    spec = qqa.compile_tex(r"\min_{x,n} (x-2)^2 + (n-3)^2", client=client)
+    assert "untrusted" in client.system_prompt
     problem = qqa.problem_from_spec(spec)
     result = problem.solve(sol_size=32, num_epochs=200, verbose=False)
     assert result.score["value"] < 1e-4
@@ -150,6 +157,33 @@ def test_client_caches_structured_output_fallback(monkeypatch):
 def test_client_rejects_unsafe_base_urls(base_url):
     with pytest.raises(ValueError, match="base_url must be an HTTPS URL"):
         qqa.OpenAICompatibleClient(api_key="test-key", base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    ("keyword", "value", "message"),
+    [
+        ("api_key", "test-key\ninjected", "control characters"),
+        ("base_url", 123, "base_url must be a string"),
+        ("model", "model\rheader", "control characters"),
+        ("verify_ssl", 1, "verify_ssl must be a boolean"),
+        ("max_retries", True, "max_retries must be an integer"),
+    ],
+)
+def test_client_rejects_ambiguous_or_header_unsafe_configuration(keyword, value, message):
+    options = {"api_key": "test-key", keyword: value}
+    with pytest.raises((TypeError, ValueError), match=message):
+        qqa.OpenAICompatibleClient(**options)
+
+
+def test_client_wraps_malformed_embedded_json_as_api_error(monkeypatch):
+    client = qqa.OpenAICompatibleClient(api_key="test-key", max_retries=0)
+    monkeypatch.setattr(
+        client,
+        "_request",
+        lambda *args, **kwargs: {"output_text": "prefix {not-json} suffix"},
+    )
+    with pytest.raises(qqa.LLMAPIError, match="valid JSON object"):
+        client.generate_model_json("model request")
 
 
 @pytest.mark.parametrize(
@@ -275,3 +309,14 @@ def test_model_spec_preflight_accepts_finite_vector_reduction():
     source["variables"][0]["size"] = 3
     spec = qqa.ModelSpec.from_dict(source)
     assert spec.variables[0].size == 3
+
+
+def test_model_spec_rejects_boolean_numbers_and_oversized_expressions():
+    source = _spec_dict()
+    source["variables"][0]["lower"] = False
+    with pytest.raises(ValueError, match="JSON real number"):
+        qqa.ModelSpec.from_dict(source)
+
+    source = _spec_dict("x" + " + 0" * 1_000)
+    with pytest.raises(ValueError, match="too long"):
+        qqa.ModelSpec.from_dict(source)

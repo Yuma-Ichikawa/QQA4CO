@@ -195,6 +195,30 @@ def test_multioutput_rbf_models_constraints_with_one_kernel_factorisation():
     assert torch.all(std > 0)
 
 
+def test_rbf_zero_regularisation_recovers_from_duplicate_points():
+    from qqa.blackbox.solver import _RBFSurrogate
+
+    x = torch.tensor([[0.25], [0.25], [0.75]], dtype=torch.float64)
+    y = torch.tensor([1.0, 1.0, 0.0], dtype=torch.float64)
+    model = _RBFSurrogate(ridge=0.0, noise=0.0)
+    model.fit(x, y)
+    mean, std = model.predict(torch.tensor([[0.5]], dtype=torch.float64))
+    assert torch.isfinite(mean).all()
+    assert torch.isfinite(std).all()
+
+
+def test_blackbox_rejects_vector_outputs_and_boolean_workers():
+    vector_problem = qqa.BlackBoxProblem(
+        [qqa.Real("x", 0.0, 1.0)],
+        lambda point: [point["x"], point["x"]],
+    )
+    point = vector_problem.space.pack({"x": 0.5})
+    with pytest.raises(TypeError, match="exactly one real scalar"):
+        vector_problem.evaluate_one(point)
+    with pytest.raises(ValueError, match="positive integer"):
+        vector_problem.evaluate_batch(point.unsqueeze(0), workers=True)
+
+
 def test_scip_mixed_warm_starts_rank_exact_feasibility_before_penalized_loss():
     from qqa.annealing import AnnealResult
     from qqa.hybrid.scip_model import _candidate_starts
@@ -259,6 +283,17 @@ def test_chunked_dominance_and_pareto_decision_support():
     assert result.select() == 1
     assert result.hypervolume([4.0, 4.0]) == pytest.approx(6.0)
     assert result.select([1, 0]) == 0
+
+
+def test_dominance_filter_rejects_invalid_numerical_contracts():
+    from qqa.multiobjective.solver import nondominated_mask
+
+    with pytest.raises(ValueError, match="finite objective"):
+        nondominated_mask(torch.tensor([[1.0, float("nan")]]))
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        nondominated_mask(torch.tensor([[1.0, 2.0]]), tolerance=-1.0)
+    with pytest.raises(ValueError, match="positive integer"):
+        nondominated_mask(torch.tensor([[1.0, 2.0]]), chunk_size=True)
 
 
 def test_pareto_archive_preserves_row_aligned_reference_direction_provenance():

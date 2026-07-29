@@ -43,6 +43,14 @@ def test_variable_declarations_reject_invalid_domains(factory):
         factory()
 
 
+def test_variable_space_rejects_nonfinite_solution_values():
+    space = qqa.VariableSpace((qqa.Real("x", 0.0, 1.0),))
+    with pytest.raises(ValueError, match="NaN or infinity"):
+        space.validate(torch.tensor([float("nan")]))
+    with pytest.raises(ValueError, match="NaN or infinity"):
+        space.validate(torch.tensor([float("inf")]))
+
+
 def test_variable_kind_cannot_be_overridden():
     with pytest.raises(TypeError):
         qqa.Binary("x", kind="real")

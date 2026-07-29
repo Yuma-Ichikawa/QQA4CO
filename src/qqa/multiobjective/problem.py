@@ -30,6 +30,8 @@ class Objective:
             raise ValueError("Objective name must be a non-empty string.")
         if self.direction not in ("min", "max"):
             raise ValueError("Objective direction must be 'min' or 'max'.")
+        if not isinstance(self.unit, str):
+            raise TypeError("Objective unit must be a string.")
 
 
 class MultiObjectiveProblem(MixedProblem):
