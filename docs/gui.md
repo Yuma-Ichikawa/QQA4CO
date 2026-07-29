@@ -1,57 +1,141 @@
 # GUI
 
-The Streamlit dashboard exposes QQA as an interactive tool with four pages.
+The Streamlit dashboard exposes the same problem, solver, planning, and
+visualisation APIs as Python and the CLI.
 
 ```bash
 pip install "qqa[gui]"
 qqa gui
-# or equivalently:
+# or, from a source checkout:
 streamlit run app/streamlit_app.py
 ```
+
+`qqa gui --port 8505 --headless` is convenient on a remote machine. The CLI
+loads the app bundled in an installed wheel and falls back to `app/` in a
+source or editable install.
 
 ## Pages
 
 ### Home
 
-Pick a problem family, size, seed, and problem-specific parameters. A
-preview is rendered as a graph (for combinatorial problems), a coupling
-heatmap (for spin problems), or a pattern matrix (for the binary
-perceptron).
+Pick from the built-in graph, assignment, permutation, physics, and
+statistical-learning problems. Controls change with the selected family and a
+domain-aware preview is rendered before solving.
+
+The arbitrary-Python editor executes trusted local code and is therefore
+disabled by default. Enable it only on a machine you control:
+
+```bash
+QQA_ALLOW_CUSTOM=1 qqa gui
+```
+
+Do not enable this flag on a public or shared deployment.
 
 ### Solve
 
-Tune QQA hyper-parameters (`sol_size`, `learning_rate`, `temp`, `min_bg`,
-`max_bg`, `curve_rate`, `div_param`, `num_epochs`) and hit **Run QQA** to
-launch the anneal. A `StreamlitCallback` streams the progress bar, current
-metrics, and a live loss/best plot.
+Choose PQQA, Population Annealing, CRA-PI-GNN, or CPRA where compatible, then
+set backend-specific controls. The page streams progress, loss, diversity, and
+parallel-population diagnostics and renders the final solution in a
+problem-aware view. Unsupported backend/problem combinations are blocked
+before a run.
 
 ### Visualize
 
-Four tabs — dynamics, best trajectory, schedule, solution heatmap — all
-backed by the :mod:`qqa.visualization` helpers in their Plotly flavour.
+Inspect the stored run through backend-aware tabs. PQQA views include schedule,
+parallel population, solution-space PCA, diversity, loss spectrogram, ridgeline,
+replica fate, and family tree. Population Annealing exposes its own ESS,
+free-energy, equilibrium, thermodynamic, lineage, and ancestry diagnostics
+instead of empty PQQA panels.
 
 ### Compare
 
-Run a small grid over `min_bg × max_bg × div_param` on the current problem
-and inspect the outcome with a parallel-coordinates plot plus an overlaid
-best-objective trajectory.
+Run parameter sweeps and inspect them with parallel coordinates and overlaid
+best-objective histories. The solver shootout compares PQQA with the available
+sampling baselines under matched budgets.
+
+### Universal
+
+Universal Studio covers the major bounded optimisation classes supported by
+QQA: binary, integer, real, mixed, constrained, multi-objective, and
+black-box. Its tabs are:
+
+| Tab | Workflow |
+|---|---|
+| **Ask QQA** | Natural language → audited `ModelSpec` → explained automatic route → result |
+| **Mixed planning** | Practical binary/integer/real microgrid dispatch |
+| **Pareto studio** | One-run cost/emissions/resilience or portfolio front |
+| **Black-box lab** | Explicitly defined constrained process evaluator |
+| **TeX model** | Reviewed TeX or JSON model with optional SCIP proof phase |
+
+## Ask QQA
+
+Describe variables, finite bounds, objectives, units, and constraints in the
+text box. For example:
+
+> Choose integer production lots in [0, 12] and real overtime in [0, 16].
+> Minimize cost while meeting demand of at least 105.
+
+Choose **Auto** unless a specific workflow is required. The model service
+receives a dedicated system prompt separately from the untrusted description.
+The browser never runs generated Python: the response must pass strict schema,
+safe-expression, resource-quota, scalar-shape, and finite-value checks.
+
+Two actions make the review boundary explicit:
+
+- **Build reviewed plan** translates and validates without solving.
+- **Plan & solve** additionally runs the selected local workflow.
+
+The result panel shows the selected solver, local routing rationale, warnings,
+audited JSON, and a downloadable plan before the numerical result. Multiple
+objectives route to parallel Pareto QQA. Compatible single-objective models may
+use QQA→SCIP when the optional backend is installed.
+
+If the request explicitly states a safe objective formula, the black-box route
+validates it and evaluates it point by point without gradients. Natural
+language cannot recreate an opaque simulator, external service, or physical
+experiment whose formula was not supplied. Use the Black-box lab's packaged
+evaluator or bind the real callable/service adapter with
+`qqa.BlackBoxProblem`; QQA must not invent the missing evaluator. Inspect model
+`notes` and correct material assumptions before solving.
+
+## Model API credentials
+
+For local use, set credentials in the process environment before launching:
+
+```bash
+export QQA_LLM_API_KEY='…'
+export QQA_LLM_BASE_URL='https://your-compatible-endpoint'
+export QQA_LLM_MODEL='your-model'
+qqa gui
+```
+
+`QQA_LLM_API_KEY` remains a legacy fallback. Never commit `.env` or
+`.streamlit/secrets.toml`; both are ignored by this repository. A key entered
+in the password widget is used for the translation request and is not included
+in the model, downloads, reports, or logs. TLS verification is enabled by
+default; the insecure private-gateway option should be limited to a trusted
+development network.
+
+On a public deployment, do not expose an unrestricted operator-funded model
+key or enable arbitrary custom Python. Add authentication, request quotas, and
+an endpoint allowlist appropriate to the deployment.
 
 ## Programmatic access
 
-`StreamlitCallback` lives inside the Solve page (it depends on
-Streamlit's runtime and session state). If you want to reuse it in your
-own Streamlit app, copy the class out of `app/pages/1_Solve.py` or
-import it from there:
+The reusable interfaces are framework-independent:
 
 ```python
-import importlib.util
-from pathlib import Path
+import qqa
 
-spec = importlib.util.spec_from_file_location("solve_page", Path("app/pages/1_Solve.py"))
-solve_page = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(solve_page)
-cb = solve_page.StreamlitCallback(...)
+plan = qqa.compile_natural_language(request, solver="auto")
+answer = qqa.execute_plan(plan, device="auto", seed=0)
 ```
 
-For non-Streamlit use cases, just subclass :class:`qqa.callbacks.Callback`
-directly — the base class is framework-agnostic.
+For a custom dashboard, subclass `qqa.callbacks.Callback` and update your own
+widgets in its lifecycle hooks. `StreamlitCallback` in
+`app/pages/1_Solve.py` is an application implementation detail and should not
+be imported as a library module.
+
+See the
+[natural-language optimisation Colab](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/12_natural_language_optimization_colab.ipynb)
+for the same reviewed workflow in a notebook.

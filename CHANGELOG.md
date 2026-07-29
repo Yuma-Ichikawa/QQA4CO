@@ -8,6 +8,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Universal optimisation studio
 
+- Add the unified `qqa.ask(...)`, `qqa ask`, and Streamlit **Ask QQA**
+  entry points: natural language is compiled with a separate hardened system
+  prompt, validated as an auditable `ModelSpec`, routed deterministically to
+  QQA, QQA+SCIP, Pareto QQA, or budgeted black-box search, and then solved.
+- Add a Colab-ready natural-language optimisation walkthrough with a reviewed
+  binary/integer/real production model, exact SCIP certification, one-run
+  three-objective Pareto search, and constrained parallel black-box tuning.
 - Add a cardinality-constrained binary/real portfolio application with
   risk/return/turnover objectives to the Python API, CLI, UI, and Colab
   studio.
@@ -95,6 +102,20 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Ship benchmark runners and plotting support inside wheels instead of
+  importing repository-only scripts.
+- Preserve the generating reference-direction weight for every filtered and
+  sorted Pareto solution.
+- Correct iSCO's ragged batched Plackett–Luce probability by excluding padded
+  path entries from both forward and reverse denominators.
+- Preflight complete SCIP model compilation before QQA work, reject
+  infeasible projected SCIP replacements, and make mixed-model penalty
+  calibration solve-local, offset-invariant, and feasibility-first.
+- Harden generated model validation with structural quotas and deterministic
+  finite-value probes; reject unsafe LLM base URLs, oversized responses, and
+  credential-forwarding redirects.
+- Resolve Streamlit page links relative to the live page script so all five
+  navigation entries work from both the home page and legacy `pages/` routes.
 - Remove AdamW's implicit weight decay from QQA defaults, which biased latent
   binary coordinates toward zero independently of the objective.
 - Correct greedy 1-flip QUBO deltas for non-symmetric user matrices by using

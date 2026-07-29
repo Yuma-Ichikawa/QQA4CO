@@ -129,6 +129,80 @@ def test_practical_mixed_factory_problem_finds_known_optimum():
     assert result.score["extra"]["variables"]["overtime"] == pytest.approx(0.0)
 
 
+def test_mixed_solver_prefers_a_feasible_replica_and_does_not_mutate_problem(monkeypatch):
+    from qqa.annealing import AnnealResult
+
+    problem = qqa.MixedProblem(
+        [qqa.Real("x", 0.0, 1.0)],
+        lambda v: v["x"],
+        constraints=[
+            qqa.Constraint(
+                lambda v: v["x"],
+                sense=">=",
+                rhs=0.5,
+                weight=1.0,
+                name="minimum",
+            )
+        ],
+    )
+    problem.penalty_multiplier = 17.0
+    seen = {}
+
+    def fake_anneal(solving_problem, **kwargs):
+        seen["problem"] = solving_problem
+        seen["multiplier"] = solving_problem.penalty_multiplier
+        return AnnealResult(
+            best_sol=torch.tensor([0.0]),
+            best_obj=0.25,
+            runtime=0.0,
+            final_population=torch.tensor([[0.0], [0.5], [0.8]]),
+        )
+
+    monkeypatch.setattr("qqa.mixed.solve.anneal", fake_anneal)
+    result = qqa.solve_mixed(problem, calibrate_penalty=False)
+    assert seen["problem"] is not problem
+    assert seen["multiplier"] == 1.0
+    assert problem.penalty_multiplier == 17.0
+    assert result.best_sol.item() == pytest.approx(0.5)
+    assert result.score["feasible"]
+    assert result.final_population is None
+
+
+def test_penalty_calibration_is_invariant_to_large_objective_offsets(monkeypatch):
+    from qqa.annealing import AnnealResult
+
+    captured = []
+
+    def fake_anneal(solving_problem, **kwargs):
+        captured.append(solving_problem.penalty_multiplier)
+        return AnnealResult(
+            best_sol=torch.tensor([0.8], dtype=torch.float64),
+            best_obj=1e9,
+            runtime=0.0,
+            final_population=torch.tensor([[0.8], [0.5]], dtype=torch.float64),
+        )
+
+    monkeypatch.setattr("qqa.mixed.solve.anneal", fake_anneal)
+    for offset in (0.0, 1e9):
+        problem = qqa.MixedProblem(
+            [qqa.Real("x", 0.0, 1.0)],
+            lambda v, offset=offset: offset + (v["x"] - 0.8).square(),
+            constraints=[
+                qqa.Constraint(
+                    lambda v: v["x"],
+                    sense=">=",
+                    rhs=0.4,
+                    weight=1.0,
+                    name="minimum",
+                )
+            ],
+            dtype=torch.float64,
+        )
+        qqa.solve_mixed(problem, calibration_points=32)
+    assert captured[0] == pytest.approx(captured[1], rel=1e-8)
+    assert captured[1] < 1e5
+
+
 def test_mixed_objective_must_preserve_population_axis():
     problem = qqa.MixedProblem(
         [qqa.Real("x", 0.0, 1.0)],

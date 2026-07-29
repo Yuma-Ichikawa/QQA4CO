@@ -265,6 +265,8 @@ def _plackett_luce_logprob(
     sigma: torch.Tensor,
     L_per_chain: torch.Tensor,
     L_max: int,
+    *,
+    mask: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute ``log q(σ)`` for Plackett-Luce sampling without replacement.
 
@@ -278,12 +280,27 @@ def _plackett_luce_logprob(
     L_per_chain : ``(*,)``
         Valid path length for each chain (int tensor).
     L_max : int
+    mask : ``(*, N)``, optional
+        Boolean mask of selectable sites. Masked sites are excluded from
+        every Plackett-Luce denominator. This must match the mask used to
+        sample ``sigma``; otherwise ragged batched instances violate the
+        Metropolis-Hastings proposal-ratio calculation.
 
     Returns
     -------
     ``(*,)`` log-probability of the ordered path (sum over valid
     positions; invalid positions contribute 0).
     """
+    if mask is not None:
+        try:
+            mask = torch.broadcast_to(mask.bool(), log_w.shape)
+        except RuntimeError as exc:
+            raise ValueError(
+                f"mask shape {tuple(mask.shape)} is not broadcastable to "
+                f"log_w shape {tuple(log_w.shape)}."
+            ) from exc
+        log_w = torch.where(mask, log_w, torch.full_like(log_w, float("-inf")))
+
     dtype = log_w.dtype
     device = log_w.device
     chosen_log_w = torch.gather(log_w, dim=-1, index=sigma)  # (*, L_max)
@@ -306,11 +323,15 @@ def _plackett_luce_logprob(
     log_q_per_step = chosen_log_w - log_remaining  # (*, L_max)
     shape_prefix = log_w.shape[:-1]
     k_idx = torch.arange(L_max, device=device).view((1,) * len(shape_prefix) + (L_max,))
-    mask = k_idx < L_per_chain.unsqueeze(-1)  # (*, L_max)
+    valid_steps = k_idx < L_per_chain.unsqueeze(-1)  # (*, L_max)
     # Zero masked positions via ``where`` (not ``* mask.to(dtype)``) so that
     # any non-finite ``log_q_per_step`` entry at a masked tail position
     # cannot poison the sum through ``inf * 0 = NaN``.
-    log_q_per_step = torch.where(mask, log_q_per_step, torch.zeros_like(log_q_per_step))
+    log_q_per_step = torch.where(
+        valid_steps,
+        log_q_per_step,
+        torch.zeros_like(log_q_per_step),
+    )
     return log_q_per_step.sum(dim=-1)
 
 
@@ -694,8 +715,21 @@ def _isco_batched(
             log_w_y = -delta_y * inv2T
             sigma_rev = _reverse_path(sigma, L_s, L_max)
 
-            log_q_fwd = _plackett_luce_logprob(log_w, sigma, L_s, L_max)
-            log_q_rev = _plackett_luce_logprob(log_w_y, sigma_rev, L_s, L_max)
+            proposal_mask = mask_var_b.expand(S, I, N)
+            log_q_fwd = _plackett_luce_logprob(
+                log_w,
+                sigma,
+                L_s,
+                L_max,
+                mask=proposal_mask,
+            )
+            log_q_rev = _plackett_luce_logprob(
+                log_w_y,
+                sigma_rev,
+                L_s,
+                L_max,
+                mask=proposal_mask,
+            )
 
             log_alpha = -dE * inv_T + log_q_rev - log_q_fwd
             u = torch.rand(S, I, device=device, generator=gen, dtype=Q.dtype).clamp_min_(1e-38)

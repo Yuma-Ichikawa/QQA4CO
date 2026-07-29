@@ -28,7 +28,7 @@ def test_cli_version_prints_version():
 def test_cli_help_describes_subcommands():
     out = _run("--help")
     assert out.returncode == 0
-    for cmd in ("solve", "tex", "example", "doctor", "bench", "gui", "version"):
+    for cmd in ("ask", "solve", "tex", "example", "doctor", "bench", "gui", "version"):
         assert cmd in out.stdout
 
 

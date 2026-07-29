@@ -7,8 +7,16 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from qqa.mixed.variables import Binary, Integer, Real, VariableSpec
+import torch
+
+from qqa.mixed.variables import Binary, Integer, Real, VariableSpace, VariableSpec
 from qqa.tex.expressions import compile_expression
+
+MAX_VARIABLE_DECLARATIONS = 512
+MAX_TOTAL_DIMENSION = 65_536
+MAX_OBJECTIVES = 32
+MAX_CONSTRAINTS = 4_096
+_PREFLIGHT_SAMPLES = 5
 
 
 def _finite(value: Any, label: str) -> float:
@@ -146,9 +154,21 @@ class ModelSpec:
             raise ValueError("Model objectives must be a non-empty list.")
         if not isinstance(value["constraints"], list):
             raise TypeError("Model constraints must be a list.")
-        if len(value["variables"]) > 512:
-            raise ValueError("At most 512 variable declarations are allowed.")
+        if len(value["variables"]) > MAX_VARIABLE_DECLARATIONS:
+            raise ValueError(
+                f"At most {MAX_VARIABLE_DECLARATIONS} variable declarations are allowed."
+            )
+        if len(value["objectives"]) > MAX_OBJECTIVES:
+            raise ValueError(f"At most {MAX_OBJECTIVES} objectives are allowed.")
+        if len(value["constraints"]) > MAX_CONSTRAINTS:
+            raise ValueError(f"At most {MAX_CONSTRAINTS} constraints are allowed.")
         variables = tuple(VariableDeclaration.from_dict(item) for item in value["variables"])
+        total_dimension = sum(item.size for item in variables)
+        if total_dimension > MAX_TOTAL_DIMENSION:
+            raise ValueError(
+                "Model total variable dimension must be at most "
+                f"{MAX_TOTAL_DIMENSION:,}, got {total_dimension:,}."
+            )
         objectives = tuple(ObjectiveDeclaration.from_dict(item) for item in value["objectives"])
         constraints = tuple(ConstraintDeclaration.from_dict(item) for item in value["constraints"])
         variable_names = [item.name for item in variables]
@@ -160,10 +180,9 @@ class ModelSpec:
         constraint_names = [item.name for item in constraints]
         if len(constraint_names) != len(set(constraint_names)):
             raise ValueError("Constraint names must be unique.")
-        variable_map = {item.name: item.to_variable() for item in variables}
-        for item in (*objectives, *constraints):
-            compile_expression(item.expression, variable_map)
-        return cls(value["name"], variables, objectives, constraints, value["notes"])
+        model = cls(value["name"], variables, objectives, constraints, value["notes"])
+        model.validate_semantics()
+        return model
 
     @classmethod
     def from_json(cls, source: str) -> ModelSpec:
@@ -189,6 +208,62 @@ class ModelSpec:
     def variable_specs(self) -> tuple[VariableSpec, ...]:
         return tuple(value.to_variable() for value in self.variables)
 
+    def validate_semantics(self) -> None:
+        """Preflight every expression on a small deterministic domain sample.
+
+        The safe AST validator prevents code execution, but syntax alone cannot
+        establish the numerical contract required by QQA. Objectives and
+        constraints must return exactly one finite scalar per candidate. This
+        check intentionally includes declared bounds, because the relaxation
+        and final projection may evaluate expressions there.
+        """
+
+        variable_specs = self.variable_specs
+        variable_map = {variable.name: variable for variable in variable_specs}
+        space = VariableSpace(variable_specs)
+        dimension = space.dimension
+
+        # Three common boundary/interior points plus two deterministic,
+        # column-varying interiors catch cross-variable singularities without
+        # allocating a solver-sized population or relying on global RNG state.
+        fractions = torch.empty((_PREFLIGHT_SAMPLES, dimension), dtype=torch.float64)
+        fractions[0].zero_()
+        fractions[1].fill_(1.0)
+        fractions[2].fill_(0.5)
+        columns = torch.arange(dimension, dtype=torch.int64)
+        fractions[3] = ((columns * 37 + 11) % 101).to(torch.float64).add_(0.5).div_(101)
+        fractions[4] = ((columns * 53 + 17) % 103).to(torch.float64).add_(0.5).div_(103)
+        points = space.project(fractions)
+        named = space.unpack(points)
+
+        declarations = (
+            *(("objective", item.name, item.expression) for item in self.objectives),
+            *(("constraint", item.name, item.expression) for item in self.constraints),
+        )
+        with torch.no_grad():
+            for kind, name, expression in declarations:
+                function = compile_expression(expression, variable_map)
+                try:
+                    result = torch.as_tensor(function(named), dtype=points.dtype)
+                except (ArithmeticError, RuntimeError, ValueError) as exc:
+                    raise ValueError(
+                        f"{kind.capitalize()} {name!r} failed numerical preflight: {exc}"
+                    ) from exc
+                expected = (_PREFLIGHT_SAMPLES,)
+                if tuple(result.shape) != expected:
+                    raise ValueError(
+                        f"{kind.capitalize()} {name!r} must return one scalar per candidate "
+                        f"with shape {expected}, got {tuple(result.shape)}."
+                    )
+                if not torch.isfinite(result).all():
+                    bad_samples = (~torch.isfinite(result)).nonzero(as_tuple=False).flatten()
+                    first_bad = int(bad_samples[0].item())
+                    raise ValueError(
+                        f"{kind.capitalize()} {name!r} returned NaN or infinity during "
+                        f"numerical preflight at sample {first_bad}. Check expression domains "
+                        "over all declared variable bounds."
+                    )
+
 
 MODEL_JSON_SCHEMA = {
     "type": "object",
@@ -199,6 +274,7 @@ MODEL_JSON_SCHEMA = {
         "variables": {
             "type": "array",
             "minItems": 1,
+            "maxItems": MAX_VARIABLE_DECLARATIONS,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -208,13 +284,18 @@ MODEL_JSON_SCHEMA = {
                     "kind": {"type": "string", "enum": ["binary", "integer", "real"]},
                     "lower": {"type": "number"},
                     "upper": {"type": "number"},
-                    "size": {"type": "integer", "minimum": 1},
+                    "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_TOTAL_DIMENSION,
+                    },
                 },
             },
         },
         "objectives": {
             "type": "array",
             "minItems": 1,
+            "maxItems": MAX_OBJECTIVES,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -229,6 +310,7 @@ MODEL_JSON_SCHEMA = {
         },
         "constraints": {
             "type": "array",
+            "maxItems": MAX_CONSTRAINTS,
             "items": {
                 "type": "object",
                 "additionalProperties": False,
@@ -259,6 +341,10 @@ MODEL_JSON_SCHEMA = {
 
 __all__ = [
     "ConstraintDeclaration",
+    "MAX_CONSTRAINTS",
+    "MAX_OBJECTIVES",
+    "MAX_TOTAL_DIMENSION",
+    "MAX_VARIABLE_DECLARATIONS",
     "MODEL_JSON_SCHEMA",
     "ModelSpec",
     "ObjectiveDeclaration",

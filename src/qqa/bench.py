@@ -1,9 +1,9 @@
 """One-line benchmark API for third-party users.
 
-The raw machinery lives in ``scripts/bench_discs.py`` (runner) and
-``scripts/plot_benchmarks.py`` (visualiser) because they are invoked
-stand-alone on a cluster. This module gives you the same functionality
-from Python without having to set ``sys.path`` or call subprocesses.
+The implementation lives in :mod:`qqa.benchmarking`, which is shipped in
+both wheels and source distributions.  The files under ``scripts/`` are thin
+cluster-friendly wrappers around the same implementation, so Python and CLI
+entry points have identical behaviour after ``pip install qqa``.
 
 Typical flow::
 
@@ -22,21 +22,20 @@ Typical flow::
         output="bench_results/report.png",
     )
 
-CLI equivalents (``qqa bench run``, ``qqa bench plot``, ``qqa bench
-list``, ``qqa bench setup``) are documented under ``qqa bench --help``.
+CLI equivalents (``qqa bench-run``, ``qqa bench-plot``, and
+``qqa bench-list``) are documented in the CLI reference.
 """
 
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 __all__ = [
     "DEFAULT_RESULTS_DIR",
     "list_suites",
+    "resolve_suite",
     "run",
     "plot",
     "bench_discs_main",
@@ -51,45 +50,23 @@ __all__ = [
 DEFAULT_RESULTS_DIR = Path("bench_results")
 
 
-# --------------------------------------------------------------------------- #
-# Internal: locate the scripts/ runners without packaging them.               #
-# --------------------------------------------------------------------------- #
-
-
-def _scripts_dir() -> Path:
-    """Return the ``scripts/`` directory shipped next to the repo root."""
-    here = Path(__file__).resolve()
-    # In a source checkout: .../QQA4CO/src/qqa/bench.py -> .../QQA4CO/scripts
-    for parent in here.parents:
-        cand = parent / "scripts"
-        if (cand / "bench_discs.py").is_file() and (cand / "plot_benchmarks.py").is_file():
-            return cand
-    raise RuntimeError(
-        "Could not locate scripts/ with bench_discs.py + plot_benchmarks.py. "
-        "When installed as a wheel, use the bundled scripts from the QQA4CO "
-        "git repository; the bench runner is not shipped in the wheel."
-    )
-
-
-def _load_scripts_module(name: str):
-    """Import a module from ``scripts/`` (``bench_discs`` / ``plot_benchmarks``).
-
-    Both runners live as plain ``.py`` files next to the repo and are *not*
-    shipped in the wheel, so we splice ``scripts/`` into ``sys.path`` once
-    per call and let :mod:`importlib` do the rest.
-    """
-    sd = _scripts_dir()
-    if str(sd) not in sys.path:
-        sys.path.insert(0, str(sd))
-    return importlib.import_module(name)
-
-
 def _load_bench_discs():
-    return _load_scripts_module("bench_discs")
+    """Lazily import the packaged runner.
+
+    Keeping this tiny seam preserves the existing test/mocking contract while
+    avoiding import-time dataset discovery for users who only import
+    :mod:`qqa.bench`.
+    """
+    from qqa.benchmarking import runner
+
+    return runner
 
 
 def _load_plot_benchmarks():
-    return _load_scripts_module("plot_benchmarks")
+    """Lazily import the packaged report renderer."""
+    from qqa.benchmarking import plotting
+
+    return plotting
 
 
 # --------------------------------------------------------------------------- #
@@ -260,12 +237,12 @@ def plot(
 
 
 def bench_discs_main(argv: list[str] | None = None) -> int:
-    """Re-export ``scripts/bench_discs.py``'s ``main`` for ``qqa bench run``."""
+    """Run the packaged benchmark CLI implementation."""
     return _load_bench_discs().main(argv)
 
 
 def plot_benchmarks_main(argv: list[str] | None = None) -> int:
-    """Re-export ``scripts/plot_benchmarks.py``'s ``main`` for ``qqa bench plot``."""
+    """Run the packaged benchmark plotting CLI implementation."""
     return _load_plot_benchmarks().main(argv)
 
 

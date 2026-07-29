@@ -7,6 +7,8 @@ Solve / Visualize / Compare pages stay declarative.
 from __future__ import annotations
 
 import contextlib
+import os
+from pathlib import Path
 from typing import Any
 
 import networkx as nx
@@ -747,6 +749,28 @@ _DEMO_URL = "https://parallelquasiquantum4co.streamlit.app/"
 _DOI_URL = "https://doi.org/10.5281/zenodo.19648231"
 
 
+def _page_link_target(target: str) -> str:
+    """Return a page path relative to Streamlit's current script.
+
+    Streamlit resolves ``st.page_link`` from ``main_script_path``.  On a
+    legacy multipage app that path changes from ``streamlit_app.py`` to the
+    selected file below ``pages/``, so a single hard-coded relative path
+    cannot work on every page.  Resolve from the live script while keeping a
+    public-API-only fallback for older/newer Streamlit releases.
+    """
+    app_root = Path(__file__).resolve().parent
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+        context = get_script_run_ctx(suppress_warning=True)
+        script_path = getattr(context, "main_script_path", None)
+        if script_path:
+            return os.path.relpath(app_root / target, Path(script_path).resolve().parent)
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        pass
+    return target
+
+
 def sidebar_brand() -> None:
     """Render the QQA brand block at the top of the sidebar.
 
@@ -799,17 +823,27 @@ def sidebar_brand() -> None:
         #      conceptually the *first* step (problem selection).
         # The manual block lives directly under the brand and lists
         # pages in the natural left-to-right workflow order:
-        # **Problem → Solve → Visualize → Compare**.
+        # **Problem → Solve → Visualize → Compare → Universal**.
         if hasattr(st, "page_link"):
             with contextlib.suppress(Exception):
                 st.markdown(
                     "<div class='qqa-nav' style='margin-top:0.25rem;margin-bottom:0.5rem;'></div>",
                     unsafe_allow_html=True,
                 )
-                st.page_link("streamlit_app.py", label="Problem", icon="🧩")
-                st.page_link("pages/1_Solve.py", label="Solve", icon="▶️")
-                st.page_link("pages/2_Visualize.py", label="Visualize", icon="📊")
-                st.page_link("pages/3_Compare.py", label="Compare", icon="🔬")
+            # A missing optional page in an older installed wheel must not
+            # suppress every link that follows it. Resolve each entry
+            # independently so mixed-version deployments remain navigable.
+            links = (
+                ("streamlit_app.py", "Problem", "🧩"),
+                ("pages/1_Solve.py", "Solve", "▶️"),
+                ("pages/2_Visualize.py", "Visualize", "📊"),
+                ("pages/3_Compare.py", "Compare", "🔬"),
+                ("pages/4_Universal.py", "Universal", "🌐"),
+            )
+            for page, label, icon in links:
+                with contextlib.suppress(Exception):
+                    st.page_link(_page_link_target(page), label=label, icon=icon)
+            with contextlib.suppress(Exception):
                 st.markdown(
                     "<div style='border-bottom:1px solid rgba(148,163,184,0.2);"
                     "margin:0.55rem 0 0.4rem 0;'></div>",
@@ -864,7 +898,7 @@ def empty_state_card(
     )
     if hasattr(st, "page_link"):
         with contextlib.suppress(Exception):
-            st.page_link(cta_page, label=cta_label, icon="▶")
+            st.page_link(_page_link_target(cta_page), label=cta_label, icon="▶")
 
 
 def paper_link_footer() -> None:

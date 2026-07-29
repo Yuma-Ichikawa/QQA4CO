@@ -9,13 +9,33 @@ behind a single, GPU-friendly API. One installation gives you the PQQA
 solver, an optional GNN backend that plugs in CRA-PI-GNN-style methods,
 GPU-parallel **SA** and **Population Annealing** baselines for honest
 comparisons, a 20+ class problem catalogue, a Streamlit dashboard and a CLI.
-The same GPU-parallel engine now covers the full practical optimisation
-spectrum: **single- and multi-objective**, **binary, integer, real, and mixed
-variables**, constrained nonlinear and **black-box** objectives, plus optional
-exact **SCIP** refinement and TeX-to-solver modelling.
+The package also covers the major bounded optimisation classes:
+**single- and multi-objective**, **binary, integer, real, and mixed variables**,
+constrained nonlinear models and explicitly supplied **black-box** evaluators,
+plus optional exact **SCIP** refinement and language/TeX-to-solver modelling.
 
 The package is published on PyPI as **`qqa`** for backwards compatibility
 with earlier QQA4CO releases (``import qqa``).
+
+The shortest entry point is now a description of the decision itself:
+
+```bash
+export QQA_LLM_API_KEY='…'  # environment only; never commit API keys
+qqa ask "Choose integer batches from 0 to 20 and real overtime from 0 to 8. \
+Minimize 3*batches + square(overtime), subject to 4*batches + overtime >= 45."
+```
+
+`qqa ask`, the Python [`qqa.ask`](#natural-language-to-an-audited-solver-plan)
+API, and the dashboard's **Ask QQA** tab share one audited workflow. A dedicated
+system prompt treats user text as untrusted data; strict JSON-schema, expression,
+dimension, shape, and finite-value checks run locally. Trusted local routing
+then selects QQA, QQA→SCIP when compatible and installed, or one-run parallel
+Pareto QQA. The same Universal surface covers the major bounded optimisation
+classes—binary, integer, real, mixed, constrained, multi-objective, and
+black-box. For the `qqa ask --solver blackbox` route, the request must explicitly
+state a safe objective formula; QQA evaluates that validated formula point by
+point without gradients. Prose cannot supply an opaque simulator: external
+black-box evaluations still require an explicit callable or service adapter.
 
 <p align="center">
   <a href="https://pypi.org/project/qqa/"><img src="https://img.shields.io/pypi/v/qqa.svg?logo=pypi&logoColor=white&label=PyPI" alt="PyPI version"></a>
@@ -72,7 +92,7 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 | **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, domain-aware monotone polish and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
-| **Universal** | Solve a realistic mixed microgrid, generate a cost/emissions/resilience Pareto front on GPU, tune a constrained black-box process, or review and solve a TeX/JSON model with optional SCIP certification. |
+| **Universal** | In **Ask QQA**, describe a bounded symbolic model and review the generated plan and automatic QQA / QQA→SCIP / Pareto route. The other tabs solve a realistic mixed microgrid, generate a Pareto front, tune an explicitly defined constrained black-box process, or review and solve TeX/JSON. |
 
 ### Or run it locally — same UI, your hardware
 
@@ -134,15 +154,16 @@ CUDA is picked up automatically when available.
    same `best_sol` / `best_obj` / `history` / `polished_sol` surface as
    `qqa.anneal`, so the Streamlit *Compare* page can race PQQA against
    any of them at a matched compute budget.
-5. **Universal optimisation workflows**: a one-run GPU-parallel Pareto solver
-   with adaptive feasibility and restart recovery, resumable mixed-variable
-   black-box optimisation with expected improvement, optional QQA→SCIP QUBO
-   and mixed nonlinear refinement with optimality gaps, and a safe `qqa tex`
-   interface that turns TeX into an auditable declarative model through an
-   OpenAI-compatible API.
+5. **Universal optimisation workflows**: `qqa.ask`, `qqa ask`, and the
+   **Ask QQA** tab translate ordinary language with a dedicated safety-focused
+   system prompt, validate the declarative model locally, and explain the
+   selected route; a one-run GPU-parallel Pareto solver with adaptive
+   feasibility and restart recovery, resumable mixed-variable black-box
+   optimisation with expected improvement, optional QQA→SCIP QUBO and mixed
+   nonlinear refinement with optimality gaps, and a safe `qqa tex` interface.
 6. **A polished Streamlit dashboard** (light / dark, live progress, parallel
    population view, per-problem solution viz, hyper-parameter sweeps) and a
-   `qqa` **CLI** (`solve / tex / example / doctor / bench / gui / version`) for reproducible
+   `qqa` **CLI** (`ask / solve / tex / example / doctor / bench / gui / version`) for reproducible
    experiments. A hosted instance lives at
    <https://parallelquasiquantum4co.streamlit.app/>.
 7. **MkDocs + Material reference docs** with auto-generated API pages, a
@@ -209,6 +230,45 @@ qqa example run process-blackbox --device auto --output-dir results/process
 ```
 
 ## Quickstart
+
+### Natural language to an audited solver plan
+
+Natural-language translation requires an OpenAI-compatible endpoint. Keep its
+key in `QQA_LLM_API_KEY`; the legacy `QQA_LLM_API_KEY` name remains
+accepted for compatibility.
+
+```python
+import qqa
+
+answer = qqa.ask(
+    """
+    Choose integer production lots a and b in [0, 12] and real overtime in [0, 16].
+    Minimize 460*a + 510*b + 38*overtime**2.
+    Require 8*a + 7*b + overtime >= 105.
+    """,
+    solver="auto",
+    device="auto",
+    seed=0,
+)
+print(answer.plan.selected_solver, answer.plan.rationale)
+print(answer.result.score)
+```
+
+Use `qqa.compile_natural_language(...)` when review must precede execution,
+then pass its `OptimizationPlan` to `qqa.execute_plan(...)`. Multiple declared
+objectives route to the parallel Pareto solver. The natural-language black-box
+route is available when the request explicitly states a formula that can be
+validated and evaluated point by point. If the objective exists only in an
+external simulator, API, or experiment, bind that real evaluator explicitly
+with `BlackBoxProblem`; QQA does not invent it. Always review `plan.spec.notes`
+before execution, especially when the request leaves assumptions open.
+
+The
+[natural-language optimisation Colab](examples/12_natural_language_optimization_colab.ipynb)
+demonstrates reviewed plans, CLI use, automatic routing, and offline re-use of
+the generated model.
+
+### Direct problem API
 
 ```python
 import networkx as nx
@@ -321,6 +381,8 @@ See the [universal optimisation guide](docs/universal-optimization.md) and
 which runs mixed microgrid dispatch, cost/emissions/resilience planning,
 cardinality-constrained risk/return/turnover allocation, constrained process
 black-box optimisation, and QQA→SCIP production planning.
+For the unified ordinary-language entry point, see
+[`examples/12_natural_language_optimization_colab.ipynb`](examples/12_natural_language_optimization_colab.ipynb).
 
 Adaptive QQA restarts are enabled by the CLI and mixed-problem convenience
 solver. They preserve the incumbent, replace only weak replicas, and divide
@@ -996,7 +1058,7 @@ in place.
 
 ## Notebooks
 
-Nine runnable notebooks live in [`examples/`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/examples). Each carries an
+Thirteen runnable notebooks live in [`examples/`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/examples). Each carries an
 **Open in Colab** badge in its first cell and auto-installs `qqa`.
 
 | #   | Notebook                                  |
@@ -1010,6 +1072,10 @@ Nine runnable notebooks live in [`examples/`](https://github.com/Yuma-Ichikawa/Q
 | 6   | `06_binary_perceptron.ipynb`              |
 | 7   | `07_hopfield_memory.ipynb`                |
 | 8   | `08_parallel_benchmark.ipynb`             |
+| 9   | `09_mixed_integer_real_optimization.ipynb` — integer, real, and mixed models |
+| 10  | `10_universal_optimization_colab.ipynb` — mixed, Pareto, black-box, and SCIP |
+| 11  | `11_real_world_optimization_studio.ipynb` — practical end-to-end applications |
+| 12  | `12_natural_language_optimization_colab.ipynb` — natural language, reviewed plans, and auto-routing |
 
 Regenerate them deterministically with
 `uv run python scripts/_generate_notebooks.py`.
@@ -1055,7 +1121,7 @@ QQA4CO/
 │   └── problems/     # qubo.py, categorical.py, spin.py, extras.py, user.py
 ├── app/              # Streamlit dashboard (streamlit_app.py + pages/)
 ├── docs/             # MkDocs site sources
-├── examples/         # 9 example notebooks
+├── examples/         # 13 example notebooks
 ├── scripts/          # demo, benchmark, verification, gallery scripts
 ├── tests/            # pytest suite
 ├── data/             # bundled datasets and gallery figures
@@ -1084,7 +1150,7 @@ companion paper:
   title   = {QQA4CO: Quasi-Quantum Annealing for Combinatorial Optimization},
   author  = {Ichikawa, Yuma and Arai, Yamato},
   year    = {2026},
-  version = {0.5.0},
+  version = {0.6.0},
   doi     = {10.5281/zenodo.19648231},
   url     = {https://github.com/Yuma-Ichikawa/QQA4CO}
 }

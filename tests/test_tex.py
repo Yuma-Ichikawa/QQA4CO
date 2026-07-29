@@ -9,6 +9,7 @@ import pytest
 import qqa
 from qqa.cli import main
 from qqa.tex.expressions import UnsafeExpressionError
+from qqa.tex.schema import MAX_CONSTRAINTS, MAX_OBJECTIVES, MAX_TOTAL_DIMENSION
 
 
 def _spec_dict(expression: str = "square(x - 2) + square(n - 3)") -> dict:
@@ -89,6 +90,7 @@ def test_cli_solves_audited_spec_without_api_key(tmp_path, capsys):
 
 def test_client_requires_environment_key(monkeypatch):
     monkeypatch.delenv("QQA_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("QQA_LLM_API_KEY", raising=False)
     with pytest.raises(ValueError, match="QQA_LLM_API_KEY"):
         qqa.OpenAICompatibleClient()
 
@@ -134,3 +136,142 @@ def test_client_caches_structured_output_fallback(monkeypatch):
     assert json.loads(client.generate_model_json("first"))["name"] == "tex-quadratic"
     assert json.loads(client.generate_model_json("second"))["name"] == "tex-quadratic"
     assert calls == [True, False, False]
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "http://example.com",
+        "https://user:password@example.com",
+        "https://example.com?token=secret",
+        "https://example.com/#fragment",
+    ],
+)
+def test_client_rejects_unsafe_base_urls(base_url):
+    with pytest.raises(ValueError, match="base_url must be an HTTPS URL"):
+        qqa.OpenAICompatibleClient(api_key="test-key", base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    ("api_style", "system_field"),
+    [("responses", "instructions"), ("messages", "system")],
+)
+def test_client_sends_system_prompt_separately_and_does_not_redirect_key(
+    monkeypatch, api_style, system_field
+):
+    requests = []
+    response_payload = (
+        {"content": [{"type": "text", "text": json.dumps(_spec_dict())}]}
+        if api_style == "messages"
+        else {"output_text": json.dumps(_spec_dict())}
+    )
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            assert limit > 1024
+            return json.dumps(response_payload).encode()
+
+    def open_request(request, **kwargs):
+        requests.append(request)
+        return _Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", open_request)
+    client = qqa.OpenAICompatibleClient(
+        api_key="test-key",
+        api_style=api_style,
+        max_retries=0,
+    )
+    client.generate_model_json("user model", system_prompt="trusted system")
+    payload = json.loads(requests[0].data)
+    assert payload[system_field] == "trusted system"
+    assert "Authorization" not in requests[0].headers
+    assert requests[0].unredirected_hdrs["Authorization"] == "Bearer test-key"
+
+
+def test_model_spec_rejects_excessive_total_variable_dimension():
+    source = _spec_dict()
+    source["variables"] = [
+        {
+            "name": "huge",
+            "kind": "real",
+            "lower": 0,
+            "upper": 1,
+            "size": MAX_TOTAL_DIMENSION + 1,
+        }
+    ]
+    source["objectives"][0]["expression"] = "sum(huge)"
+    with pytest.raises(ValueError, match="total variable dimension"):
+        qqa.ModelSpec.from_dict(source)
+
+
+def test_model_spec_rejects_excessive_objective_count():
+    source = _spec_dict()
+    objective = source["objectives"][0]
+    source["objectives"] = [
+        {**objective, "name": f"objective_{index}"} for index in range(MAX_OBJECTIVES + 1)
+    ]
+    with pytest.raises(ValueError, match=rf"At most {MAX_OBJECTIVES} objectives"):
+        qqa.ModelSpec.from_dict(source)
+
+
+def test_model_spec_rejects_excessive_constraint_count():
+    source = _spec_dict()
+    source["constraints"] = [
+        {
+            "name": f"constraint_{index}",
+            "expression": "x",
+            "sense": "<=",
+            "rhs": 5,
+            "weight": 1,
+            "scale": 1,
+            "tolerance": 0,
+        }
+        for index in range(MAX_CONSTRAINTS + 1)
+    ]
+    with pytest.raises(ValueError, match=rf"At most {MAX_CONSTRAINTS} constraints"):
+        qqa.ModelSpec.from_dict(source)
+
+
+def test_model_spec_preflight_rejects_vector_valued_objective():
+    source = _spec_dict("x")
+    source["variables"][0]["size"] = 2
+    with pytest.raises(ValueError, match="one scalar per candidate"):
+        qqa.ModelSpec.from_dict(source)
+
+
+def test_model_spec_preflight_rejects_vector_valued_constraint():
+    source = _spec_dict("sum(square(x)) + square(n - 3)")
+    source["variables"][0]["size"] = 2
+    source["constraints"] = [
+        {
+            "name": "vector-limit",
+            "expression": "x",
+            "sense": "<=",
+            "rhs": 5,
+            "weight": 1,
+            "scale": 1,
+            "tolerance": 0,
+        }
+    ]
+    with pytest.raises(ValueError, match="Constraint 'vector-limit'.*one scalar per candidate"):
+        qqa.ModelSpec.from_dict(source)
+
+
+@pytest.mark.parametrize("expression", ["log(x)", "1 / x"])
+def test_model_spec_preflight_rejects_nonfinite_expression_on_declared_domain(expression):
+    source = _spec_dict(expression)
+    with pytest.raises(ValueError, match="returned NaN or infinity"):
+        qqa.ModelSpec.from_dict(source)
+
+
+def test_model_spec_preflight_accepts_finite_vector_reduction():
+    source = _spec_dict("sum(square(x)) + square(n - 3)")
+    source["variables"][0]["size"] = 3
+    spec = qqa.ModelSpec.from_dict(source)
+    assert spec.variables[0].size == 3

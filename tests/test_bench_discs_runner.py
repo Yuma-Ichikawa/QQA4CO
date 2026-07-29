@@ -1,4 +1,4 @@
-"""Regression tests for ``scripts.bench_discs`` helpers.
+"""Regression tests for :mod:`qqa.benchmarking.runner` helpers.
 
 These lock the *feasibility-aware* objective contract: for penalised QUBO
 problems (MIS, MaxClique) the runner must NOT use ``-best_obj`` blindly,
@@ -8,19 +8,12 @@ constraint. We therefore wire ``score_summary`` into the runner.
 
 from __future__ import annotations
 
-import importlib
-import sys
-from pathlib import Path
-
 import networkx as nx
 import pytest
 import torch
 
 import qqa
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-bench_discs = importlib.import_module("bench_discs")
+from qqa.benchmarking import runner as bench_discs
 
 
 class _FakeAnnealResult:

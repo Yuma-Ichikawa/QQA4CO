@@ -39,6 +39,19 @@ def test_one_shot_pareto_finds_integer_tradeoff_curve():
     assert {0, 10} <= set(points.tolist())
     assert len(set(points.tolist())) >= 9
     assert result.objectives.shape[1] == 2
+    assert result.weights.shape == result.objectives.shape
+    assert result.reference_directions.data_ptr() == result.weights.data_ptr()
+    assert result.search_reference_directions is not None
+    assert result.search_reference_directions.shape == (256, 2)
+    torch.testing.assert_close(
+        result.weights.sum(dim=1),
+        torch.ones(result.weights.shape[0], device=result.weights.device),
+    )
+    archive_direction_matches = torch.isclose(
+        result.weights[:, None, :],
+        result.search_reference_directions[None, :, :],
+    ).all(dim=2)
+    assert archive_direction_matches.any(dim=1).all()
 
     figure = qqa.plot_pareto(result, backend="matplotlib", show=False)
     assert figure[0] is not None
@@ -246,6 +259,51 @@ def test_chunked_dominance_and_pareto_decision_support():
     assert result.select() == 1
     assert result.hypervolume([4.0, 4.0]) == pytest.approx(6.0)
     assert result.select([1, 0]) == 0
+
+
+def test_pareto_archive_preserves_row_aligned_reference_direction_provenance():
+    from qqa.multiobjective.solver import _update_archive
+
+    problem = qqa.MultiObjectiveProblem(
+        [qqa.Integer("x", 0, 2)],
+        [
+            qqa.Objective(lambda values: values["x"], "cost"),
+            qqa.Objective(lambda values: 2 - values["x"], "delay"),
+        ],
+    )
+    solutions = torch.tensor([[0.0], [1.0], [1.0], [2.0]])
+    producer_directions = torch.tensor([[0.9, 0.1], [0.7, 0.3], [0.4, 0.6], [0.1, 0.9]])
+    archive_solutions, _, archive_directions = _update_archive(
+        problem,
+        solutions,
+        producer_directions,
+        None,
+        None,
+        max_size=8,
+        dominance_chunk_size=2,
+    )
+    assert archive_solutions is not None
+    assert archive_directions is not None
+    torch.testing.assert_close(archive_solutions[:, 0], torch.tensor([0.0, 1.0, 2.0]))
+    # The first producer owns a duplicate point deterministically.
+    torch.testing.assert_close(
+        archive_directions,
+        torch.tensor([[0.9, 0.1], [0.7, 0.3], [0.1, 0.9]]),
+    )
+
+    updated_solutions, _, updated_directions = _update_archive(
+        problem,
+        torch.tensor([[1.0]]),
+        torch.tensor([[0.2, 0.8]]),
+        archive_solutions,
+        archive_directions,
+        max_size=8,
+        dominance_chunk_size=2,
+    )
+    assert updated_solutions is not None
+    assert updated_directions is not None
+    torch.testing.assert_close(updated_solutions, archive_solutions)
+    torch.testing.assert_close(updated_directions, archive_directions)
 
 
 def test_blackbox_can_resume_without_repeating_evaluations():

@@ -92,7 +92,7 @@ and `qqa.pignn.train_cpra_pi_gnn` respectively. Pass an explicit
 
 | Backend | Supported `--problem` values |
 |---|---|
-| `qqa` | All 17 problems in the catalogue |
+| `qqa` | All problems exposed by the current built-in catalogue |
 | `scip` | Single-instance `QUBOProblem` models |
 | `pignn` | `mis`, `maxcut`, `maxclique`, `vertex_cover`, `graph_bisection` |
 | `cpra` | Same as `pignn` (penalty diversification works for `mis`, `vertex_cover` only) |
@@ -144,6 +144,74 @@ sanity check.
 ```bash
 qqa bench --preset er-small
 ```
+
+## `qqa ask`
+
+Describe a bounded optimisation problem in ordinary language, compile it
+through an OpenAI-compatible endpoint, validate the model locally, show the
+route chosen by trusted code, and solve:
+
+```bash
+export QQA_LLM_API_KEY='…'
+
+qqa ask \
+  "Choose integer batches in [0,20] and real overtime in [0,8]. \
+   Minimize 3*batches + square(overtime), with 4*batches + overtime >= 45." \
+  --solver auto --device auto --output-plan plan.json --report result.html
+```
+
+The dedicated system prompt is separate from the untrusted request. Generated
+JSON is interpreted through the same restricted grammar as `qqa tex`; it is
+never evaluated as Python. Local checks cover schema fields, bounded variable
+domains, model-size quotas, expression syntax, scalar shape, and finite sample
+values. The route and rationale are printed before execution.
+
+### Input and review flags
+
+Exactly one input source is required:
+
+| Flag/input | What it does |
+|---|---|
+| `PROMPT` | Compile the quoted request |
+| `-` | Read the request from standard input |
+| `--file REQUEST.txt` | Read a UTF-8 request file |
+| `--spec MODEL.json` | Plan or solve a reviewed `ModelSpec` without an API call |
+| `--plan-only` | Stop after validation and route selection |
+| `--show-model` | Print the validated model JSON |
+| `--output-plan PLAN.json` | Save the audited model and routing explanation |
+
+### Routing and execution flags
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--solver` | `auto` | `auto`, `qqa`, `qqa-scip`/`hybrid`, `scip`, `pareto`, or `blackbox` |
+| `--device` / `--seed` | `auto` / `0` | Compute device and reproducibility seed |
+| `--sol-size` / `--epochs` | `256` / `1500` | QQA or Pareto population and iterations |
+| `--budget` / `--batch-size` / `--workers` | `96` / `8` / `4` | Black-box evaluation budget and concurrency |
+| `--scip-time-limit` / `--scip-gap` | `60` / `0` | SCIP proof budget and target gap |
+| `--scip-threads` / `--scip-warm-starts` | `1` / `32` | SCIP threads and QQA primal starts |
+| `--json` / `--output-result` | off / none | Print or save a machine-readable result |
+| `--report` | none | Save an interactive HTML report |
+
+`auto` routes multiple declared objectives to one-run parallel Pareto QQA.
+A compatible single-objective symbolic model uses QQA→SCIP when the optional
+backend is installed and QQA otherwise. Black-box intent can select the
+budget-aware route when the request explicitly provides a safe objective
+formula: the validated expression is evaluated point by point without
+gradients. If the objective exists only in a simulator, external API, or
+experiment, prose is insufficient—bind the real callable or service adapter
+through `qqa.BlackBoxProblem`. QQA must not invent a missing evaluator. Use
+`--plan-only`, inspect `notes`, and correct any material assumption before
+execution.
+
+The API key deliberately has no command-line flag, avoiding shell-history and
+process-list exposure. `QQA_LLM_API_KEY` is preferred;
+`QQA_LLM_API_KEY` is accepted only as a legacy fallback. Endpoint and
+model profiles use `QQA_LLM_BASE_URL` and `QQA_LLM_MODEL`, or the corresponding
+`--api-base`, `--model`, and `--api-style` options.
+
+The full reviewed workflow is also available in the
+[natural-language optimisation Colab](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/12_natural_language_optimization_colab.ipynb).
 
 ## `qqa tex`
 
@@ -225,6 +293,6 @@ qqa gui --port 8505 --headless
 
 ## Where to look in the source
 
-The whole CLI lives in `src/qqa/cli.py` (~600 lines). Read it
+The whole CLI lives in `src/qqa/cli.py`. Read it
 top-to-bottom — the structure is one `build_parser()` followed by one
 `_cmd_<name>(args)` function per subcommand.

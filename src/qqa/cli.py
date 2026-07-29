@@ -5,6 +5,7 @@ Exposed as the ``qqa`` console script via ``[project.scripts]`` in
 
 * ``qqa version`` — print the installed version.
 * ``qqa solve`` — solve a single problem from the CLI.
+* ``qqa ask`` — describe an optimisation problem in natural language.
 * ``qqa bench`` — run a quick benchmark on a bundled dataset.
 * ``qqa gui`` — launch the Streamlit GUI in a subprocess.
 
@@ -463,6 +464,66 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the validated declarative model before solving.",
     )
     tex.add_argument("--quiet", action="store_true")
+
+    ask = sub.add_parser(
+        "ask",
+        help="Describe, route, and solve an optimisation problem in natural language.",
+        description=(
+            "Compile natural language into an audited model, select QQA, QQA+SCIP, "
+            "parallel Pareto, or black-box optimisation locally, and solve it."
+        ),
+    )
+    ask.add_argument(
+        "prompt",
+        nargs="?",
+        help="Natural-language optimisation request, or '-' to read it from stdin.",
+    )
+    ask.add_argument("--file", help="Read a UTF-8 natural-language request from a file.")
+    ask.add_argument(
+        "--spec",
+        help="Use an already-reviewed model JSON without an LLM request or API key.",
+    )
+    ask.add_argument(
+        "--solver",
+        choices=("auto", "qqa", "hybrid", "qqa-scip", "scip", "pareto", "blackbox"),
+        default="auto",
+        help="Workflow override. auto routes from the validated model and request intent.",
+    )
+    ask.add_argument("--api-base", default=None, help="OpenAI-compatible API base URL.")
+    ask.add_argument("--model", default=None, help="Model id used for request compilation.")
+    ask.add_argument(
+        "--api-style",
+        choices=("responses", "messages"),
+        default="responses",
+    )
+    ask.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS verification only for a trusted private development gateway.",
+    )
+    ask.add_argument("--timeout", type=float, default=120.0)
+    ask.add_argument("--device", default="auto")
+    ask.add_argument("--seed", type=int, default=0)
+    ask.add_argument("--sol-size", type=int, default=256)
+    ask.add_argument("--epochs", type=int, default=1500)
+    ask.add_argument("--budget", type=int, default=96)
+    ask.add_argument("--batch-size", type=int, default=8)
+    ask.add_argument("--workers", type=int, default=4)
+    ask.add_argument("--scip-time-limit", type=float, default=60.0)
+    ask.add_argument("--scip-gap", type=float, default=0.0)
+    ask.add_argument("--scip-threads", type=int, default=1)
+    ask.add_argument("--scip-warm-starts", type=int, default=32)
+    ask.add_argument(
+        "--plan-only",
+        action="store_true",
+        help="Compile, validate, and explain the route without running a solver.",
+    )
+    ask.add_argument("--show-model", action="store_true")
+    ask.add_argument("--json", action="store_true", help="Print the result as JSON.")
+    ask.add_argument("--output-plan", help="Write the audited model and routing decision as JSON.")
+    ask.add_argument("--output-result", help="Write the numerical result as JSON.")
+    ask.add_argument("--report", help="Write an interactive HTML result report.")
+    ask.add_argument("--quiet", action="store_true")
 
     example = sub.add_parser(
         "example",
@@ -1406,6 +1467,168 @@ def _cmd_tex(args: argparse.Namespace) -> int:
     return 0
 
 
+def _ask_result_payload(answer) -> dict:
+    """Return a credential-free JSON representation of a unified result."""
+    import qqa
+
+    result = answer.result
+    payload: dict = {
+        "model": answer.plan.spec.name,
+        "solver": answer.solver,
+        "routing": answer.plan.to_dict()["routing"],
+        "runtime": float(result.runtime),
+    }
+    if isinstance(result, qqa.ParetoResult):
+        knee = result.select()
+        payload.update(
+            {
+                "pareto_size": len(result.solutions),
+                "objective_names": list(result.objective_names),
+                "front": result.objectives.detach().cpu().tolist(),
+                "solutions": result.solutions.detach().cpu().tolist(),
+                "recommended_index": knee,
+            }
+        )
+    elif isinstance(result, qqa.BlackBoxResult):
+        payload.update(
+            {
+                "best_value": result.best_value,
+                "best_point": result.best_point,
+                "feasible": result.feasible,
+                "total_violation": result.total_violation,
+                "evaluations": result.evaluations,
+            }
+        )
+    else:
+        payload.update(
+            {
+                "best_value": float(getattr(result, "objective_value", result.best_obj)),
+                "solution": result.best_sol.detach().cpu().tolist(),
+                "score": result.score,
+            }
+        )
+        if hasattr(result, "scip_status"):
+            payload.update(
+                {
+                    "scip_status": result.scip_status,
+                    "gap": result.gap,
+                    "dual_bound": result.dual_bound,
+                    "proven_optimal": result.proven_optimal,
+                }
+            )
+    return payload
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
+    import qqa
+
+    sources = sum(value is not None for value in (args.prompt, args.file, args.spec))
+    if sources != 1:
+        raise SystemExit(
+            "[qqa ask] provide exactly one prompt (or '-'), --file REQUEST.txt, "
+            "or --spec MODEL.json."
+        )
+    qqa.fix_seed(args.seed)
+    if args.spec:
+        path = Path(args.spec).expanduser().resolve()
+        spec = qqa.ModelSpec.from_json(path.read_text(encoding="utf-8"))
+        plan = qqa.plan_spec(spec, solver=args.solver)
+    else:
+        if args.file:
+            path = Path(args.file).expanduser().resolve()
+            source = path.read_text(encoding="utf-8")
+        else:
+            source = sys.stdin.read() if args.prompt == "-" else args.prompt
+        client = qqa.OpenAICompatibleClient(
+            base_url=args.api_base,
+            model=args.model,
+            api_style=args.api_style,
+            verify_ssl=not args.insecure,
+            timeout=args.timeout,
+        )
+        plan = qqa.compile_natural_language(source, client=client, solver=args.solver)
+
+    if args.output_plan:
+        path = Path(args.output_plan).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(plan.to_dict(), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"plan_json  : {path}")
+    print(f"model      : {plan.spec.name}")
+    print(f"variables  : {plan.variable_count}")
+    print(f"objectives : {len(plan.spec.objectives)}")
+    print(f"constraints: {len(plan.spec.constraints)}")
+    print(f"solver     : {plan.selected_solver}")
+    print(f"why        : {plan.rationale}")
+    for warning in plan.warnings:
+        print(f"warning    : {warning}")
+    if args.show_model:
+        print(plan.spec.to_json())
+    if args.plan_only:
+        print("status     : validated (plan only)")
+        return 0
+
+    answer = qqa.execute_plan(
+        plan,
+        device=args.device,
+        seed=args.seed,
+        sol_size=args.sol_size,
+        num_epochs=args.epochs,
+        budget=args.budget,
+        batch_size=args.batch_size,
+        workers=args.workers,
+        scip_time_limit=args.scip_time_limit,
+        scip_gap=args.scip_gap,
+        scip_threads=args.scip_threads,
+        scip_warm_starts=args.scip_warm_starts,
+        verbose=not args.quiet,
+    )
+    payload = _ask_result_payload(answer)
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif isinstance(answer.result, qqa.ParetoResult):
+        index = answer.result.select()
+        print(f"pareto_size: {len(answer.result.solutions)}")
+        print("recommended: " + json.dumps(answer.result.objectives[index].detach().cpu().tolist()))
+        print(f"runtime    : {answer.result.runtime:.4f} s")
+    elif isinstance(answer.result, qqa.BlackBoxResult):
+        print(f"best_value : {answer.result.best_value:.8g}")
+        print(f"feasible   : {answer.result.feasible}")
+        print(f"evaluations: {answer.result.evaluations}")
+        print(f"solution   : {json.dumps(answer.result.best_point, ensure_ascii=False)}")
+        print(f"runtime    : {answer.result.runtime:.4f} s")
+    else:
+        _print_score(answer.result.score)
+        if hasattr(answer.result, "scip_status"):
+            print(f"scip_status: {answer.result.scip_status}")
+            print(f"gap        : {answer.result.gap}")
+        print(f"runtime    : {answer.result.runtime:.4f} s")
+
+    if args.output_result:
+        path = Path(args.output_result).expanduser().resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(f"result_json: {path}")
+    if args.report:
+        report_path = Path(args.report).expanduser().resolve()
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(answer.result, qqa.ParetoResult):
+            figure = qqa.plot_pareto(answer.result, show=False, title=plan.spec.name)
+            figure.write_html(report_path, include_plotlyjs=True, full_html=True)
+        elif isinstance(answer.result, qqa.BlackBoxResult):
+            figure = qqa.plot_blackbox(answer.result, show=False, title=plan.spec.name)
+            figure.write_html(report_path, include_plotlyjs=True, full_html=True)
+        else:
+            qqa.save_html_report(answer.result, answer.problem, report_path)
+        print(f"report     : {report_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1426,6 +1649,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bench_plot(args)
     if args.command == "tex":
         return _cmd_tex(args)
+    if args.command == "ask":
+        return _cmd_ask(args)
     if args.command == "example":
         return _cmd_example(args)
     if args.command == "doctor":

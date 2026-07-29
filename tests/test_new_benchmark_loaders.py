@@ -328,14 +328,7 @@ def test_gset_bench_discs_catalog_registers(fake_root, monkeypatch):
     without any DISCS data on disk (regression test for the rename +
     Gset integration).
     """
-    # ``scripts/`` is not on sys.path by default in unit tests; patch it in.
-    import sys
-
-    scripts = Path(__file__).resolve().parent.parent / "scripts"
-    monkeypatch.syspath_prepend(str(scripts))
-    # Re-import to pick up the fresh _PROBLEM_LOADER / _build_catalog.
-    sys.modules.pop("bench_discs", None)
-    bench_discs = __import__("bench_discs")
+    from qqa.benchmarking import runner as bench_discs
 
     catalog = bench_discs._build_catalog()
     assert "gset" in catalog

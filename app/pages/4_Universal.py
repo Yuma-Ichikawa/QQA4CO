@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -88,6 +91,39 @@ def _json_download(label: str, payload: dict, filename: str) -> None:
     )
 
 
+def _solve_reviewed_model(spec, *, use_scip: bool, device: str, seed: int):
+    """Run one reviewed spec with a single UI error boundary."""
+    qqa.fix_seed(seed)
+    problem = qqa.problem_from_spec(spec)
+    if isinstance(problem, qqa.MultiObjectiveProblem):
+        result = problem.solve_pareto(
+            sol_size=256,
+            num_epochs=1000,
+            device=device,
+            seed=seed,
+            verbose=False,
+        )
+    elif use_scip:
+        result = qqa.solve_spec_scip(
+            spec,
+            qqa_kwargs={
+                "sol_size": 256,
+                "num_epochs": 1000,
+                "device": device,
+                "verbose": False,
+            },
+            time_limit=60,
+        )
+    else:
+        result = problem.solve(
+            sol_size=256,
+            num_epochs=1000,
+            device=device,
+            verbose=False,
+        )
+    return problem, result
+
+
 st.set_page_config(page_title="Universal Studio — QQA", page_icon="🌐", layout="wide")
 sidebar_brand()
 theme_toggle_in_sidebar()
@@ -117,9 +153,220 @@ with st.sidebar:
     seed = int(st.number_input("Seed", min_value=0, max_value=100_000, value=7))
     st.caption(f"Detected accelerator: **{detected}**")
 
-mixed_tab, pareto_tab, blackbox_tab, tex_tab = st.tabs(
-    ["⚡ Mixed planning", "◎ Pareto studio", "◇ Black-box lab", "∑ TeX model"]
+ask_tab, mixed_tab, pareto_tab, blackbox_tab, tex_tab = st.tabs(
+    ["✦ Ask QQA", "⚡ Mixed planning", "◎ Pareto studio", "◇ Black-box lab", "∑ TeX model"]
 )
+
+with ask_tab:
+    st.subheader("Describe the decision. QQA builds and runs the workflow.")
+    st.caption(
+        "Write the variables, bounds, goals, and constraints in ordinary language. "
+        "The generated model is validated locally before QQA, QQA+SCIP, Pareto, "
+        "or black-box optimisation can run."
+    )
+    request = st.text_area(
+        "What should QQA optimise?",
+        (
+            "Plan weekly production at two plants. Decide whether each plant opens "
+            "(binary), production lots from 0 to 12 and 0 to 10 (integers), and "
+            "overtime from 0 to 16 hours (real). Minimize 1400*open_a + 1100*open_b "
+            "+ 460*lots_a + 510*lots_b + 38*overtime^2. Meet demand "
+            "8*lots_a + 7*lots_b + overtime >= 105 and production must be zero when "
+            "its plant is closed."
+        ),
+        height=190,
+        key="ask_request",
+    )
+    settings, output = st.columns([1, 3])
+    with settings:
+        workflow_label = st.selectbox(
+            "Workflow",
+            ("Auto", "QQA", "QQA + SCIP", "Parallel Pareto", "Black-box"),
+            help=(
+                "Auto uses objective count, black-box intent, and local SCIP availability. "
+                "The routing decision is always shown before the result."
+            ),
+        )
+        workflow = {
+            "Auto": "auto",
+            "QQA": "qqa",
+            "QQA + SCIP": "qqa-scip",
+            "Parallel Pareto": "pareto",
+            "Black-box": "blackbox",
+        }[workflow_label]
+        with st.expander("Model API", expanded=False):
+            configured_key = bool(os.getenv("QQA_LLM_API_KEY") or os.getenv("QQA_LLM_API_KEY"))
+            api_key = st.text_input(
+                "API key",
+                type="password",
+                help=(
+                    "Used only for this translation request. It is never included in "
+                    "models, downloads, logs, or reports."
+                ),
+                key="ask_api_key",
+            )
+            if configured_key and not api_key:
+                st.caption("Using the QQA LLM API key from the server environment.")
+            api_base = st.text_input(
+                "Compatible base URL",
+                value=qqa.tex.DEFAULT_BASE_URL,
+                key="ask_api_base",
+            )
+            model_name = st.text_input(
+                "Model",
+                value=qqa.tex.DEFAULT_MODEL,
+                key="ask_model",
+            )
+            insecure = st.checkbox(
+                "Trusted private gateway uses a non-standard certificate",
+                key="ask_insecure",
+            )
+        with st.expander("Compute budget", expanded=False):
+            ask_population = st.slider("Parallel plans", 32, 2048, 256, 32, key="ask_population")
+            ask_epochs = st.slider("QQA iterations", 50, 4000, 1200, 50, key="ask_epochs")
+            ask_budget = st.slider("Black-box evaluations", 16, 512, 96, 8, key="ask_budget")
+            ask_batch = st.slider("Black-box parallel batch", 1, 32, 8, key="ask_batch")
+        plan_only = st.button("Build reviewed plan", use_container_width=True)
+        plan_and_solve = st.button(
+            "Plan & solve",
+            type="primary",
+            use_container_width=True,
+        )
+
+    request_digest = hashlib.sha256(
+        json.dumps(
+            {
+                "request": request,
+                "workflow": workflow,
+                "api_base": api_base,
+                "model": model_name,
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    if (
+        st.session_state.get("ask_plan_digest") is not None
+        and st.session_state["ask_plan_digest"] != request_digest
+    ):
+        st.session_state.pop("ask_plan", None)
+        st.session_state.pop("ask_answer", None)
+        st.session_state.pop("ask_plan_digest", None)
+
+    if plan_only or plan_and_solve:
+        try:
+            client = qqa.OpenAICompatibleClient(
+                api_key=api_key or None,
+                base_url=api_base,
+                model=model_name,
+                verify_ssl=not insecure,
+            )
+            with st.spinner("Compiling and validating the mathematical model…"):
+                plan = qqa.compile_natural_language(
+                    request,
+                    client=client,
+                    solver=workflow,
+                )
+            st.session_state["ask_plan"] = plan
+            st.session_state["ask_plan_digest"] = request_digest
+            st.session_state.pop("ask_answer", None)
+            if plan_and_solve:
+                with st.spinner(f"Running {plan.selected_solver}…"):
+                    answer = qqa.execute_plan(
+                        plan,
+                        device=device,
+                        seed=seed,
+                        sol_size=ask_population,
+                        num_epochs=ask_epochs,
+                        budget=ask_budget,
+                        batch_size=ask_batch,
+                        workers=min(ask_batch, 8),
+                        verbose=False,
+                    )
+                st.session_state["ask_answer"] = answer
+        except Exception as exc:  # noqa: BLE001 - user-facing API/solver boundary
+            st.error(str(exc))
+
+    plan = st.session_state.get("ask_plan")
+    answer = st.session_state.get("ask_answer")
+    with output:
+        if plan is None:
+            st.info("Describe a decision and click **Plan & solve**.")
+        else:
+            route_a, route_b, route_c = st.columns(3)
+            route_a.metric("Selected workflow", plan.selected_solver)
+            route_b.metric("Decision variables", plan.variable_count)
+            route_c.metric("Objectives", len(plan.spec.objectives))
+            st.success(plan.rationale)
+            for warning in plan.warnings:
+                st.warning(warning)
+            with st.expander("Review audited model", expanded=answer is None):
+                st.code(plan.spec.to_json(), language="json")
+                st.download_button(
+                    "Download plan JSON",
+                    json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+                    file_name=f"{plan.spec.name}-plan.json",
+                    mime="application/json",
+                )
+            if answer is None:
+                st.caption("The plan is validated. Click **Plan & solve** when ready.")
+            elif isinstance(answer.result, qqa.ParetoResult):
+                result = answer.result
+                knee = result.select()
+                st.success(
+                    f"Found {len(result.solutions):,} nondominated plans; "
+                    f"recommended compromise #{knee}."
+                )
+                st.dataframe(
+                    result.to_frame(answer.problem),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.plotly_chart(
+                    retheme_plotly(
+                        qqa.plot_pareto(
+                            result,
+                            show=False,
+                            title=f"{plan.spec.name} Pareto front",
+                        )
+                    ),
+                    use_container_width=True,
+                )
+            elif isinstance(answer.result, qqa.BlackBoxResult):
+                result = answer.result
+                summary_a, summary_b, summary_c = st.columns(3)
+                summary_a.metric("Best objective", f"{result.best_value:,.6g}")
+                summary_b.metric("Feasible", "Yes" if result.feasible else "No")
+                summary_c.metric("Evaluations", result.evaluations)
+                st.json(result.best_point)
+                st.plotly_chart(
+                    retheme_plotly(
+                        qqa.plot_blackbox(
+                            result,
+                            show=False,
+                            title=f"{plan.spec.name} experiments",
+                        )
+                    ),
+                    use_container_width=True,
+                )
+            else:
+                result = answer.result
+                value = result.score.get(
+                    "value",
+                    getattr(result, "objective_value", result.best_obj),
+                )
+                summary_a, summary_b, summary_c = st.columns(3)
+                summary_a.metric("Objective", f"{value:,.6g}")
+                summary_b.metric(
+                    "Feasible",
+                    "Yes" if result.score.get("feasible", True) else "No",
+                )
+                summary_c.metric("Runtime", f"{result.runtime:.2f} s")
+                if hasattr(result, "scip_status"):
+                    st.caption(
+                        f"SCIP status: **{result.scip_status}** · "
+                        f"gap: **{result.gap}** · dual bound: **{result.dual_bound}**"
+                    )
+                st.json(result.score)
 
 with mixed_tab:
     st.subheader("Microgrid unit commitment & dispatch")
@@ -305,6 +552,7 @@ with tex_tab:
             json.dumps(_PRODUCTION_SPEC, ensure_ascii=False, indent=2),
             height=360,
         )
+        spec_digest = hashlib.sha256(("json\0" + model_source).encode()).hexdigest()
         if st.button("Validate audited model", use_container_width=True):
             try:
                 spec = qqa.ModelSpec.from_json(model_source)
@@ -312,6 +560,7 @@ with tex_tab:
                 st.error(str(exc))
             else:
                 st.session_state["universal_spec"] = spec
+                st.session_state["universal_spec_digest"] = spec_digest
                 st.success("Safe grammar, domains, bounds, and constraints validated.")
     else:
         tex_source = st.text_area(
@@ -330,13 +579,17 @@ with tex_tab:
         api_base = st.text_input("OpenAI-compatible base URL", value=qqa.tex.DEFAULT_BASE_URL)
         model_name = st.text_input("Model", value=qqa.tex.DEFAULT_MODEL)
         insecure = st.checkbox("Trusted private gateway uses a non-standard certificate")
+        spec_digest = hashlib.sha256(
+            ("tex\0" + tex_source + "\0" + api_base + "\0" + model_name).encode()
+        ).hexdigest()
         if st.button("Translate & validate TeX", use_container_width=True):
-            if not api_key:
+            configured_key = bool(os.getenv("QQA_LLM_API_KEY") or os.getenv("QQA_LLM_API_KEY"))
+            if not api_key and not configured_key:
                 st.error("Enter an API key for this in-memory request.")
             else:
                 try:
                     client = qqa.OpenAICompatibleClient(
-                        api_key=api_key,
+                        api_key=api_key or None,
                         base_url=api_base,
                         model=model_name,
                         verify_ssl=not insecure,
@@ -346,19 +599,33 @@ with tex_tab:
                     st.error(str(exc))
                 else:
                     st.session_state["universal_spec"] = spec
+                    st.session_state["universal_spec_digest"] = spec_digest
                     st.success("Translation validated. Review the model below before solving.")
 
+    if (
+        st.session_state.get("universal_spec_digest") is not None
+        and st.session_state["universal_spec_digest"] != spec_digest
+    ):
+        st.session_state.pop("universal_spec", None)
+        st.session_state.pop("universal_spec_digest", None)
     spec = st.session_state.get("universal_spec")
     if spec is not None:
         st.code(spec.to_json(), language="json")
         left, right = st.columns(2)
         with left:
             if len(spec.objectives) == 1:
+                scip_ready = importlib.util.find_spec("pyscipopt") is not None
                 use_scip = st.toggle(
                     "SCIP proof phase",
                     value=False,
-                    help="Requires pip install qqa[scip].",
+                    disabled=not scip_ready,
+                    help=(
+                        "QQA supplies diverse starts and SCIP refines/certifies the model. "
+                        "Install qqa[scip] to enable this phase."
+                    ),
                 )
+                if not scip_ready:
+                    st.caption("SCIP is not installed; using QQA.")
             else:
                 use_scip = False
                 st.info("Multi-objective models use the parallel Pareto solver.")
@@ -367,34 +634,17 @@ with tex_tab:
                 "Solve reviewed model", type="primary", use_container_width=True
             )
         if solve_model:
-            problem = qqa.problem_from_spec(spec)
-            with st.spinner("Solving reviewed model…"):
-                if isinstance(problem, qqa.MultiObjectiveProblem):
-                    result = problem.solve_pareto(
-                        sol_size=256,
-                        num_epochs=1000,
+            try:
+                with st.spinner("Solving reviewed model…"):
+                    problem, result = _solve_reviewed_model(
+                        spec,
+                        use_scip=use_scip,
                         device=device,
                         seed=seed,
-                        verbose=False,
                     )
-                elif use_scip:
-                    result = qqa.solve_spec_scip(
-                        spec,
-                        qqa_kwargs={
-                            "sol_size": 256,
-                            "num_epochs": 1000,
-                            "device": device,
-                            "verbose": False,
-                        },
-                        time_limit=60,
-                    )
-                else:
-                    result = problem.solve(
-                        sol_size=256,
-                        num_epochs=1000,
-                        device=device,
-                        verbose=False,
-                    )
+            except Exception as exc:  # noqa: BLE001 - user-facing solver boundary
+                st.error(str(exc))
+                st.stop()
             if isinstance(result, qqa.ParetoResult):
                 knee = result.select()
                 st.success(

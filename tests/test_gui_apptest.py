@@ -124,8 +124,15 @@ def test_universal_studio_renders_all_workflows_without_running():
     assert not at.exception, at.exception
     assert any("Universal Optimization Studio" in title.body for title in at.title)
     tab_labels = [tab.label for tab in at.tabs]
-    for label in ("⚡ Mixed planning", "◎ Pareto studio", "◇ Black-box lab", "∑ TeX model"):
+    for label in (
+        "✦ Ask QQA",
+        "⚡ Mixed planning",
+        "◎ Pareto studio",
+        "◇ Black-box lab",
+        "∑ TeX model",
+    ):
         assert label in tab_labels
+    assert any("What should QQA optimise?" in area.label for area in at.text_area)
 
 
 def test_universal_studio_routes_reviewed_multiobjective_models_to_pareto():

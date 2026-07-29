@@ -54,16 +54,14 @@ if importlib.util.find_spec("qqa") is None:
 
 
 def _det_id(nb_filename: str, idx: int) -> str:
-    """Deterministic per-cell id so the generator's output is reproducible.
+    """Return the same compact IDs used by the ``nbstripout`` commit hook.
 
-    nbformat ≥ 4.5 otherwise assigns random ids on every write, which
-    creates noisy churn in git diffs every time the notebooks are
-    regenerated even when no content changed.
+    ``nbformat`` otherwise assigns random IDs, while ``nbstripout`` normalises
+    them to their ordinal position.  Generate that canonical form directly so
+    regeneration and pre-commit are byte-stable.
     """
-    import hashlib
-
-    digest = hashlib.sha1(f"{nb_filename}:{idx}".encode()).hexdigest()
-    return digest[:12]
+    del nb_filename
+    return str(idx)
 
 
 def make_nb(title: str, subtitle: str, cells: list[tuple[str, str]], *, nb_filename: str):
@@ -357,6 +355,193 @@ def nb08():
     )
 
 
+def nb12():
+    """Natural-language front door for QQA, SCIP, Pareto, and black-box runs."""
+    body = [
+        (
+            "md",
+            "## Why this notebook?\n\n"
+            "The same `qqa.ask(...)` call compiles an ordinary-language decision "
+            "problem into a strict, reviewable model and routes it locally. The LLM "
+            "never executes code or chooses an arbitrary solver. Keep API keys in an "
+            "environment variable or a hidden prompt—never in the notebook.",
+        ),
+        (
+            "code",
+            "import getpass\n"
+            "import os\n"
+            "\n"
+            "import qqa\n"
+            "\n"
+            'print("QQA version:", qqa.__version__)\n'
+            'if not os.environ.get("QQA_LLM_API_KEY"):\n'
+            '    key = getpass.getpass("Compatible API key (leave blank for offline cells): ")\n'
+            "    if key:\n"
+            '        os.environ["QQA_LLM_API_KEY"] = key',
+        ),
+        (
+            "md",
+            "## 1. Review and solve without an API\n\n"
+            "A validated JSON model is ideal for reproducible production runs. This "
+            "mixed binary/integer/real example works without credentials.",
+        ),
+        (
+            "code",
+            "production_spec = {\n"
+            '    "name": "production-plan",\n'
+            '    "variables": [\n'
+            '        {"name": "open", "kind": "binary", "lower": 0, "upper": 1, "size": 2},\n'
+            '        {"name": "lots", "kind": "integer", "lower": 0, "upper": 12, "size": 2},\n'
+            '        {"name": "overtime", "kind": "real", "lower": 0, "upper": 16, "size": 1},\n'
+            "    ],\n"
+            '    "objectives": [\n'
+            "        {\n"
+            '            "name": "weekly_cost",\n'
+            '            "direction": "min",\n'
+            '            "expression": "1400*open[0] + 1100*open[1] + 460*lots[0] + 510*lots[1] + 38*square(overtime)",\n'
+            '            "unit": "USD",\n'
+            "        }\n"
+            "    ],\n"
+            '    "constraints": [\n'
+            "        {\n"
+            '            "name": "demand", "expression": "8*lots[0] + 7*lots[1] + overtime",\n'
+            '            "sense": ">=", "rhs": 105, "weight": 1000, "scale": 105, "tolerance": 0.05,\n'
+            "        },\n"
+            "        {\n"
+            '            "name": "link_a", "expression": "lots[0] - 12*open[0]",\n'
+            '            "sense": "<=", "rhs": 0, "weight": 500, "scale": 12, "tolerance": 0.01,\n'
+            "        },\n"
+            "        {\n"
+            '            "name": "link_b", "expression": "lots[1] - 10*open[1]",\n'
+            '            "sense": "<=", "rhs": 0, "weight": 500, "scale": 10, "tolerance": 0.01,\n'
+            "        },\n"
+            "    ],\n"
+            '    "notes": "",\n'
+            "}\n"
+            'plan = qqa.plan_spec(production_spec, solver="qqa")\n'
+            'plan.to_dict()["routing"]',
+        ),
+        (
+            "code",
+            "answer = qqa.execute_plan(\n"
+            '    plan, sol_size=128, num_epochs=800, device="auto", seed=7\n'
+            ")\n"
+            "answer.result.score",
+        ),
+        (
+            "md",
+            "## 2. Natural language → QQA + SCIP\n\n"
+            'With `qqa[scip]` installed, `solver="auto"` uses QQA exploration '
+            "followed by SCIP certification for compatible single-objective models.",
+        ),
+        (
+            "code",
+            'single_request = """\n'
+            "Plan production at two plants. Opening decisions are binary, production\n"
+            "lots are bounded integers, and overtime is continuous. Minimize fixed,\n"
+            "lot, and quadratic overtime costs while meeting demand and linking each\n"
+            "plant's production to its opening decision. Use the numerical bounds and\n"
+            "coefficients from the reviewed production example above.\n"
+            '"""\n'
+            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "    single = qqa.ask(\n"
+            "        single_request,\n"
+            '        solver="auto",\n'
+            '        device="auto",\n'
+            "        sol_size=128,\n"
+            "        num_epochs=800,\n"
+            "        scip_time_limit=30,\n"
+            "    )\n"
+            '    display(single.plan.to_dict()["routing"])\n'
+            "    display(single.result.score)\n"
+            "else:\n"
+            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+        ),
+        (
+            "md",
+            "## 3. Natural language → one-run Pareto front\n\n"
+            "Multiple objectives are preserved as separate goals. Parallel reference "
+            "directions recover a nondominated archive in one run.",
+        ),
+        (
+            "code",
+            'pareto_request = """\n'
+            "Allocate integer production lots and continuous overtime while deciding\n"
+            "which plants open. Simultaneously minimize total cost, carbon emissions,\n"
+            "and unmet-demand risk. Keep each objective separate and enforce capacity,\n"
+            "activation, and demand constraints. Give every variable an explicit,\n"
+            "realistic finite bound and record assumptions.\n"
+            '"""\n'
+            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "    pareto = qqa.ask(\n"
+            "        pareto_request,\n"
+            '        solver="auto",\n'
+            "        sol_size=256,\n"
+            "        num_epochs=1000,\n"
+            '        device="auto",\n'
+            "    )\n"
+            '    display(pareto.plan.to_dict()["routing"])\n'
+            "    qqa.plot_pareto(pareto.result)\n"
+            "    qqa.plot_pareto_diagnostics(pareto.result)\n"
+            "else:\n"
+            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+        ),
+        (
+            "md",
+            "## 4. Natural language → budget-aware black-box optimisation\n\n"
+            "Mentioning an expensive simulator or black-box experiment makes `auto` "
+            "select batch surrogate optimisation. The safe expression is evaluated "
+            "point by point, with no gradients exposed to the optimiser.",
+        ),
+        (
+            "code",
+            'blackbox_request = """\n'
+            "Treat reactor tuning as an expensive black-box experiment. Choose an\n"
+            "integer reactor count from 1 to 8 and real temperature from 300 to 500.\n"
+            "Minimize (reactors-4)^2 + ((temperature-410)/30)^2 with at most 96\n"
+            "parallelizable evaluations, subject to reactors*temperature <= 2800.\n"
+            '"""\n'
+            'if os.environ.get("QQA_LLM_API_KEY"):\n'
+            "    blackbox = qqa.ask(\n"
+            "        blackbox_request,\n"
+            '        solver="auto",\n'
+            "        budget=96,\n"
+            "        batch_size=8,\n"
+            "        workers=8,\n"
+            '        device="auto",\n'
+            "    )\n"
+            '    display(blackbox.plan.to_dict()["routing"])\n'
+            "    display(blackbox.result.best_point)\n"
+            "    qqa.plot_blackbox(blackbox.result)\n"
+            "else:\n"
+            '    print("Set QQA_LLM_API_KEY to run this live translation.")',
+        ),
+        (
+            "md",
+            "## CLI equivalents\n\n"
+            "The key is read from `QQA_LLM_API_KEY`; it never appears in the command "
+            "line, generated model, result JSON, or report.",
+        ),
+        (
+            "code",
+            'print("""qqa ask "Minimize (x-2)^2 for real x in [-5,5]" --plan-only --show-model\n'
+            "qqa ask --file realistic-request.txt --solver auto --device auto \\\\\n"
+            "  --output-plan plan.json --output-result result.json --report result.html\n"
+            "qqa ask --spec plan-model.json --solver qqa --device auto\n"
+            'qqa gui  # open the Ask QQA tab""")',
+        ),
+    ]
+    return make_nb(
+        "QQA 12 – Natural-language optimization",
+        (
+            "One safe entry point for QQA, QQA+SCIP, one-run Pareto fronts, and "
+            "budget-aware black-box optimization."
+        ),
+        body,
+        nb_filename="12_natural_language_optimization_colab.ipynb",
+    )
+
+
 def nb00():
     """One-click Google Colab quickstart: every problem, one short cell each."""
     body = [
@@ -524,6 +709,7 @@ def main() -> None:
         "06_binary_perceptron.ipynb": nb06,
         "07_hopfield_memory.ipynb": nb07,
         "08_parallel_benchmark.ipynb": nb08,
+        "12_natural_language_optimization_colab.ipynb": nb12,
     }
     for name, fn in builders.items():
         save(EXAMPLES / name, fn())

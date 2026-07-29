@@ -1,4 +1,4 @@
-"""Smoke + contract tests for ``scripts/plot_benchmarks.py``.
+"""Smoke + contract tests for :mod:`qqa.benchmarking.plotting`.
 
 We keep the assertions conservative (image existence, Axes count,
 legend wiring, ``load_report`` field contract) — not pixel-level — so
@@ -11,10 +11,8 @@ the tests stay stable across matplotlib versions while still catching:
 
 from __future__ import annotations
 
-import importlib
 import json
 import math
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -24,10 +22,7 @@ matplotlib.use("Agg")  # deterministic, headless CI
 import matplotlib.pyplot as plt  # noqa: E402
 import pytest  # noqa: E402
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-plot = importlib.import_module("plot_benchmarks")
-
+from qqa.benchmarking import plotting as plot  # noqa: E402
 
 # --------------------------------------------------------------------------- #
 # Fixtures                                                                    #

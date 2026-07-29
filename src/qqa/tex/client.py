@@ -8,6 +8,7 @@ import re
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Literal
 
@@ -35,14 +36,22 @@ def _extract_text(response: dict, style: str) -> str:
         return direct
     if style == "messages":
         content = response.get("content", [])
-        texts = [item.get("text", "") for item in content if isinstance(item, dict)]
+        texts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") in (None, "text")
+        ]
     else:
         texts = []
         for item in response.get("output", []):
             if not isinstance(item, dict):
                 continue
             for content in item.get("content", []):
-                if isinstance(content, dict) and isinstance(content.get("text"), str):
+                if (
+                    isinstance(content, dict)
+                    and content.get("type") in (None, "output_text", "text")
+                    and isinstance(content.get("text"), str)
+                ):
                     texts.append(content["text"])
     text = "".join(texts).strip()
     if not text:
@@ -81,16 +90,34 @@ class OpenAICompatibleClient:
         timeout: float = 120.0,
         max_retries: int = 2,
         max_output_tokens: int = 4096,
+        max_response_bytes: int = 2_000_000,
     ):
-        self.api_key = api_key or os.environ.get("QQA_LLM_API_KEY", "")
+        self.api_key = (
+            api_key
+            or os.environ.get("QQA_LLM_API_KEY", "")
+            or os.environ.get("QQA_LLM_API_KEY", "")
+        )
         if not self.api_key:
             raise ValueError(
-                "QQA_LLM_API_KEY is not set. Export it in your shell; "
-                "do not pass credentials in source code."
+                "QQA_LLM_API_KEY (or the legacy QQA_LLM_API_KEY) is not set. "
+                "Export it in your shell; do not pass credentials in source code."
             )
         self.base_url = (base_url or os.environ.get("QQA_LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip(
             "/"
         )
+        parsed = urllib.parse.urlsplit(self.base_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "base_url must be an HTTPS URL with a host and without credentials, "
+                "query parameters, or a fragment."
+            )
         self.model = model or os.environ.get("QQA_LLM_MODEL") or DEFAULT_MODEL
         if api_style not in ("responses", "messages"):
             raise ValueError("api_style must be 'responses' or 'messages'.")
@@ -100,22 +127,27 @@ class OpenAICompatibleClient:
             raise ValueError("max_retries must be an integer in [0, 10].")
         if not isinstance(max_output_tokens, int) or not 128 <= max_output_tokens <= 65536:
             raise ValueError("max_output_tokens must be an integer in [128, 65536].")
+        if not isinstance(max_response_bytes, int) or not 1024 <= max_response_bytes <= 20_000_000:
+            raise ValueError("max_response_bytes must be an integer in [1024, 20000000].")
         self.api_style = api_style
         self.verify_ssl = verify_ssl
         self.timeout = float(timeout)
         self.max_retries = max_retries
         self.max_output_tokens = max_output_tokens
+        self.max_response_bytes = max_response_bytes
         self._structured_available: bool | None = None
 
-    def generate_model_json(self, prompt: str) -> str:
+    def generate_model_json(self, prompt: str, *, system_prompt: str | None = None) -> str:
         """Generate one model JSON document, preferring Structured Outputs."""
         structured = self.api_style == "responses" and self._structured_available is not False
+        request_options = {"system_prompt": system_prompt} if system_prompt else {}
         try:
             response = self._request(
                 prompt,
                 structured=structured,
                 timeout=min(self.timeout, 30.0) if structured else self.timeout,
                 max_retries=0 if structured else self.max_retries,
+                **request_options,
             )
             if structured:
                 self._structured_available = True
@@ -126,13 +158,14 @@ class OpenAICompatibleClient:
             if not structured or not any(item in str(exc) for item in fallback_errors):
                 raise
             self._structured_available = False
-            response = self._request(prompt, structured=False)
+            response = self._request(prompt, structured=False, **request_options)
         return _extract_json_text(_extract_text(response, self.api_style))
 
     def _request(
         self,
         prompt: str,
         *,
+        system_prompt: str | None = None,
         structured: bool,
         timeout: float | None = None,
         max_retries: int | None = None,
@@ -146,6 +179,8 @@ class OpenAICompatibleClient:
                 "input": [{"role": "user", "content": prompt}],
                 "max_output_tokens": self.max_output_tokens,
             }
+            if system_prompt:
+                payload["instructions"] = system_prompt
             if structured:
                 payload["text"] = {
                     "format": {
@@ -164,6 +199,8 @@ class OpenAICompatibleClient:
                 "max_tokens": self.max_output_tokens,
                 "messages": [{"role": "user", "content": prompt}],
             }
+            if system_prompt:
+                payload["system"] = system_prompt
             headers = {"anthropic-version": "2023-06-01"}
 
         body = json.dumps(payload).encode("utf-8")
@@ -172,11 +209,14 @@ class OpenAICompatibleClient:
             data=body,
             method="POST",
             headers={
-                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
                 **headers,
             },
         )
+        # urllib copies ordinary headers to redirected requests. Mark the
+        # credential as unredirected so a gateway cannot forward it to another
+        # origin through a 30x response.
+        request.add_unredirected_header("Authorization", f"Bearer {self.api_key}")
         context = ssl.create_default_context()
         if not self.verify_ssl:
             context.check_hostname = False
@@ -188,7 +228,10 @@ class OpenAICompatibleClient:
                     timeout=timeout,
                     context=context,
                 ) as response:
-                    result = json.loads(response.read().decode("utf-8"))
+                    raw = response.read(self.max_response_bytes + 1)
+                    if len(raw) > self.max_response_bytes:
+                        raise LLMAPIError(f"LLM response exceeded {self.max_response_bytes} bytes.")
+                    result = json.loads(raw.decode("utf-8"))
                 if not isinstance(result, dict):
                     raise LLMAPIError("LLM endpoint returned a non-object JSON response.")
                 return result

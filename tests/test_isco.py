@@ -340,6 +340,88 @@ def test_plackett_luce_logprob_handles_repeated_indices_in_float32():
         )
 
 
+def test_plackett_luce_logprob_excludes_ragged_padding_from_denominator():
+    """The MH proposal ratio must use the same mask as ragged sampling.
+
+    With one valid site, selecting that site is deterministic and therefore
+    has log-probability zero. An unmasked padding logit would incorrectly
+    enter the denominator and bias the target distribution.
+    """
+    from qqa.isco import _plackett_luce_logprob
+
+    log_w = torch.tensor(
+        [
+            [[-2.0, 50.0, -30.0], [0.4, -0.1, 0.8]],
+            [[3.0, -40.0, 20.0], [-0.7, 0.2, 1.1]],
+        ],
+        dtype=torch.float64,
+    )
+    mask = torch.tensor(
+        [[[True, False, False], [True, True, True]]],
+    )
+    sigma = torch.tensor(
+        [
+            [[0], [2]],
+            [[0], [1]],
+        ],
+    )
+    lengths = torch.ones((2, 2), dtype=torch.long)
+
+    actual = _plackett_luce_logprob(
+        log_w,
+        sigma,
+        lengths,
+        L_max=1,
+        mask=mask,
+    )
+
+    torch.testing.assert_close(actual[:, 0], torch.zeros(2, dtype=torch.float64))
+    expected_second = torch.stack(
+        [
+            log_w[0, 1, 2] - torch.logsumexp(log_w[0, 1], dim=0),
+            log_w[1, 1, 1] - torch.logsumexp(log_w[1, 1], dim=0),
+        ]
+    )
+    torch.testing.assert_close(actual[:, 1], expected_second)
+
+
+def test_isco_ragged_kernel_passes_sampling_mask_to_mh_ratio(monkeypatch):
+    """Forward and reverse proposal probabilities must share the sampling mask."""
+    import qqa.isco as isco_module
+
+    original = isco_module._plackett_luce_logprob
+    observed_masks: list[torch.Tensor] = []
+
+    def checked_logprob(log_w, sigma, lengths, max_length, *, mask=None):
+        assert mask is not None
+        observed_masks.append(mask.detach().cpu())
+        return original(
+            log_w,
+            sigma,
+            lengths,
+            max_length,
+            mask=mask,
+        )
+
+    monkeypatch.setattr(isco_module, "_plackett_luce_logprob", checked_logprob)
+    problem = qqa.MaximumIndependentSetInstance(
+        [nx.path_graph(3), nx.path_graph(6)],
+        penalty=2.0,
+    )
+    qqa.discrete_langevin(
+        problem,
+        sol_size=4,
+        num_steps=2,
+        t_max=1.0,
+        t_min=0.5,
+        seed=0,
+        verbose=False,
+    )
+
+    assert len(observed_masks) == 4  # forward + reverse for both MH steps
+    assert all((~mask).any() for mask in observed_masks)
+
+
 def test_isco_detailed_balance_on_tiny_qubo():
     """Empirical Boltzmann-stationarity check on a tiny enumerable QUBO.
 

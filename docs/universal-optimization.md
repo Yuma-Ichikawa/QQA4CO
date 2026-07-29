@@ -6,6 +6,72 @@ differentiable or black-box functions; and constrained or unconstrained
 models. Single-objective QUBO and safe mixed nonlinear models can additionally
 be handed to SCIP for exact refinement and certification.
 
+## One description, one reviewed plan
+
+The Python API, CLI, and Streamlit app expose the same ordinary-language
+workflow:
+
+```bash
+export QQA_LLM_API_KEY='your-key'
+
+qqa ask \
+  "Choose integer units in [0,20] and real overtime in [0,8]. \
+   Minimize 3*units + square(overtime), with 4*units + overtime >= 45." \
+  --solver auto --device auto
+```
+
+```python
+import qqa
+
+request = """
+Choose binary open decisions, integer production in [0, 20], and real reserve
+in [0, 10]. Minimize operating cost while satisfying demand >= 100.
+"""
+
+# One-call translation, routing, and execution.
+answer = qqa.ask(request, solver="auto", device="auto", seed=0)
+print(answer.plan.selected_solver)
+print(answer.plan.rationale)
+
+# Or stop at the review boundary.
+plan = qqa.compile_natural_language(request, solver="auto")
+print(plan.spec.to_json())
+reviewed_answer = qqa.execute_plan(plan, device="auto", seed=0)
+```
+
+`qqa.MODEL_SYSTEM_PROMPT` is sent separately from the user's text. It defines
+the allowed declarative grammar, treats input as untrusted data, forbids
+generated executable code, and preserves multiple objectives instead of
+inventing a weighted sum. The returned JSON is still only a proposal: local
+validation checks exact fields, variable domains and bounds, expression syntax,
+resource quotas, scalar output shape, and finite values before a solver can run.
+Review `plan.spec.notes` and the full model when the request leaves any business
+assumption open.
+
+With `solver="auto"`, trusted local code—not the LLM—selects the route:
+
+| Validated request | Route |
+|---|---|
+| One bounded symbolic objective | QQA, or QQA→SCIP when the compatible optional backend is available |
+| Two or more symbolic objectives | One-run parallel Pareto QQA |
+| Explicit safe formula to evaluate without gradients | Pointwise `BlackBoxProblem` adapter and budget-aware black-box optimiser |
+| Objective available only through a simulator/API/experiment | Bind that real evaluator explicitly with `BlackBoxProblem` |
+
+This unified surface covers all major bounded classes supported by QQA:
+binary, integer, real, mixed, constrained, multi-objective, and black-box.
+For the natural-language black-box route, the user must state a safe objective
+formula. QQA validates it and adapts it to pointwise, no-gradient evaluation;
+the optimiser then treats the values as opaque. This does not mean a language
+model can recreate a simulator, service, laboratory experiment, or proprietary
+scoring function from prose. When no formula is supplied, QQA must not invent
+one: bind the actual callable or service adapter explicitly with
+`BlackBoxProblem`. Review `plan.spec.notes` and stop at plan review whenever an
+assumption changes the intended mathematics.
+
+The dashboard exposes this workflow in **Universal → Ask QQA**. It displays the
+selected route and rationale, keeps the audited JSON downloadable, and offers a
+separate **Build reviewed plan** action before **Plan & solve**.
+
 ## QQA × SCIP
 
 Install the optional exact backend:
@@ -187,6 +253,8 @@ directions, constraint scales and finite constants, then interprets a small
 arithmetic AST. Imports, attributes, comprehensions, strings, indirect calls,
 and unknown functions are rejected. No credential is written into model JSON,
 reports, notebooks, or error messages.
+`QQA_LLM_API_KEY` remains a legacy fallback, but new setups should use the
+provider-neutral `QQA_LLM_API_KEY` name.
 
 ## Reproducible examples
 
@@ -204,5 +272,9 @@ The
 covers the API surface. The
 [real-world optimisation studio](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/11_real_world_optimization_studio.ipynb)
 uses microgrid, portfolio, process, and production-planning models end to end.
+The
+[natural-language optimisation notebook](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/12_natural_language_optimization_colab.ipynb)
+demonstrates the system-prompt boundary, reviewed plans, automatic routes,
+`qqa.ask`, `qqa ask`, and the Ask QQA tab.
 Keep large validation outputs outside the package tree; the repository's own
 GPU and live-API validation is performed under `works/`.

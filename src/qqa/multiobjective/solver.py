@@ -20,7 +20,14 @@ from qqa.utils import require_cuda_if_requested, resolve_device
 
 @dataclass(slots=True)
 class ParetoResult:
-    """Nondominated feasible solutions collected during one parallel run."""
+    """Nondominated feasible solutions collected during one parallel run.
+
+    ``weights`` is row-aligned with ``solutions`` and records the reference
+    direction of the replica that produced each archived point.
+    ``search_reference_directions`` retains the complete set of directions
+    used by the parallel search, including replicas that did not contribute a
+    point to the final archive.
+    """
 
     solutions: torch.Tensor
     objectives: torch.Tensor
@@ -29,6 +36,33 @@ class ParetoResult:
     objective_names: tuple[str, ...]
     directions: tuple[str, ...]
     history: dict[str, list] = field(default_factory=dict)
+    search_reference_directions: torch.Tensor | None = None
+
+    def __post_init__(self) -> None:
+        if self.solutions.ndim != 2:
+            raise ValueError("solutions must have shape (points, variables).")
+        if self.objectives.ndim != 2:
+            raise ValueError("objectives must have shape (points, objectives).")
+        point_count = self.solutions.shape[0]
+        objective_count = self.objectives.shape[1]
+        if self.objectives.shape[0] != point_count:
+            raise ValueError("objectives must have shape (points, objectives).")
+        if self.weights.shape != (point_count, objective_count):
+            raise ValueError(
+                "weights must be row-aligned with objectives and have shape (points, objectives)."
+            )
+        if len(self.objective_names) != objective_count or len(self.directions) != objective_count:
+            raise ValueError("objective metadata must match the objective matrix width.")
+        if self.search_reference_directions is not None and (
+            self.search_reference_directions.ndim != 2
+            or self.search_reference_directions.shape[1] != objective_count
+        ):
+            raise ValueError("search_reference_directions must have shape (replicas, objectives).")
+
+    @property
+    def reference_directions(self) -> torch.Tensor:
+        """Reference direction that produced each archived Pareto point."""
+        return self.weights
 
     def named_solutions(self, problem: MultiObjectiveProblem) -> dict[str, torch.Tensor]:
         """Return variable-name views for every Pareto solution."""
@@ -137,7 +171,8 @@ def _reference_directions(count: int, objectives: int, seed: int, *, device, dty
     for index in range(min(count, objectives)):
         weights[index].zero_()
         weights[index, index] = 1.0
-    return weights.to(device=device, dtype=dtype).clamp_min_(1e-6)
+    weights = weights.to(device=device, dtype=dtype).clamp_min_(1e-6)
+    return weights / weights.sum(dim=1, keepdim=True)
 
 
 def _feasible_mask(problem: MultiObjectiveProblem, values: torch.Tensor) -> torch.Tensor:
@@ -235,31 +270,67 @@ def _crowding_distance(values: torch.Tensor) -> torch.Tensor:
 def _update_archive(
     problem: MultiObjectiveProblem,
     solutions: torch.Tensor,
+    solution_weights: torch.Tensor,
     archive_solutions: torch.Tensor | None,
+    archive_weights: torch.Tensor | None,
     *,
     max_size: int,
     dominance_chunk_size: int,
-) -> tuple[torch.Tensor | None, torch.Tensor | None]:
+) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
     with torch.no_grad():
+        if solution_weights.ndim != 2 or solution_weights.shape != (
+            solutions.shape[0],
+            problem.num_objectives,
+        ):
+            raise ValueError("solution_weights must have shape (solutions, objectives).")
+        if (archive_solutions is None) != (archive_weights is None):
+            raise ValueError("archive_solutions and archive_weights must be provided together.")
         feasible = _feasible_mask(problem, solutions)
         solutions = solutions[feasible]
+        solution_weights = solution_weights[feasible]
         if solutions.shape[0] == 0:
             return (
                 archive_solutions,
                 None if archive_solutions is None else problem.objective_matrix(archive_solutions),
+                archive_weights,
             )
         if archive_solutions is not None:
             solutions = torch.cat([archive_solutions.to(solutions.device), solutions])
-        solutions = torch.unique(solutions, dim=0)
+            solution_weights = torch.cat(
+                [archive_weights.to(solution_weights.device), solution_weights]
+            )
+        solutions, inverse = torch.unique(solutions, dim=0, return_inverse=True)
+        # Archive rows are concatenated first, so selecting the first producer
+        # preserves stable provenance when an already-known point is revisited.
+        first_producer = torch.full(
+            (solutions.shape[0],),
+            inverse.shape[0],
+            dtype=torch.long,
+            device=inverse.device,
+        )
+        first_producer.scatter_reduce_(
+            0,
+            inverse,
+            torch.arange(inverse.shape[0], device=inverse.device),
+            reduce="amin",
+            include_self=True,
+        )
+        solution_weights = solution_weights[first_producer]
         objective_min = problem.objective_matrix(solutions, minimize=True)
         keep = nondominated_mask(objective_min, chunk_size=dominance_chunk_size)
         solutions = solutions[keep]
+        solution_weights = solution_weights[keep]
         objective_min = objective_min[keep]
         if solutions.shape[0] > max_size:
             distance = _crowding_distance(objective_min)
             selected = torch.topk(distance, k=max_size).indices
             solutions = solutions[selected]
-        return solutions.detach(), problem.objective_matrix(solutions).detach()
+            solution_weights = solution_weights[selected]
+        return (
+            solutions.detach(),
+            problem.objective_matrix(solutions).detach(),
+            solution_weights.detach(),
+        )
 
 
 def pareto_anneal(
@@ -361,6 +432,7 @@ def pareto_anneal(
 
     archive_solutions: torch.Tensor | None = None
     archive_objectives: torch.Tensor | None = None
+    archive_weights: torch.Tensor | None = None
     # Every reference direction defines a different scalar subproblem, so its
     # KKT multipliers are distinct. A shared multiplier can cancel opposite
     # equality residuals across replicas and then compensate by exploding ρ.
@@ -384,10 +456,12 @@ def pareto_anneal(
     }
 
     projected = relaxation.project(latent)
-    archive_solutions, archive_objectives = _update_archive(
+    archive_solutions, archive_objectives, archive_weights = _update_archive(
         problem,
         projected,
+        weights,
         archive_solutions,
+        archive_weights,
         max_size=archive_size,
         dominance_chunk_size=dominance_chunk_size,
     )
@@ -440,10 +514,12 @@ def pareto_anneal(
 
         if (epoch + 1) % archive_interval == 0 or epoch == num_epochs - 1:
             projected = relaxation.project(latent)
-            archive_solutions, archive_objectives = _update_archive(
+            archive_solutions, archive_objectives, archive_weights = _update_archive(
                 problem,
                 projected,
+                weights,
                 archive_solutions,
+                archive_weights,
                 max_size=archive_size,
                 dominance_chunk_size=dominance_chunk_size,
             )
@@ -555,7 +631,7 @@ def pareto_anneal(
             size = 0 if archive_solutions is None else len(archive_solutions)
             print(f"[Pareto] epoch={epoch:5d} front={size:4d} loss={loss.item():.5g}")
 
-    if archive_solutions is None or archive_objectives is None:
+    if archive_solutions is None or archive_objectives is None or archive_weights is None:
         # Constraints may be impossible. Surface the failure explicitly
         # instead of returning an apparently valid infeasible front.
         raise RuntimeError("No feasible solution was found for the Pareto archive.")
@@ -564,14 +640,16 @@ def pareto_anneal(
     order = torch.argsort(objective_min[:, 0])
     archive_solutions = archive_solutions[order]
     archive_objectives = archive_objectives[order]
+    archive_weights = archive_weights[order]
     return ParetoResult(
         solutions=archive_solutions,
         objectives=archive_objectives,
-        weights=weights.detach(),
+        weights=archive_weights,
         runtime=perf_counter() - started,
         objective_names=tuple(objective.name for objective in problem.objectives),
         directions=tuple(objective.direction for objective in problem.objectives),
         history=history,
+        search_reference_directions=weights.detach(),
     )
 
 

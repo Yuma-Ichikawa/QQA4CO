@@ -208,24 +208,11 @@ def solve_spec_scip(
     if not isinstance(threads, int) or threads < 1:
         raise ValueError("threads must be a positive integer.")
 
-    from qqa.tex.compiler import problem_from_spec
-
-    problem = problem_from_spec(spec)
-    defaults: dict[str, Any] = {
-        "sol_size": max(64, 2 * max_warm_starts),
-        "num_epochs": 1000,
-        "verbose": verbose,
-        "return_population": True,
-    }
-    if qqa_kwargs:
-        defaults.update(qqa_kwargs)
-    defaults["return_population"] = True
-
     started = perf_counter()
-    qqa_result = problem.solve(**defaults)
-    starts = _candidate_starts(problem, qqa_result, max_warm_starts)
+    # Resolve the optional dependency and compile the full SCIP model before
+    # spending time on QQA exploration. Unsupported expressions and missing
+    # extras must fail immediately, not after a potentially long GPU run.
     pyscipopt, Model, quicksum, set_nonlinear_objective = _require_scip()
-
     model = Model(f"qqa-scip-{spec.name}")
     if not verbose:
         model.hideOutput()
@@ -276,6 +263,21 @@ def solve_spec_scip(
             constraint = expression == declaration.rhs
         model.addCons(constraint, name=declaration.name)
 
+    from qqa.tex.compiler import problem_from_spec
+
+    problem = problem_from_spec(spec)
+    defaults: dict[str, Any] = {
+        "sol_size": max(64, 2 * max_warm_starts),
+        "num_epochs": 1000,
+        "verbose": verbose,
+        "return_population": True,
+    }
+    if qqa_kwargs:
+        defaults.update(qqa_kwargs)
+    defaults["return_population"] = True
+    qqa_result = problem.solve(**defaults)
+    starts = _candidate_starts(problem, qqa_result, max_warm_starts)
+
     accepted = 0
     for start in starts:
         solution = model.createSol()
@@ -298,13 +300,17 @@ def solve_spec_scip(
             dtype=problem.dtype,
         )
         scip_sol = problem.space.project(problem.space.encode(scip_sol))
-        # SCIP normally retains every accepted QQA incumbent. Keep this guard
-        # because a numerically rejected start or early limit must never make
-        # the hybrid result worse than an exactly feasible QQA solution.
+        # Projection restores integer domains after SCIP's floating-point
+        # result extraction, but can perturb a tight nonlinear constraint.
+        # Never replace a feasible incumbent with a projected infeasible point.
         with torch.no_grad():
-            qqa_objective = float(problem.objective_values(qqa_sol)[0].item())
-            scip_objective = float(problem.objective_values(scip_sol)[0].item())
-        if not _exactly_feasible(problem, qqa_sol) or scip_objective <= qqa_objective + 1e-8:
+            qqa_solver_objective = float(problem.objective_values(qqa_sol)[0].item())
+            scip_solver_objective = float(problem.objective_values(scip_sol)[0].item())
+        qqa_feasible = _exactly_feasible(problem, qqa_sol)
+        scip_feasible = _exactly_feasible(problem, scip_sol)
+        if scip_feasible and (
+            not qqa_feasible or scip_solver_objective <= qqa_solver_objective + 1e-8
+        ):
             best_sol = scip_sol
     solver_loss = float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
     score = problem.score_summary(best_sol)

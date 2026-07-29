@@ -1,4 +1,4 @@
-"""Tests for the shared bench-runner helpers in ``scripts/_bench_common.py``.
+"""Tests for the wheel-shipped benchmark helpers.
 
 These lock the contracts that ``bench_discs.py`` and
 ``bench_factorization.py`` rely on: argparse defaults, kwarg extraction
@@ -9,29 +9,16 @@ scripts (and any future bench script using the helpers) must be updated.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
-import sys
-from pathlib import Path
 
 import pytest
-
-# Load `scripts/_bench_common.py` as a top-level module without polluting
-# `sys.modules` permanently. We use importlib instead of patching
-# `sys.path` so the test is hermetic — adjacent test files can run in
-# any order without picking up a stray `_bench_common` from sys.path.
-_BENCH_COMMON_PATH = Path(__file__).resolve().parents[1] / "scripts" / "_bench_common.py"
 
 
 @pytest.fixture(scope="module")
 def bench():
-    spec = importlib.util.spec_from_file_location("_bench_common_test", _BENCH_COMMON_PATH)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["_bench_common_test"] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    yield module
-    sys.modules.pop("_bench_common_test", None)
+    from qqa.benchmarking import common
+
+    return common
 
 
 def test_add_qqa_hp_args_paper_defaults(bench):
