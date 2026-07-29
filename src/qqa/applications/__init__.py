@@ -9,11 +9,13 @@ from qqa.applications.microgrid import (
     build_microgrid_dispatch,
     build_microgrid_pareto,
 )
+from qqa.applications.portfolio import build_portfolio_pareto
 from qqa.applications.process import build_process_blackbox
 
 APPLICATIONS = (
     "microgrid-dispatch",
     "microgrid-pareto",
+    "portfolio-pareto",
     "process-blackbox",
 )
 
@@ -23,6 +25,7 @@ def build_application(name: str):
     builders = {
         "microgrid-dispatch": build_microgrid_dispatch,
         "microgrid-pareto": build_microgrid_pareto,
+        "portfolio-pareto": build_portfolio_pareto,
         "process-blackbox": build_process_blackbox,
     }
     try:
@@ -37,5 +40,6 @@ __all__ = [
     "build_application",
     "build_microgrid_dispatch",
     "build_microgrid_pareto",
+    "build_portfolio_pareto",
     "build_process_blackbox",
 ]

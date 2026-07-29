@@ -35,6 +35,7 @@ from qqa.applications import (
     build_application,
     build_microgrid_dispatch,
     build_microgrid_pareto,
+    build_portfolio_pareto,
     build_process_blackbox,
 )
 from qqa.blackbox import (
@@ -79,6 +80,7 @@ from qqa.multiobjective import (
     ParetoResult,
     pareto_anneal,
     plot_pareto,
+    plot_pareto_diagnostics,
 )
 from qqa.pa import PAResult, population_annealing
 from qqa.problems import (
@@ -138,7 +140,7 @@ from qqa.tex import (
     problem_from_spec,
     solve_tex,
 )
-from qqa.utils import enable_tf32, fix_seed, generate_graph
+from qqa.utils import enable_tf32, fix_seed, generate_graph, resolve_device
 
 # Single-source the version from the wheel metadata so ``__version__`` is
 # always whatever ``pip install qqa`` actually installed. The fallback covers
@@ -228,6 +230,7 @@ __all__ = [
     "build_application",
     "build_microgrid_dispatch",
     "build_microgrid_pareto",
+    "build_portfolio_pareto",
     "build_process_blackbox",
     "compile_tex",
     "discrete_langevin",
@@ -241,10 +244,12 @@ __all__ = [
     "pareto_anneal",
     "plot_blackbox",
     "plot_pareto",
+    "plot_pareto_diagnostics",
     "problem_from_spec",
     "random_factorization_problems",
     "random_prime",
     "random_semiprime",
+    "resolve_device",
     "simulated_annealing",
     "save_html_report",
     "solve_qqa_scip",

@@ -1,13 +1,15 @@
 # QQA4CO — Parallel Quasi-Quantum Annealing
 
-**QQA4CO** is a research-grade PyTorch toolkit for combinatorial and
-spin-glass optimisation. It frames a discrete problem as a
-continuous, differentiable objective and anneals towards a discrete
-minimum using gradient-based parallel sampling on the GPU.
+**QQA4CO** is a research-grade PyTorch toolkit spanning bounded binary,
+integer, real, mixed, categorical, permutation, and spin optimisation;
+single- and multi-objective constrained models; gradient-free black-box
+campaigns; and optional exact SCIP refinement. Its core frames a problem as a
+continuous differentiable objective and anneals a parallel population on CPU,
+CUDA, or MPS.
 
 - **Unified API** — one `qqa.anneal()` for binary, categorical,
   permutation, batched-instance, and spin problems.
-- **17-class problem catalogue** — MIS, MaxCut, MaxClique, Vertex
+- **20+ class problem catalogue** — MIS, MaxCut, MaxClique, Vertex
   Cover, Graph Bisection, Coloring, BalancedGraphPartition, Knapsack,
   NumberPartitioning, MaxSAT3, TSP, QAP, NQueens, Ising 1D,
   Edwards-Anderson, Sherrington-Kirkpatrick, BinaryPerceptron,
@@ -19,6 +21,8 @@ minimum using gradient-based parallel sampling on the GPU.
 - **Streamlit dashboard** — `qqa gui` opens a polished UI with live
   progress, per-problem visualisations, and parallel-population view.
 - **`qqa` CLI** — reproducible solves and benchmarks from the shell.
+- **Universal workflows** — realistic mixed planning, one-run Pareto fronts,
+  constrained black-box optimisation, safe TeX modelling, and QQA→SCIP.
 
 ## Install
 

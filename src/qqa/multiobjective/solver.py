@@ -15,7 +15,7 @@ import torch
 
 from qqa.multiobjective.problem import MultiObjectiveProblem
 from qqa.schedule import LinearBGSchedule
-from qqa.utils import require_cuda_if_requested
+from qqa.utils import require_cuda_if_requested, resolve_device
 
 
 @dataclass(slots=True)
@@ -148,6 +148,48 @@ def _feasible_mask(problem: MultiObjectiveProblem, values: torch.Tensor) -> torc
     return feasible
 
 
+def _constraint_matrices(
+    problem: MultiObjectiveProblem,
+    values: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return signed residuals, non-negative violations, and equality flags.
+
+    Every inequality is converted to ``g(x) <= 0`` and normalised by its
+    declared scale. Equalities keep their signed residual so an augmented
+    Lagrange multiplier can move in either direction.
+    """
+    lhs = problem.constraint_values(values)
+    residuals = []
+    violations = []
+    equality = []
+    for constraint in problem.constraints:
+        residual = (lhs[constraint.name] - constraint.rhs) / constraint.scale
+        if constraint.sense == ">=":
+            residual = -residual
+        is_equality = constraint.sense == "=="
+        residuals.append(residual)
+        violations.append(residual.abs() if is_equality else residual.clamp_min(0.0))
+        equality.append(is_equality)
+    return (
+        torch.stack(residuals, dim=1),
+        torch.stack(violations, dim=1),
+        torch.tensor(equality, device=values.device, dtype=torch.bool),
+    )
+
+
+def _augmented_constraint_loss(
+    residuals: torch.Tensor,
+    equality: torch.Tensor,
+    multipliers: torch.Tensor,
+    rho: float,
+) -> torch.Tensor:
+    """Powell–Hestenes–Rockafellar loss for mixed equality/inequality rows."""
+    equality_loss = multipliers * residuals + 0.5 * rho * residuals.square()
+    shifted = (residuals + multipliers / rho).clamp_min(0.0)
+    inequality_loss = 0.5 * rho * shifted.square() - 0.5 * multipliers.square() / rho
+    return torch.where(equality, equality_loss, inequality_loss).sum(dim=1)
+
+
 def nondominated_mask(
     values: torch.Tensor,
     *,
@@ -238,18 +280,23 @@ def pareto_anneal(
     history_stride: int = 10,
     constraint_strategy: str = "adaptive",
     penalty_growth: float = 2.0,
+    penalty_progress_ratio: float = 0.8,
     restart_patience: int = 8,
     restart_fraction: float = 0.15,
+    restart_jitter: float = 0.08,
+    gradient_clip_norm: float | None = 100.0,
+    weight_decay: float = 0.0,
     seed: int = 0,
     device: str | torch.device = "cpu",
     verbose: bool = False,
 ) -> ParetoResult:
     """Find a diverse Pareto front in one GPU-parallel optimisation run.
 
-    Adaptive augmented-Lagrangian penalties focus replicas on feasibility
-    without requiring users to hand-tune one global coefficient.  When the
-    archive stagnates, a bounded fraction of the weakest replicas is restarted
-    to recover exploration while the live nondominated archive is preserved.
+    A Powell–Hestenes–Rockafellar augmented Lagrangian treats inequalities
+    with projected non-negative multipliers and equalities with signed
+    multipliers. When the archive stagnates, weak non-anchor replicas are
+    split between archive-centred and global restarts while the nondominated
+    archive and objective-axis reference directions are preserved.
     """
     if not isinstance(problem, MultiObjectiveProblem):
         raise TypeError("problem must be a MultiObjectiveProblem.")
@@ -280,9 +327,20 @@ def pareto_anneal(
         raise ValueError("constraint_strategy must be 'adaptive' or 'fixed'.")
     if not math.isfinite(penalty_growth) or penalty_growth < 1:
         raise ValueError("penalty_growth must be finite and >= 1.")
+    if not math.isfinite(penalty_progress_ratio) or not 0 < penalty_progress_ratio <= 1:
+        raise ValueError("penalty_progress_ratio must be in (0, 1].")
     if not math.isfinite(restart_fraction) or not 0 <= restart_fraction < 1:
         raise ValueError("restart_fraction must be in [0, 1).")
+    if not math.isfinite(restart_jitter) or not 0 <= restart_jitter <= 1:
+        raise ValueError("restart_jitter must be in [0, 1].")
+    if gradient_clip_norm is not None and (
+        not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
+    ):
+        raise ValueError("gradient_clip_norm must be finite and > 0 or None.")
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError("weight_decay must be finite and >= 0.")
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     torch.manual_seed(seed)
     if torch.device(device).type == "cuda":
@@ -291,7 +349,7 @@ def pareto_anneal(
     started = perf_counter()
     relaxation = problem.relaxation
     latent = relaxation.init(sol_size, problem, device)
-    optimizer = torch.optim.AdamW([latent], lr=learning_rate)
+    optimizer = torch.optim.AdamW([latent], lr=learning_rate, weight_decay=weight_decay)
     schedule = LinearBGSchedule(min_bg, max_bg)
     weights = _reference_directions(
         sol_size,
@@ -303,10 +361,14 @@ def pareto_anneal(
 
     archive_solutions: torch.Tensor | None = None
     archive_objectives: torch.Tensor | None = None
-    multipliers = latent.new_zeros(len(problem.constraints))
+    # Every reference direction defines a different scalar subproblem, so its
+    # KKT multipliers are distinct. A shared multiplier can cancel opposite
+    # equality residuals across replicas and then compensate by exploding ρ.
+    multipliers = latent.new_zeros((sol_size, len(problem.constraints)))
     penalty_rho = 1.0
-    previous_mean_violation: torch.Tensor | None = None
+    previous_violation_norm: float | None = None
     best_archive_size = 0
+    best_archive_ideal: torch.Tensor | None = None
     stagnation_intervals = 0
     restart_count = 0
     history: dict[str, list] = {
@@ -316,6 +378,7 @@ def pareto_anneal(
         "nadir": [],
         "loss": [],
         "feasible_ratio": [],
+        "mean_violation": [],
         "penalty_rho": [],
         "restarts": [],
     }
@@ -340,24 +403,29 @@ def pareto_anneal(
         weighted = weights * normalised
         scalar = weighted.amax(dim=1) + augmentation * weighted.sum(dim=1)
         if problem.constraints:
-            violations = problem.constraint_violations(values)
-            violation_matrix = torch.stack(
-                [
-                    violations[constraint.name] / constraint.scale
-                    for constraint in problem.constraints
-                ],
-                dim=1,
+            residual_matrix, violation_matrix, equality = _constraint_matrices(problem, values)
+            tolerances = values.new_tensor(
+                [constraint.tolerance / constraint.scale for constraint in problem.constraints]
             )
-            feasible_ratio = float((violation_matrix <= 1e-8).all(dim=1).float().mean().item())
+            feasible_ratio = float(
+                (violation_matrix <= tolerances).all(dim=1).float().mean().item()
+            )
+            mean_violation_value = float(violation_matrix.mean().detach().item())
             if constraint_strategy == "adaptive":
-                constraint_loss = (
-                    violation_matrix * multipliers + 0.5 * penalty_rho * violation_matrix.square()
-                ).sum(dim=1)
+                constraint_loss = _augmented_constraint_loss(
+                    residual_matrix,
+                    equality,
+                    multipliers,
+                    penalty_rho,
+                )
             else:
                 constraint_loss = problem.constraint_penalty(values)
         else:
+            residual_matrix = values.new_zeros((len(values), 0))
             violation_matrix = values.new_zeros((len(values), 0))
+            equality = torch.zeros(0, device=values.device, dtype=torch.bool)
             feasible_ratio = 1.0
+            mean_violation_value = 0.0
             constraint_loss = values.new_zeros(len(values))
         discrete_penalty = relaxation.penalty(latent, curve_rate)
         diversity = relaxation.diversity(latent)
@@ -365,6 +433,8 @@ def pareto_anneal(
         loss = (scalar + constraint_loss + bg * discrete_penalty).sum()
         loss = loss - div_param * sol_size * diversity
         loss.backward()
+        if gradient_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_([latent], gradient_clip_norm)
         optimizer.step()
         relaxation.perturb_(latent, learning_rate, temp)
 
@@ -378,17 +448,51 @@ def pareto_anneal(
                 dominance_chunk_size=dominance_chunk_size,
             )
             if problem.constraints and constraint_strategy == "adaptive":
-                mean_violation = violation_matrix.detach().mean(dim=0)
-                multipliers = (multipliers + penalty_rho * mean_violation).clamp_max(1e6)
-                if previous_mean_violation is not None and not bool(
-                    torch.all(mean_violation <= 0.9 * previous_mean_violation + 1e-10)
+                with torch.no_grad():
+                    updated_values = relaxation.forward(latent)
+                    updated_residuals, updated_violations, equality = _constraint_matrices(
+                        problem,
+                        updated_values,
+                    )
+                    candidate_multipliers = multipliers + penalty_rho * updated_residuals
+                    multipliers = torch.where(
+                        equality,
+                        candidate_multipliers.clamp(-1e6, 1e6),
+                        candidate_multipliers.clamp(0.0, 1e6),
+                    )
+                    # Penalty growth should target the declared feasible set,
+                    # not chase residuals that are already within engineering
+                    # tolerances. Otherwise noisy equality rows can double ρ
+                    # indefinitely even when almost the entire population is
+                    # reportably feasible.
+                    excess = (updated_violations - tolerances).clamp_min(0.0)
+                    violation_norm = float(excess.mean(dim=0).amax().item())
+                if (
+                    previous_violation_norm is not None
+                    and violation_norm > 1e-6
+                    and violation_norm > penalty_progress_ratio * previous_violation_norm + 1e-10
                 ):
                     penalty_rho = min(1e6, penalty_rho * penalty_growth)
-                previous_mean_violation = mean_violation
+                previous_violation_norm = violation_norm
 
             current_archive_size = 0 if archive_solutions is None else len(archive_solutions)
-            if current_archive_size > best_archive_size:
-                best_archive_size = current_archive_size
+            quality_improved = current_archive_size > best_archive_size
+            if archive_solutions is not None:
+                current_archive_ideal = problem.objective_matrix(
+                    archive_solutions,
+                    minimize=True,
+                ).amin(dim=0)
+                if best_archive_ideal is None or bool(
+                    torch.any(current_archive_ideal < best_archive_ideal - 1e-7)
+                ):
+                    quality_improved = True
+                best_archive_ideal = (
+                    current_archive_ideal
+                    if best_archive_ideal is None
+                    else torch.minimum(best_archive_ideal, current_archive_ideal)
+                )
+            best_archive_size = max(best_archive_size, current_archive_size)
+            if quality_improved:
                 stagnation_intervals = 0
             else:
                 stagnation_intervals += 1
@@ -397,15 +501,42 @@ def pareto_anneal(
                 and stagnation_intervals >= restart_patience
                 and sol_size > problem.num_objectives
             ):
-                count = max(1, int(sol_size * restart_fraction))
-                worst = torch.topk(scalar.detach(), k=count).indices
+                candidates = torch.arange(
+                    problem.num_objectives,
+                    sol_size,
+                    device=latent.device,
+                )
+                count = min(
+                    len(candidates),
+                    max(1, math.ceil(sol_size * restart_fraction)),
+                )
+                merit = (
+                    scalar.detach()
+                    + constraint_loss.detach()
+                    + max(bg, 0.0) * discrete_penalty.detach()
+                )
+                worst = candidates[torch.topk(merit[candidates], k=count, largest=True).indices]
                 with torch.no_grad():
-                    latent[worst].uniform_(0.0, 1.0)
+                    replacements = torch.rand_like(latent[worst])
+                    if archive_solutions is not None:
+                        elite_count = min((count + 1) // 2, len(archive_solutions))
+                        selected = torch.randperm(
+                            len(archive_solutions),
+                            device=latent.device,
+                        )[:elite_count]
+                        elite = relaxation.encode(archive_solutions[selected])
+                        elite = elite + restart_jitter * torch.randn_like(elite)
+                        replacements[:elite_count] = elite
+                    latent[worst] = replacements
+                    relaxation.perturb_(latent, learning_rate, 0.0)
                     state = optimizer.state.get(latent, {})
                     for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
                         value = state.get(key)
                         if torch.is_tensor(value) and value.shape == latent.shape:
                             value[worst].zero_()
+                    # A new primal point must not inherit the KKT estimate of
+                    # the discarded reference-direction trajectory.
+                    multipliers[worst].zero_()
                 restart_count += count
                 stagnation_intervals = 0
         if epoch % history_stride == 0 or epoch == num_epochs - 1:
@@ -417,6 +548,7 @@ def pareto_anneal(
             history["nadir"].append(nadir.detach().cpu().tolist())
             history["loss"].append(float(loss.detach().item()))
             history["feasible_ratio"].append(feasible_ratio)
+            history["mean_violation"].append(mean_violation_value)
             history["penalty_rho"].append(penalty_rho)
             history["restarts"].append(restart_count)
         if verbose and (epoch % max(1, num_epochs // 10) == 0 or epoch == num_epochs - 1):

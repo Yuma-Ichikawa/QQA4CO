@@ -25,7 +25,7 @@ from qqa.polish import apply_polish_if_improves
 from qqa.problems.base import COProblem
 from qqa.relaxation import _default_penalty_from_forward
 from qqa.schedule import LinearBGSchedule
-from qqa.utils import require_cuda_if_requested, safe_score_summary
+from qqa.utils import require_cuda_if_requested, resolve_device, safe_score_summary
 
 
 @dataclass
@@ -36,8 +36,8 @@ class AnnealResult:
     ----------
     best_sol:
         Tensor of the best discrete solution(s) found during annealing. Shape
-        depends on the problem: ``(sol_size, N)`` for single-instance, or
-        ``(num_instance, max_node)`` for batched-instance problems.
+        depends on the problem: ``(N, ...)`` for one winning single-instance
+        state, or ``(num_instance, max_node)`` for batched-instance problems.
     best_obj:
         Best objective value observed. ``float`` for single-instance problems,
         ``numpy.ndarray`` of shape ``(num_instance,)`` for batched-instance.
@@ -68,21 +68,84 @@ class AnnealResult:
       ``feasible_count`` tally. ``score`` is empty for batched problems
       whose class did not override :py:meth:`COProblem.score_summary`."""
     polished_sol: torch.Tensor | None = None
-    """1-flip-locally-optimal version of :attr:`best_sol`, populated when
-    :func:`anneal` is called with ``polish=True`` (the default) on a QUBO
-    problem. ``None`` for non-QUBO problems or when polishing is disabled.
-    For QUBO problems ``best_sol`` / ``best_obj`` / ``score`` are *replaced*
-    by the polished result whenever it is strictly better, so callers that
-    just read ``best_sol`` automatically benefit from the polish."""
+    """Domain-locally-optimal version of :attr:`best_sol`, populated when
+    :func:`anneal` is called with ``polish=True`` (the default) on a QUBO,
+    quadratic-spin, or categorical problem. ``best_sol`` / ``best_obj`` /
+    ``score`` are replaced only after a strict improvement."""
     final_population: torch.Tensor | None = None
     """Projected final replica population, populated only when
     :func:`anneal` is called with ``return_population=True``. Hybrid solvers
     use it to pass several diverse QQA incumbents to exact solvers without
     making ordinary results unnecessarily large."""
+    diagnostics: dict = field(default_factory=dict)
+    """Solver-level diagnostics such as adaptive restart counts and the
+    numerical-stability controls used for the run."""
 
 
 def _is_instance_problem(problem) -> bool:
     return hasattr(problem, "num_instance")
+
+
+def _replica_merit(discrete_losses: torch.Tensor) -> torch.Tensor:
+    """Return a scale-balanced scalar rank for each parallel replica."""
+    if discrete_losses.ndim == 1:
+        return discrete_losses
+    flattened = discrete_losses.reshape(discrete_losses.shape[0], -1)
+    centre = flattened.median(dim=0).values
+    scale = (flattened - centre).abs().median(dim=0).values.clamp_min(1e-8)
+    return ((flattened - centre) / scale).mean(dim=1)
+
+
+def _reset_optimizer_rows(
+    optimizer: torch.optim.Optimizer,
+    parameter: torch.Tensor,
+    rows: torch.Tensor,
+) -> None:
+    """Clear Adam moments for replicas whose latent state was restarted."""
+    state = optimizer.state.get(parameter, {})
+    for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+        value = state.get(key)
+        if torch.is_tensor(value) and value.shape == parameter.shape:
+            value[rows].zero_()
+
+
+def _restart_replicas(
+    *,
+    x: torch.Tensor,
+    best_sol: torch.Tensor,
+    discrete_losses: torch.Tensor,
+    relaxation,
+    optimizer: torch.optim.Optimizer,
+    fraction: float,
+    jitter: float,
+    learning_rate: float,
+) -> int:
+    """Restart weak replicas with a global/local basin-hopping mixture."""
+    count = min(x.shape[0] - 1, max(1, math.ceil(x.shape[0] * fraction)))
+    if count < 1:
+        return 0
+    worst = torch.topk(_replica_merit(discrete_losses), k=count, largest=True).indices
+    encode = getattr(relaxation, "encode", None)
+    elite = best_sol.to(device=x.device, dtype=x.dtype)
+    if encode is not None:
+        elite = encode(elite)
+    if elite.shape != x.shape[1:]:
+        return 0
+
+    # Half of the weak replicas intensify around the incumbent; the rest
+    # restart globally. This is a bounded basin-hopping step, not mutation of
+    # the preserved incumbent itself.
+    elite_count = (count + 1) // 2
+    with torch.no_grad():
+        replacements = torch.rand_like(x[worst])
+        if elite_count:
+            local = elite.unsqueeze(0).expand(elite_count, *elite.shape).clone()
+            local.add_(jitter * torch.randn_like(local))
+            replacements[:elite_count] = local
+        x[worst] = replacements
+        relaxation.perturb_(x, learning_rate, 0.0)
+        _reset_optimizer_rows(optimizer, x, worst)
+    return count
 
 
 def anneal(
@@ -106,6 +169,11 @@ def anneal(
     initial_state: torch.Tensor | None = None,
     polish: bool = True,
     return_population: bool = False,
+    weight_decay: float = 0.0,
+    gradient_clip_norm: float | None = None,
+    restart_patience: int | None = None,
+    restart_fraction: float = 0.15,
+    restart_jitter: float = 0.10,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -158,16 +226,33 @@ def anneal(
         :func:`qqa.warmstart.bfs_2color` already gives a 0.96+ ApR seed.
         Ignored for batched-instance problems.
     polish:
-        If ``True`` (default), run :func:`qqa.polish.greedy_one_flip` on the
-        winning bitstring at the end of training and replace ``best_sol`` /
-        ``best_obj`` / ``score`` with the polished result whenever it is
-        strictly better. The polish costs ``O(N · #flips)`` and is silently
-        skipped for problems without a ``Q_mat`` (Spin / Categorical /
-        batched-instance), so it is safe to leave on globally.
+        If ``True`` (default), run a domain-aware monotone local search on the
+        winning QUBO, quadratic-spin, or categorical solution and replace
+        ``best_sol`` / ``best_obj`` / ``score`` only when it is strictly
+        better. Unsupported and batched-instance problems are skipped.
     return_population:
         If true, retain the projected final replica population in
         :attr:`AnnealResult.final_population`. Defaults to false to keep
         result objects compact.
+    weight_decay:
+        AdamW decay applied to the latent coordinates. Defaults to zero:
+        shrinking every coordinate toward binary zero introduces an
+        objective-independent bias and is not part of the QQA dynamics.
+    gradient_clip_norm:
+        Optional global norm cap for the latent gradient. Useful for
+        user-defined objectives with large coefficients or singular
+        nonlinear derivatives.
+    restart_patience:
+        Enable adaptive basin recovery after this many consecutive epochs
+        without an incumbent improvement. Weak replicas are split between
+        incumbent-centred jitter and fresh global samples. ``None`` disables
+        restarts and preserves the original loop exactly.
+    restart_fraction:
+        Fraction of replicas replaced at a restart. At least one incumbent
+        replica is always retained.
+    restart_jitter:
+        Latent-space standard deviation around the incumbent for the local
+        half of each restart.
     """
     if not isinstance(sol_size, int) or isinstance(sol_size, bool) or sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
@@ -187,6 +272,22 @@ def anneal(
         raise ValueError(f"div_param must be in [0, 1], got {div_param}.")
     if mixed_precision not in ("fp32", "bf16"):
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
+    if not math.isfinite(weight_decay) or weight_decay < 0:
+        raise ValueError(f"weight_decay must be finite and >= 0, got {weight_decay}.")
+    if gradient_clip_norm is not None and (
+        not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
+    ):
+        raise ValueError(f"gradient_clip_norm must be finite and > 0, got {gradient_clip_norm}.")
+    if restart_patience is not None and (
+        not isinstance(restart_patience, int)
+        or isinstance(restart_patience, bool)
+        or restart_patience < 1
+    ):
+        raise ValueError("restart_patience must be a positive integer or None.")
+    if not math.isfinite(restart_fraction) or not 0 < restart_fraction < 1:
+        raise ValueError("restart_fraction must be finite and in (0, 1).")
+    if not math.isfinite(restart_jitter) or not 0 <= restart_jitter <= 1:
+        raise ValueError("restart_jitter must be finite and in [0, 1].")
     # Mirror the validation that the pignn / cpra trainers already enforce:
     # the binary / spin penalty 1 - (1 - 2p)^c is asymmetric for odd c and
     # silently breaks the discrete attractor at γ > 0. CategoricalRelaxation
@@ -204,6 +305,7 @@ def anneal(
             f"relaxations, got {curve_rate}."
         )
 
+    device = resolve_device(device)
     # Surface a helpful message when CUDA is requested but unavailable,
     # before torch raises its own (cryptic) error deep inside .to().
     require_cuda_if_requested(device)
@@ -259,9 +361,12 @@ def anneal(
         # seed inside the [0, 1] cube even when the user passes raw {0,1} bits.
         x = (seed + 0.05 * torch.randn_like(seed)).clamp_(0.0, 1.0)
         x.requires_grad_(True)
-    optimizer = torch.optim.AdamW([x], lr=learning_rate)
+    optimizer = torch.optim.AdamW([x], lr=learning_rate, weight_decay=weight_decay)
 
-    hp = {"div_param": float(div_param)}
+    hp = {"div_param": float(div_param), "restart_count": 0}
+    restart_epochs: list[int] = []
+    restart_count = 0
+    stagnant_epochs = 0
 
     with torch.no_grad():
         x_disc = relax.project(x)
@@ -332,6 +437,8 @@ def anneal(
         # backward()/step() must run outside autocast so AdamW updates the
         # float32 master weights with full precision.
         total.backward()
+        if gradient_clip_norm is not None:
+            torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
         optimizer.step()
 
         relax.perturb_(x, learning_rate, temp)
@@ -339,12 +446,14 @@ def anneal(
         with torch.no_grad():
             x_disc = relax.project(x)
             loss_disc = problem.loss_fn(x_disc)
+            improved_this_epoch = False
             if is_batch:
                 min_vals, min_idx = torch.min(loss_disc, dim=0)
                 # GPU-side improvement mask; one ``.any().item()`` sync per
                 # epoch (vs the previous full ``cpu().numpy()`` transfer).
                 improved_mask = min_vals < best_obj_gpu
                 if improved_mask.any().item():
+                    improved_this_epoch = True
                     sel = x_disc[min_idx, torch.arange(x_disc.size(1), device=x.device)]
                     best_sol = torch.where(improved_mask.unsqueeze(-1), sel, best_sol)
                     best_obj_gpu = torch.minimum(best_obj_gpu, min_vals)
@@ -353,9 +462,11 @@ def anneal(
                 min_val, min_idx = torch.min(loss_disc, dim=0)
                 # One sync per epoch in the common (non-improving) case.
                 if (min_val < best_obj_gpu).item():
+                    improved_this_epoch = True
                     best_obj_gpu = min_val.detach()
                     best_obj = float(best_obj_gpu.item())
                     best_sol = x_disc[int(min_idx.item())].detach().clone()
+        stagnant_epochs = 0 if improved_this_epoch else stagnant_epochs + 1
 
         state = CallbackState(
             epoch=epoch,
@@ -376,6 +487,28 @@ def anneal(
         if verbose and (epoch % check_interval == 0 or epoch == num_epochs - 1):
             _print_progress(epoch, best_obj, losses, penalties, diversity, bg, hp["div_param"])
 
+        if (
+            restart_patience is not None
+            and sol_size > 1
+            and epoch < num_epochs - 1
+            and stagnant_epochs >= restart_patience
+        ):
+            restarted = _restart_replicas(
+                x=x,
+                best_sol=best_sol,
+                discrete_losses=loss_disc,
+                relaxation=relax,
+                optimizer=optimizer,
+                fraction=restart_fraction,
+                jitter=restart_jitter,
+                learning_rate=learning_rate,
+            )
+            if restarted:
+                restart_count += restarted
+                restart_epochs.append(epoch)
+                hp["restart_count"] = restart_count
+            stagnant_epochs = 0
+
     runtime = time() - runtime_start
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
@@ -387,6 +520,9 @@ def anneal(
         cb.on_train_end(state)
 
     history = recorder.history if recorder is not None else {}
+    if record_history:
+        history["restart_epochs"] = restart_epochs
+        history["restart_count"] = restart_count
 
     # Human-readable score.
     # * Single-instance: ``best_obj`` is a Python float and ``score`` is the
@@ -404,11 +540,9 @@ def anneal(
         except Exception as exc:  # noqa: BLE001 - surface but never abort
             score = {"label": "loss", "feasible": False, "extra": {"error": str(exc)}}
 
-    # Default-on greedy 1-flip polish. Noop for non-QUBO problems (no Q_mat)
-    # and for batched-instance problems (best_sol is 2-D and the polish
-    # contract is undefined). When the polish strictly improves the QUBO
-    # objective, we hot-swap best_sol / best_obj / score so callers reading
-    # ``result.best_sol`` automatically benefit.
+    # Default-on domain-aware polish. Batched-instance problems are skipped
+    # because their best_sol is one row per independent model rather than one
+    # search state. A strict improvement hot-swaps best_sol / best_obj / score.
     prev_obj = best_obj
     best_sol, best_obj, polished_sol = apply_polish_if_improves(
         problem, best_sol, best_obj, polish=polish and not is_batch
@@ -427,6 +561,15 @@ def anneal(
         score=score,
         polished_sol=polished_sol,
         final_population=x_disc.detach().clone() if return_population else None,
+        diagnostics={
+            "weight_decay": float(weight_decay),
+            "gradient_clip_norm": gradient_clip_norm,
+            "restart_patience": restart_patience,
+            "restart_fraction": float(restart_fraction),
+            "restart_jitter": float(restart_jitter),
+            "restart_count": restart_count,
+            "restart_events": len(restart_epochs),
+        },
     )
 
 

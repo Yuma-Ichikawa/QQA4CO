@@ -73,6 +73,7 @@ model = qqa.MultiObjectiveProblem(
 )
 result = model.solve_pareto(sol_size=1024, device="cuda")
 figure = qqa.plot_pareto(result)  # 2-D, 3-D, or parallel coordinates
+diagnostics = qqa.plot_pareto_diagnostics(result)
 ```
 
 Every replica receives a different low-discrepancy reference direction.
@@ -89,9 +90,28 @@ available with `result.select([w1, ...])`, and two-objective fronts expose
 exact `result.hypervolume(reference_point)`.
 
 Dominance comparisons are chunked, avoiding a full quadratic temporary tensor
-on large GPU archives. Feasibility uses an adaptive augmented Lagrangian, and
-stagnating weak replicas are restarted while the nondominated archive is
-retained.
+on large GPU archives. Feasibility uses the projected
+Powell–Hestenes–Rockafellar augmented Lagrangian: equality multipliers are
+signed, inequality multipliers are non-negative, every reference-direction
+replica owns its KKT multiplier vector, and penalty growth measures only
+residual beyond each declared tolerance. Stagnating weak replicas are
+split between archive-centred and global restarts while objective-axis anchors
+and the nondominated archive are retained.
+
+`plot_pareto` highlights the scale-invariant knee and labels each objective's
+direction. `plot_pareto_diagnostics` exposes archive growth, feasible
+population share, normalised violation, penalty \(\rho\), and restart epochs.
+
+A ready-to-run cardinality-constrained portfolio demonstrates a genuinely
+mixed, non-convex three-objective surface:
+
+```python
+portfolio = qqa.build_portfolio_pareto()
+front = portfolio.solve_pareto(sol_size=1024, device="auto")
+index = front.select(weights=[0.45, 0.35, 0.20])
+print(portfolio.score_summary(front.solutions[index]))
+qqa.plot_pareto(front)
+```
 
 ## Mixed-variable black-box optimisation
 
@@ -119,14 +139,15 @@ qqa.plot_blackbox(result)
 ```
 
 The optimiser combines a numerically regularised RBF surrogate, expected
-improvement (or lower confidence bounds), probability of feasibility, global
-Sobol coverage, local trust-region search, adaptive expansion/shrinkage,
-duplicate suppression, and greedy batch diversification. `budget` counts
-actual objective calls. `workers` evaluates independent batch points
-concurrently; surrogate linear algebra and candidate scoring can run on CUDA.
-Use `resume_from=previous_result` to extend a campaign without repeating
-expensive evaluations. `max_model_points` bounds cubic kernel cost on long
-runs.
+improvement (or lower confidence bounds), a separate log-violation surrogate
+for every constraint, joint probability of feasibility, global Sobol coverage,
+local trust-region search, adaptive expansion/shrinkage, duplicate
+suppression, and greedy batch diversification. Multi-output constraints share
+one Cholesky factorisation. `budget` counts actual objective calls. `workers`
+evaluates independent batch points concurrently; surrogate linear algebra and
+candidate scoring can run on CUDA. Use `resume_from=previous_result` to extend
+a campaign without repeating expensive evaluations. `max_model_points` bounds
+cubic kernel cost on long runs.
 
 ## TeX to a safe solver model
 
@@ -174,6 +195,7 @@ The packaged examples run without copying model code:
 ```bash
 qqa example run microgrid-dispatch --output-dir results/dispatch
 qqa example run microgrid-pareto --device cuda --output-dir results/pareto
+qqa example run portfolio-pareto --device cuda --output-dir results/portfolio
 qqa example run process-blackbox --device cuda --output-dir results/process
 ```
 
@@ -181,6 +203,6 @@ The
 [universal optimisation Colab notebook](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/10_universal_optimization_colab.ipynb)
 covers the API surface. The
 [real-world optimisation studio](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/11_real_world_optimization_studio.ipynb)
-uses the microgrid, process, and production-planning models end to end. Keep
-large validation outputs outside the package tree; the repository's own GPU
-and live-API validation is performed under `works/`.
+uses microgrid, portfolio, process, and production-planning models end to end.
+Keep large validation outputs outside the package tree; the repository's own
+GPU and live-API validation is performed under `works/`.

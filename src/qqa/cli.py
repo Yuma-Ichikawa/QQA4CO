@@ -127,8 +127,40 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument("--max-bg", type=float, default=0.1)
     solve.add_argument("--curve-rate", type=int, default=2)
     solve.add_argument("--div-param", type=float, default=0.0)
+    solve.add_argument(
+        "--restart-patience",
+        type=int,
+        default=250,
+        help=(
+            "Restart weak QQA replicas after this many stagnant epochs; "
+            "0 disables adaptive basin recovery."
+        ),
+    )
+    solve.add_argument(
+        "--restart-fraction",
+        type=float,
+        default=0.15,
+        help="Fraction of weak replicas restarted after stagnation.",
+    )
+    solve.add_argument(
+        "--restart-jitter",
+        type=float,
+        default=0.10,
+        help="Local latent-space jitter around the incumbent during restarts.",
+    )
+    solve.add_argument(
+        "--gradient-clip",
+        type=float,
+        default=100.0,
+        help="QQA latent-gradient norm cap; pass 0 to disable.",
+    )
     solve.add_argument("--seed", type=int, default=0)
-    solve.add_argument("--device", type=str, default="cpu")
+    solve.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        help="Compute device; auto selects CUDA, then MPS, then CPU.",
+    )
     solve.add_argument("--quiet", action="store_true", help="Suppress per-epoch logs.")
     solve.add_argument(
         "--no-polish",
@@ -440,7 +472,12 @@ def build_parser() -> argparse.ArgumentParser:
     example.add_argument(
         "name",
         nargs="?",
-        choices=("microgrid-dispatch", "microgrid-pareto", "process-blackbox"),
+        choices=(
+            "microgrid-dispatch",
+            "microgrid-pareto",
+            "portfolio-pareto",
+            "process-blackbox",
+        ),
     )
     example.add_argument("--device", default="auto")
     example.add_argument("--sol-size", type=int, default=512)
@@ -480,11 +517,38 @@ def _cmd_version() -> int:
 
 
 def _resolve_device(device: str) -> str:
-    if device != "auto":
-        return device
-    import torch
+    from qqa.utils import resolve_device
 
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return resolve_device(device)
+
+
+def _print_score(score: dict) -> None:
+    """Print a compact human summary; complete nested data belongs in JSON."""
+    label = score.get("label", "objective")
+    value = score.get("value")
+    unit = score.get("unit", "")
+    rendered_value = f"{value:.8g}" if isinstance(value, (int, float)) else str(value)
+    suffix = f" {unit}" if unit else ""
+    feasible = str(bool(score.get("feasible", False))).lower()
+    print(f"score      : {label}={rendered_value}{suffix}; feasible={feasible}")
+
+    extra = score.get("extra", {})
+    variables = extra.get("variables", {}) if isinstance(extra, dict) else {}
+    if isinstance(variables, dict) and variables:
+        rendered_variables = json.dumps(variables, ensure_ascii=False)
+        if len(rendered_variables) > 500:
+            rendered_variables = rendered_variables[:497] + "..."
+        print(f"solution   : {rendered_variables}")
+    constraints = extra.get("constraints", {}) if isinstance(extra, dict) else {}
+    if isinstance(constraints, dict) and constraints:
+        violations = [
+            (name, float(row.get("violation", 0.0)), bool(row.get("feasible", False)))
+            for name, row in constraints.items()
+            if isinstance(row, dict)
+        ]
+        failed = [name for name, _, feasible_row in violations if not feasible_row]
+        maximum = max((violation for _, violation, _ in violations), default=0.0)
+        print(f"constraints: {len(failed)}/{len(violations)} failed; max_violation={maximum:.6g}")
 
 
 def _build_problem(args: argparse.Namespace):
@@ -656,6 +720,10 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                     "num_epochs": args.epochs,
                     "device": args.device,
                     "polish": not args.no_polish,
+                    "restart_patience": args.restart_patience or None,
+                    "restart_fraction": args.restart_fraction,
+                    "restart_jitter": args.restart_jitter,
+                    "gradient_clip_norm": args.gradient_clip or None,
                     "verbose": not args.quiet,
                 },
                 time_limit=args.scip_time_limit,
@@ -754,6 +822,10 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             "num_epochs": args.epochs,
             "device": args.device,
             "polish": not args.no_polish,
+            "restart_patience": args.restart_patience or None,
+            "restart_fraction": args.restart_fraction,
+            "restart_jitter": args.restart_jitter,
+            "gradient_clip_norm": args.gradient_clip or None,
             "verbose": not args.quiet,
         }
         if isinstance(problem, qqa.MixedProblem):
@@ -783,6 +855,12 @@ def _cmd_solve(args: argparse.Namespace) -> int:
         val = score.get("value")
         print(f"{score.get('label', 'score'):<11}: {val} {unit} [{feas}]")
     print(f"runtime    : {result.runtime:.2f} s")
+    diagnostics = getattr(result, "diagnostics", {})
+    if diagnostics.get("restart_events"):
+        print(
+            f"restarts   : {diagnostics['restart_events']} events / "
+            f"{diagnostics['restart_count']} replicas"
+        )
     if args.output:
         out = Path(args.output).expanduser().resolve()
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -793,6 +871,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                     "best_sol": result.best_sol.detach().cpu().numpy(),
                     "runtime": result.runtime,
                     "history": result.history,
+                    "diagnostics": diagnostics,
                 },
                 fh,
             )
@@ -1010,6 +1089,7 @@ def _cmd_example(args: argparse.Namespace) -> int:
         descriptions = {
             "microgrid-dispatch": "mixed unit commitment, storage, reserve, and dispatch",
             "microgrid-pareto": "cost/emissions/resilience Pareto planning",
+            "portfolio-pareto": "risk/return/turnover allocation with cardinality",
             "process-blackbox": "constrained simulator-style process tuning",
         }
         for name in qqa.APPLICATIONS:
@@ -1049,7 +1129,11 @@ def _cmd_example(args: argparse.Namespace) -> int:
         print(f"knee       : {json.dumps(payload['knee_objectives'])}")
         if output_dir is not None:
             result.to_frame(problem).to_csv(output_dir / "pareto.csv", index=False)
-            figure = qqa.plot_pareto(result, show=False, title="Microgrid planning Pareto front")
+            figure = qqa.plot_pareto(
+                result,
+                show=False,
+                title=f"{problem.name} Pareto front",
+            )
             figure.write_html(output_dir / "pareto.html", include_plotlyjs=True, full_html=True)
     elif isinstance(problem, qqa.BlackBoxProblem):
         result = problem.solve(
@@ -1098,7 +1182,7 @@ def _cmd_example(args: argparse.Namespace) -> int:
             "runtime": result.runtime,
         }
         print(f"best_loss  : {result.best_obj:.8g}")
-        print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+        _print_score(result.score)
         if output_dir is not None:
             qqa.save_html_report(result, problem, output_dir / "dispatch.html")
 
@@ -1275,7 +1359,7 @@ def _cmd_tex(args: argparse.Namespace) -> int:
             print(f"gap        : {result.gap}")
             print(f"dual_bound : {result.dual_bound}")
             print(f"best_value : {result.objective_value}")
-            print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+            _print_score(result.score)
             print(f"runtime    : {result.runtime:.4f} s")
             result_payload = {
                 "solver": "qqa+scip",
@@ -1300,7 +1384,7 @@ def _cmd_tex(args: argparse.Namespace) -> int:
                 verbose=not args.quiet,
             )
             print(f"best_loss  : {result.best_obj}")
-            print(f"score      : {json.dumps(result.score, ensure_ascii=False)}")
+            _print_score(result.score)
             print(f"runtime    : {result.runtime:.4f} s")
             result_payload = {
                 "solver": "qqa",

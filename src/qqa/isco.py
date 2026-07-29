@@ -72,7 +72,7 @@ import torch
 
 from qqa.polish import apply_polish_if_improves
 from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
-from qqa.utils import require_cuda_if_requested, safe_score_summary
+from qqa.utils import require_cuda_if_requested, resolve_device, safe_score_summary
 
 # ---------------------------------------------------------------------------
 # Result
@@ -875,6 +875,7 @@ def discrete_langevin(
     if not (0.0 < target_accept < 1.0):
         raise ValueError(f"target_accept must be in (0, 1), got {target_accept}.")
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     device_t = torch.device(device) if isinstance(device, str) else device
 

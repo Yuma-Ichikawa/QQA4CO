@@ -42,6 +42,8 @@ def test_one_shot_pareto_finds_integer_tradeoff_curve():
 
     figure = qqa.plot_pareto(result, backend="matplotlib", show=False)
     assert figure[0] is not None
+    diagnostics = qqa.plot_pareto_diagnostics(result, backend="matplotlib", show=False)
+    assert diagnostics[1].shape == (2, 2)
 
 
 def test_nondominated_filter_respects_maximisation_direction():
@@ -150,7 +152,82 @@ def test_realistic_application_builders_and_feasible_dispatch():
     assert score["feasible"]
     assert score["value"] > 0
     assert qqa.build_microgrid_pareto().num_objectives == 3
+    portfolio = qqa.build_portfolio_pareto()
+    portfolio_point = portfolio.pack(
+        {
+            "select": [1, 1, 1, 0, 1, 0],
+            "weight": [0.25, 0.25, 0.25, 0.0, 0.25, 0.0],
+        }
+    )
+    portfolio_violations = portfolio.constraint_violations(portfolio_point)
+    assert all(
+        portfolio_violations[constraint.name].item() <= constraint.tolerance
+        for constraint in portfolio.constraints
+    )
+    assert portfolio.score_summary(portfolio_point)["feasible"]
+    assert portfolio.num_objectives == 3
     assert isinstance(qqa.build_process_blackbox(), qqa.BlackBoxProblem)
+
+
+def test_multioutput_rbf_models_constraints_with_one_kernel_factorisation():
+    from qqa.blackbox.solver import _RBFSurrogate
+
+    x = torch.linspace(0, 1, 8, dtype=torch.float64)[:, None]
+    targets = torch.cat([x.square(), (x - 0.5).abs()], dim=1)
+    model = _RBFSurrogate(ridge=1e-6, noise=0.0)
+    model.fit(x, targets)
+    mean, std = model.predict(torch.tensor([[0.25], [0.75]], dtype=torch.float64))
+    assert mean.shape == std.shape == (2, 2)
+    assert torch.isfinite(mean).all()
+    assert torch.all(std > 0)
+
+
+def test_scip_mixed_warm_starts_rank_exact_feasibility_before_penalized_loss():
+    from qqa.annealing import AnnealResult
+    from qqa.hybrid.scip_model import _candidate_starts
+
+    problem = qqa.MixedProblem(
+        [qqa.Real("x", 0.0, 1.0)],
+        lambda v: v["x"],
+        constraints=[
+            qqa.Constraint(
+                lambda v: v["x"],
+                sense=">=",
+                rhs=0.5,
+                weight=1.0,
+                scale=1.0,
+                name="floor",
+            )
+        ],
+    )
+    result = AnnealResult(
+        best_sol=torch.tensor([0.1]),
+        best_obj=0.26,
+        runtime=0.0,
+        final_population=torch.tensor([[0.1], [0.5], [0.8]]),
+    )
+    starts = _candidate_starts(problem, result, 3)
+    assert starts[0].item() == pytest.approx(0.5)
+    assert starts[1].item() == pytest.approx(0.8)
+    assert starts[2].item() == pytest.approx(0.1)
+
+
+def test_projected_augmented_lagrangian_has_correct_active_set_gradient():
+    from qqa.multiobjective.solver import _augmented_constraint_loss
+
+    residuals = torch.tensor(
+        [[0.4, -0.8], [-0.2, 0.3]],
+        dtype=torch.float64,
+        requires_grad=True,
+    )
+    equality = torch.tensor([True, False])
+    multipliers = torch.tensor([0.5, 1.0], dtype=torch.float64)
+    loss = _augmented_constraint_loss(residuals, equality, multipliers, rho=2.0).sum()
+    loss.backward()
+    # equality: λ + ρr; inactive inequality: 0; active inequality: λ + ρg
+    assert residuals.grad == pytest.approx(
+        torch.tensor([[1.3, 0.0], [0.1, 1.6]], dtype=torch.float64)
+    )
 
 
 def test_chunked_dominance_and_pareto_decision_support():

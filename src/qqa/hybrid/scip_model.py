@@ -134,9 +134,46 @@ def _candidate_starts(problem, qqa_result: AnnealResult, max_starts: int) -> lis
         return []
     stacked = torch.stack(values)
     with torch.no_grad():
-        losses = problem.loss_fn(stacked.to(dtype=problem.dtype)).detach().cpu()
-    order = torch.argsort(losses)
-    return [values[int(index)] for index in order[:max_starts]]
+        typed = stacked.to(dtype=problem.dtype)
+        objective = problem.objective_values(typed).detach().cpu()
+        if problem.constraints:
+            raw_violations = problem.constraint_violations(typed)
+            normalised = torch.stack(
+                [
+                    raw_violations[constraint.name].detach().cpu() / constraint.scale
+                    for constraint in problem.constraints
+                ],
+                dim=1,
+            )
+            # SCIP enforces the mathematical constraints, not the reporting
+            # tolerances. Prefer exactly feasible starts, then the smallest
+            # maximum and total scaled residual before comparing objectives.
+            maximum_violation = normalised.amax(dim=1)
+            total_violation = normalised.sum(dim=1)
+        else:
+            maximum_violation = torch.zeros(len(stacked), dtype=stacked.dtype)
+            total_violation = torch.zeros_like(maximum_violation)
+    ranked = sorted(
+        range(len(values)),
+        key=lambda index: (
+            maximum_violation[index].item() > 1e-8,
+            float(maximum_violation[index].item()),
+            float(total_violation[index].item()),
+            float(objective[index].item()),
+        ),
+    )
+    return [values[index] for index in ranked[:max_starts]]
+
+
+def _exactly_feasible(problem, solution: torch.Tensor) -> bool:
+    if not problem.constraints:
+        return True
+    with torch.no_grad():
+        violations = problem.constraint_violations(solution.to(dtype=problem.dtype))
+    return all(
+        float(violations[constraint.name].reshape(-1)[0].item()) <= 1e-7
+        for constraint in problem.constraints
+    )
 
 
 def solve_spec_scip(
@@ -253,13 +290,22 @@ def solve_spec_scip(
     status = str(model.getStatus())
     best = model.getBestSol()
 
-    best_sol = qqa_result.best_sol.detach().cpu().to(dtype=problem.dtype)
+    qqa_sol = qqa_result.best_sol.detach().cpu().to(dtype=problem.dtype)
+    best_sol = qqa_sol
     if best is not None:
-        best_sol = torch.tensor(
+        scip_sol = torch.tensor(
             [model.getSolVal(best, variable) for variable in flat_variables],
             dtype=problem.dtype,
         )
-        best_sol = problem.space.project(problem.space.encode(best_sol))
+        scip_sol = problem.space.project(problem.space.encode(scip_sol))
+        # SCIP normally retains every accepted QQA incumbent. Keep this guard
+        # because a numerically rejected start or early limit must never make
+        # the hybrid result worse than an exactly feasible QQA solution.
+        with torch.no_grad():
+            qqa_objective = float(problem.objective_values(qqa_sol)[0].item())
+            scip_objective = float(problem.objective_values(scip_sol)[0].item())
+        if not _exactly_feasible(problem, qqa_sol) or scip_objective <= qqa_objective + 1e-8:
+            best_sol = scip_sol
     solver_loss = float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
     score = problem.score_summary(best_sol)
     objective_value = float(score["value"])

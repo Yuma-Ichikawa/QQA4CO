@@ -8,6 +8,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Universal optimisation studio
 
+- Add a cardinality-constrained binary/real portfolio application with
+  risk/return/turnover objectives to the Python API, CLI, UI, and Colab
+  studio.
+- Replace inequality handling in Pareto search with a projected
+  Powell–Hestenes–Rockafellar augmented Lagrangian; preserve objective-axis
+  anchors, maintain a separate KKT multiplier vector per reference-direction
+  replica, and split stagnation recovery between archive-centred and global
+  restarts.
+- Add knee-aware Pareto plots and a dedicated feasibility/archive/penalty/
+  restart diagnostics dashboard.
+- Model every black-box constraint with a shared-factorisation multi-output
+  log-violation RBF and use joint probability of feasibility.
 - Add realistic microgrid dispatch/Pareto and constrained process black-box
   application builders plus `qqa example list|run`.
 - Add adaptive augmented-Lagrangian Pareto feasibility, stagnation restarts,
@@ -83,6 +95,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Remove AdamW's implicit weight decay from QQA defaults, which biased latent
+  binary coordinates toward zero independently of the objective.
+- Correct greedy 1-flip QUBO deltas for non-symmetric user matrices by using
+  both `Q @ x` and `Q.T @ x`.
+- Extend monotone polishing beyond QUBOs with exact local-field Ising flips
+  and vectorised one-site categorical moves.
+- Rank QQA→SCIP mixed warm starts feasibility-first and guarantee that a
+  numerically rejected start cannot worsen the returned feasible incumbent.
+- Fix multi-objective `score_summary`, which previously reached the scalar
+  `loss_fn` override and failed on a selected Pareto plan.
 - Categorical relaxations now restore non-negative bounded coordinates after
   every AdamW step even at `temp=0`, normalise a valid simplex, and measure
   diversity in probability rather than arbitrary raw-logit scale.

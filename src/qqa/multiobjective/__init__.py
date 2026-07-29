@@ -2,7 +2,7 @@
 
 from qqa.multiobjective.problem import MultiObjectiveProblem, Objective
 from qqa.multiobjective.solver import ParetoResult, pareto_anneal
-from qqa.multiobjective.visualization import plot_pareto
+from qqa.multiobjective.visualization import plot_pareto, plot_pareto_diagnostics
 
 __all__ = [
     "MultiObjectiveProblem",
@@ -10,4 +10,5 @@ __all__ = [
     "ParetoResult",
     "pareto_anneal",
     "plot_pareto",
+    "plot_pareto_diagnostics",
 ]

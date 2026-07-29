@@ -152,6 +152,51 @@ def test_anneal_validates_dangerous_numeric_options():
         qqa.anneal(problem, num_epochs=1.5, verbose=False)
     with pytest.raises(ValueError, match="learning_rate"):
         qqa.anneal(problem, learning_rate=float("nan"), num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="weight_decay"):
+        qqa.anneal(problem, weight_decay=-1, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="gradient_clip_norm"):
+        qqa.anneal(problem, gradient_clip_norm=0, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="restart_patience"):
+        qqa.anneal(problem, restart_patience=0, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="restart_fraction"):
+        qqa.anneal(problem, restart_fraction=1, num_epochs=0, verbose=False)
+
+
+def test_anneal_adaptive_restarts_preserve_incumbent_and_report_diagnostics():
+    problem = qqa.MixedProblem(
+        [qqa.Real("x", 0.0, 1.0)],
+        lambda v: 0.0 * v["x"],
+    )
+    result = qqa.anneal(
+        problem,
+        sol_size=8,
+        learning_rate=0.1,
+        num_epochs=4,
+        restart_patience=1,
+        restart_fraction=0.5,
+        restart_jitter=0.05,
+        return_population=True,
+        polish=False,
+        verbose=False,
+    )
+    assert result.best_obj == pytest.approx(0.0)
+    assert result.history["restart_count"] > 0
+    assert result.diagnostics["restart_events"] == len(result.history["restart_epochs"])
+    assert result.diagnostics["weight_decay"] == 0.0
+    assert result.final_population.shape == (8, 1)
+
+
+def test_qubo_polish_handles_non_symmetric_user_matrix():
+    class NonSymmetricQUBO:
+        Q_mat = torch.tensor([[-3.0, -3.0], [-1.0, 2.0]])
+
+        def loss_fn(self, x):
+            return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
+
+    start = torch.tensor([1.0, 0.0])
+    polished = qqa.polish.greedy_one_flip(NonSymmetricQUBO(), start)
+    assert polished.tolist() == [1.0, 1.0]
+    assert NonSymmetricQUBO().loss_fn(polished[None]).item() == pytest.approx(-5.0)
 
 
 @pytest.mark.parametrize(

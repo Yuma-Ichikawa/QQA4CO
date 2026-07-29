@@ -64,6 +64,13 @@ is this penalised selection loss; `result.score["value"]` is the original
 unpenalised objective and `result.score["feasible"]` reports whether every
 constraint meets its tolerance.
 
+`problem.solve()` also calibrates one global penalty multiplier from Sobol
+samples so a large currency-valued objective cannot silently overwhelm a
+small normalised constraint. Explicit weights still express the relative
+importance of the constraint rows. For exact mixed-integer/nonlinear
+refinement of a safe `ModelSpec`, install `qqa[scip]` and use
+`qqa.solve_spec_scip`.
+
 ## Warm starts in physical units
 
 Use `problem.pack()` to create a validated solution and pass it directly:
@@ -120,10 +127,16 @@ result = problem.solve(
     sol_size=4096,
     num_epochs=2000,
     mixed_precision="bf16",
-    device="cuda",
+    device="auto",
     verbose=False,
 )
 ```
+
+The mixed solver defaults to gradient clipping and adaptive basin recovery.
+Recovery always keeps the incumbent and divides weak replicas between global
+reinitialisation and local incumbent-centred jitter. The result records
+`diagnostics["restart_events"]` and `history["restart_epochs"]`. Pass
+`restart_patience=None` when reproducing the original uninterrupted dynamics.
 
 The dedicated
 [`09_mixed_integer_real_optimization.ipynb`](https://colab.research.google.com/github/Yuma-Ichikawa/QQA4CO/blob/main/examples/09_mixed_integer_real_optimization.ipynb)

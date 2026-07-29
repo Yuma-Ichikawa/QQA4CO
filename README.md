@@ -69,7 +69,7 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 | Page | What you can do |
 | --- | --- |
 | **Home** | Pick from 21 problems (MIS, Max-Cut, MaxClique, Vertex Cover, GraphBisection, MinDominatingSet, Coloring, BalancedGraphPartition, TSP, QAP, NQueens, Knapsack, NumberPartitioning, MaxSAT3, 1D Ising, Edwards–Anderson, SK, p-spin, RFIM, BinaryPerceptron, HopfieldMemory). Auxiliary sliders are problem-aware; the arbitrary-Python editor is trusted-local opt-in only. |
-| **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, polish (1-flip local search) and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
+| **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, domain-aware monotone polish and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
 | **Universal** | Solve a realistic mixed microgrid, generate a cost/emissions/resilience Pareto front on GPU, tune a constrained black-box process, or review and solve a TeX/JSON model with optional SCIP certification. |
@@ -291,8 +291,9 @@ model = qqa.MultiObjectiveProblem(
         qqa.Objective(lambda v: (v["x"] - 10).square(), "delay"),
     ],
 )
-front = model.solve_pareto(device="cuda")
+front = model.solve_pareto(device="auto")
 qqa.plot_pareto(front)
+qqa.plot_pareto_diagnostics(front)  # feasibility, archive, penalty, restarts
 
 # Expensive simulator/API with no gradients; binary/integer/real can be mixed.
 blackbox = qqa.BlackBoxProblem(
@@ -316,7 +317,18 @@ The generated JSON is schema-validated and interpreted without `eval` or
 gateway's non-standard certificate. Add `--output-model model.json --dry-run`
 to audit the model before solving.
 See the [universal optimisation guide](docs/universal-optimization.md) and
-[Colab notebook](examples/10_universal_optimization_colab.ipynb).
+[real-world Colab notebook](examples/11_real_world_optimization_studio.ipynb),
+which runs mixed microgrid dispatch, cost/emissions/resilience planning,
+cardinality-constrained risk/return/turnover allocation, constrained process
+black-box optimisation, and QQA→SCIP production planning.
+
+Adaptive QQA restarts are enabled by the CLI and mixed-problem convenience
+solver. They preserve the incumbent, replace only weak replicas, and divide
+recovery between global samples and incumbent-centred basins. Set
+`restart_patience=None` in Python or `--restart-patience 0` in the CLI to
+disable them. AdamW weight decay is deliberately zero by default because
+latent shrinkage would introduce an objective-independent bias toward binary
+zero.
 
 ## Optional CRA-PI-GNN backend (PyTorch Geometric)
 

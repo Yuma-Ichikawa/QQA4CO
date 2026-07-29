@@ -41,7 +41,7 @@ The same intuition appears under different names:
 | Population / replicas | `sol_size` (B) | n/a (single) | `num_replicas` (R) |
 | Diversity weight | `div_param` | n/a | `vari_param` |
 | Per-replica penalty | n/a | n/a | `replica_problems=[...]` |
-| Early stopping | not yet | `tol`, `patience` | `tol`, `patience` |
+| Basin recovery / early stop | `restart_patience` | `tol`, `patience` | `tol`, `patience` |
 
 ## Result contracts
 

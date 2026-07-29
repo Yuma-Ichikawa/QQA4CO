@@ -42,7 +42,7 @@ from qqa.pignn.graph import extract_nx_graph, nx_to_edge_index
 from qqa.pignn.model import GCNNet, default_in_feats
 from qqa.polish import apply_polish_if_improves
 from qqa.relaxation import BinaryRelaxation
-from qqa.utils import fix_seed, require_cuda_if_requested, safe_score_summary
+from qqa.utils import fix_seed, require_cuda_if_requested, resolve_device, safe_score_summary
 
 
 def _ensure_problem_on_device(problem, device: torch.device) -> None:
@@ -190,6 +190,7 @@ def train_cra_pi_gnn(
     if patience < 1:
         raise ValueError(f"patience must be >= 1, got {patience}.")
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
@@ -523,6 +524,7 @@ def train_cpra_pi_gnn(
         problems_per_replica = [problem] * int(num_replicas)
         single_problem = True
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 

@@ -12,6 +12,23 @@ import numpy as np
 import torch
 
 
+def resolve_device(device: str | torch.device) -> str | torch.device:
+    """Resolve ``"auto"`` to the best available Torch accelerator.
+
+    CUDA is preferred for QQA's large parallel populations, followed by MPS
+    on Apple Silicon and CPU everywhere else. Explicit device requests are
+    returned unchanged.
+    """
+    if device != "auto":
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 def require_cuda_if_requested(device: str | torch.device) -> None:
     """Raise a friendly :class:`RuntimeError` if a CUDA device is requested
     but CUDA is unavailable.

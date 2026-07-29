@@ -32,6 +32,34 @@ def test_cli_help_describes_subcommands():
         assert cmd in out.stdout
 
 
+def test_cli_score_summary_is_compact_and_auditable(capsys):
+    from qqa.cli import _print_score
+
+    _print_score(
+        {
+            "label": "cost",
+            "value": 12.5,
+            "unit": "USD",
+            "feasible": True,
+            "extra": {
+                "variables": {"units": 3.0},
+                "constraints": {
+                    "capacity": {
+                        "violation": 0.0,
+                        "feasible": True,
+                    }
+                },
+                "large_internal_payload": list(range(100)),
+            },
+        }
+    )
+    output = capsys.readouterr().out
+    assert "cost=12.5 USD; feasible=true" in output
+    assert 'solution   : {"units": 3.0}' in output
+    assert "constraints: 0/1 failed" in output
+    assert "large_internal_payload" not in output
+
+
 def test_cli_lists_realistic_examples_and_doctor_json():
     listed = _run("example", "list")
     assert listed.returncode == 0, listed.stderr

@@ -164,13 +164,17 @@ with mixed_tab:
             st.info("Choose a population and click **Optimize dispatch**.")
 
 with pareto_tab:
-    st.subheader("Cost × emissions × resilience in one parallel run")
+    st.subheader("A complete trade-off surface in one parallel run")
     st.caption(
         "Each GPU replica follows a different reference direction; the live archive "
         "keeps feasible nondominated plans and recommends a scale-invariant knee."
     )
     controls, chart = st.columns([1, 3])
     with controls:
+        pareto_application = st.selectbox(
+            "Application",
+            ("Microgrid planning", "Portfolio allocation"),
+        )
         pareto_population = st.slider("Reference directions", 64, 2048, 512, 64)
         pareto_epochs = st.slider("Pareto iterations", 100, 3000, 1000, 100)
         run_pareto = st.button(
@@ -179,7 +183,11 @@ with pareto_tab:
             use_container_width=True,
         )
     if run_pareto:
-        model = qqa.build_microgrid_pareto()
+        model = (
+            qqa.build_microgrid_pareto()
+            if pareto_application == "Microgrid planning"
+            else qqa.build_portfolio_pareto()
+        )
         with st.spinner("Building the nondominated archive…"):
             result = model.solve_pareto(
                 sol_size=pareto_population,
@@ -208,13 +216,26 @@ with pareto_tab:
             st.download_button(
                 "Download front CSV",
                 result.to_frame(model).to_csv(index=False),
-                file_name="microgrid-pareto.csv",
+                file_name=f"{model.name}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
         with chart:
-            figure = qqa.plot_pareto(result, show=False, title="Microgrid Pareto front")
-            st.plotly_chart(retheme_plotly(figure), use_container_width=True)
+            front_view, diagnostics_view = st.tabs(["Trade-off surface", "Search diagnostics"])
+            with front_view:
+                figure = qqa.plot_pareto(
+                    result,
+                    show=False,
+                    title=f"{model.name} Pareto front",
+                )
+                st.plotly_chart(retheme_plotly(figure), use_container_width=True)
+            with diagnostics_view:
+                diagnostics = qqa.plot_pareto_diagnostics(
+                    result,
+                    show=False,
+                    title=f"{model.name} feasibility and archive health",
+                )
+                st.plotly_chart(retheme_plotly(diagnostics), use_container_width=True)
     else:
         with chart:
             st.info("Click **Generate Pareto front** to explore the trade-off surface.")
@@ -390,6 +411,13 @@ with tex_tab:
                     title=f"{spec.name} Pareto front",
                 )
                 st.plotly_chart(retheme_plotly(figure), use_container_width=True)
+                diagnostics = qqa.plot_pareto_diagnostics(
+                    result,
+                    show=False,
+                    title=f"{spec.name} search diagnostics",
+                )
+                with st.expander("Feasibility and archive diagnostics"):
+                    st.plotly_chart(retheme_plotly(diagnostics), use_container_width=True)
                 st.download_button(
                     "Download Pareto front",
                     result.to_frame(problem).to_csv(index=False),

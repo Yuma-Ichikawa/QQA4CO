@@ -97,6 +97,54 @@ class MultiObjectiveProblem(MixedProblem):
             "or qqa.pareto_anneal(problem)."
         )
 
+    def score_summary(self, x_disc: torch.Tensor) -> dict:
+        """Return all objectives, variables, and feasibility for one plan."""
+        values = self._ensure_batched(x_disc)
+        with torch.no_grad():
+            matrix = self.objective_matrix(values)[0]
+            lhs = self.constraint_values(values)
+            named = self.unpack(values)
+
+        constraints: dict[str, dict[str, float | str | bool]] = {}
+        feasible = True
+        for constraint in self.constraints:
+            lhs_value = float(lhs[constraint.name][0].item())
+            violation = float(constraint.violation(lhs[constraint.name])[0].item())
+            ok = violation <= constraint.tolerance
+            feasible = feasible and ok
+            constraints[constraint.name] = {
+                "lhs": lhs_value,
+                "sense": constraint.sense,
+                "rhs": constraint.rhs,
+                "violation": violation,
+                "tolerance": constraint.tolerance,
+                "feasible": ok,
+            }
+
+        variables: dict[str, float | list[float]] = {}
+        for variable in self.variables:
+            value = named[variable.name][0].detach().cpu()
+            variables[variable.name] = float(value.item()) if variable.size == 1 else value.tolist()
+        objective_rows = {
+            objective.name: {
+                "value": float(matrix[index].item()),
+                "direction": objective.direction,
+                "unit": objective.unit,
+            }
+            for index, objective in enumerate(self.objectives)
+        }
+        return {
+            "label": "Pareto objectives",
+            "value": matrix.detach().cpu().tolist(),
+            "unit": "",
+            "feasible": feasible,
+            "extra": {
+                "objectives": objective_rows,
+                "variables": variables,
+                "constraints": constraints,
+            },
+        }
+
     def solve_pareto(self, **kwargs):
         """Find a Pareto front with one parallel QQA run."""
         from qqa.multiobjective.solver import pareto_anneal

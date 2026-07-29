@@ -27,6 +27,8 @@ class Relaxation(Protocol):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor: ...
 
+    def encode(self, values: torch.Tensor) -> torch.Tensor: ...
+
     def project(self, x: torch.Tensor) -> torch.Tensor: ...
 
     def penalty(self, x: torch.Tensor, curve_rate: int) -> torch.Tensor: ...
@@ -78,6 +80,10 @@ class BinaryRelaxation:
         # best loss / DIV value within the first few thousand epochs at
         # ``temp=0`` (the default). See ``tasks/test/verify_freeze_bug.py``.
         return x.clamp(0.0, 1.0)
+
+    def encode(self, values):
+        """Map physical binary values back to latent coordinates."""
+        return values.clamp(0.0, 1.0)
 
     def project(self, x):
         # AdamW can push ``x`` far outside ``[0, 1]`` during early epochs, and
@@ -139,6 +145,10 @@ class SpinRelaxation(BinaryRelaxation):
 
     def forward(self, x):
         return 2 * x.clamp(0.0, 1.0) - 1
+
+    def encode(self, values):
+        """Map physical spins in ``[-1, 1]`` back to ``[0, 1]``."""
+        return ((values + 1.0) * 0.5).clamp(0.0, 1.0)
 
     def project(self, x):
         # Clamp first for the same defensive reason ``BinaryRelaxation.project``
@@ -212,6 +222,11 @@ class CategoricalRelaxation:
         # so the tensor remains on the non-negative simplex by construction.
         x_pos = x.clamp(min=1e-8)
         return x_pos / x_pos.sum(dim=2, keepdim=True)
+
+    def encode(self, values):
+        """Use simplex/one-hot values directly as latent coordinates."""
+        values = values.clamp_min(0.0)
+        return values / values.sum(dim=-1, keepdim=True).clamp_min(1e-8)
 
     def project(self, x):
         idx = torch.argmax(self.forward(x), dim=2)

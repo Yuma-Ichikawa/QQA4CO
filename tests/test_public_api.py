@@ -71,6 +71,7 @@ NEW_PUBLIC_NAMES = [
     "PAResult",
     "SAResult",
     "enable_tf32",
+    "resolve_device",
     "polish",
     "population_annealing",
     "simulated_annealing",
@@ -91,6 +92,8 @@ NEW_PUBLIC_NAMES = [
     "MixedRelaxation",
     "solve_mixed",
     "save_html_report",
+    "build_portfolio_pareto",
+    "plot_pareto_diagnostics",
 ]
 
 
@@ -139,6 +142,12 @@ def test_relaxation_protocol_re_export() -> None:
     from qqa.relaxation import Relaxation
 
     assert qqa.Relaxation is Relaxation
+
+
+def test_auto_device_is_a_valid_public_solver_device() -> None:
+    resolved = qqa.resolve_device("auto")
+    assert str(resolved).split(":")[0] in {"cpu", "cuda", "mps"}
+    assert qqa.resolve_device("cpu") == "cpu"
 
 
 def test_version_is_string_and_matches_metadata() -> None:

@@ -9,6 +9,7 @@ import torch
 
 from qqa.annealing import AnnealResult, anneal
 from qqa.mixed.problem import MixedProblem
+from qqa.utils import resolve_device
 
 
 def solve_mixed(
@@ -41,8 +42,12 @@ def solve_mixed(
         "curve_rate": 2,
         "num_epochs": 1500,
         "polish": False,
+        "gradient_clip_norm": 100.0,
+        "restart_patience": 250,
+        "restart_fraction": 0.15,
     }
     defaults.update(kwargs)
+    defaults["device"] = resolve_device(defaults.get("device", "cpu"))
     if calibrate_penalty and problem.constraints:
         device = defaults.get("device", "cpu")
         engine = torch.quasirandom.SobolEngine(

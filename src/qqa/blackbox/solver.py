@@ -9,7 +9,7 @@ from time import perf_counter
 import torch
 
 from qqa.blackbox.problem import BlackBoxProblem
-from qqa.utils import require_cuda_if_requested
+from qqa.utils import require_cuda_if_requested, resolve_device
 
 
 @dataclass(slots=True)
@@ -59,9 +59,14 @@ class _RBFSurrogate:
         self.noise = noise
 
     def fit(self, x: torch.Tensor, y: torch.Tensor) -> None:
+        if y.ndim not in (1, 2) or y.shape[0] != len(x):
+            raise ValueError("RBF targets must have shape (points,) or (points, outputs).")
+        self.scalar_output = y.ndim == 1
+        if self.scalar_output:
+            y = y[:, None]
         self.x = x
-        self.mean = y.mean()
-        self.std = y.std(correction=0).clamp_min(1e-8)
+        self.mean = y.mean(dim=0)
+        self.std = y.std(dim=0, correction=0).clamp_min(1e-8)
         target = (y - self.mean) / self.std
         distances = torch.pdist(x)
         positive = distances[distances > 1e-10]
@@ -80,7 +85,7 @@ class _RBFSurrogate:
         else:
             raise RuntimeError("RBF surrogate kernel is numerically singular.")
         self.factor = factor
-        self.alpha = torch.cholesky_solve(target[:, None], factor).squeeze(1)
+        self.alpha = torch.cholesky_solve(target, factor)
 
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         squared = torch.cdist(x, self.x).square()
@@ -88,7 +93,10 @@ class _RBFSurrogate:
         mean = (cross @ self.alpha) * self.std + self.mean
         solved = torch.linalg.solve_triangular(self.factor, cross.T, upper=False)
         variance = (1.0 - solved.square().sum(dim=0)).clamp_min(1e-10)
-        return mean, variance.sqrt() * self.std
+        std = variance.sqrt()[:, None] * self.std
+        if self.scalar_output:
+            return mean[:, 0], std[:, 0]
+        return mean, std
 
 
 def _total_violation(violations: torch.Tensor) -> torch.Tensor:
@@ -265,6 +273,7 @@ def blackbox_optimize(
     if min_radius <= 0 or min_radius > initial_radius:
         raise ValueError("min_radius must be in (0, initial_radius].")
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     compute_device = torch.device(device)
     if surrogate_dtype == "auto":
@@ -366,7 +375,7 @@ def blackbox_optimize(
             violation_model = _RBFSurrogate(ridge=ridge, noise=noise)
             violation_model.fit(
                 model_x,
-                torch.log1p(total_v).to(device=compute_device, dtype=dtype)[model_indices],
+                torch.log1p(v_obs).to(device=compute_device, dtype=dtype)[model_indices],
             )
 
         pool_latent = _candidate_set(
@@ -409,13 +418,20 @@ def blackbox_optimize(
                 probability_feasible = _normal_cdf(
                     -violation_mean / violation_std.clamp_min(1e-12)
                 ).clamp_min(1e-9)
+                # Under the surrogate's conditional-independence
+                # approximation, log joint feasibility is the sum of the
+                # per-constraint log probabilities. Retaining each
+                # constraint separately avoids a low aggregate violation
+                # hiding one systematically difficult engineering limit.
                 acquisition_values = (
-                    acquisition_values - constraint_weight * probability_feasible.log()
+                    acquisition_values - constraint_weight * probability_feasible.log().sum(dim=1)
                 )
             else:
                 # Build a minimally useful feasible design before allowing the
                 # objective's units to dominate a single lucky feasible point.
-                acquisition_values = violation_mean - exploration * violation_std
+                acquisition_values = violation_mean.sum(dim=1) - exploration * (
+                    violation_std.square().sum(dim=1).sqrt()
+                )
 
         take = min(batch_size, budget - len(y_obs), len(pool_latent))
         selected: list[int] = []

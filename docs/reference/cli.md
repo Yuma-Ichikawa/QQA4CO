@@ -37,7 +37,7 @@ score or pickles the full `AnnealResult` to disk.
 | `--size` | `50` | Size for synthetic problem generators |
 | `--sol-size` | `100` | Parallel population size |
 | `--epochs` | `1000` | Number of gradient steps |
-| `--device` | `cpu` | `cpu`, `cuda`, `cuda:0`, `mps` |
+| `--device` | `auto` | `auto` chooses CUDA → MPS → CPU; explicit `cpu`, `cuda`, `cuda:0`, `mps` also work |
 | `--seed` | `0` | Seed passed to `qqa.fix_seed` |
 | `--quiet` | off | Suppress per-epoch progress logs |
 | `--output` | (none) | If given, pickle the full `AnnealResult` to this path |
@@ -52,6 +52,10 @@ score or pickles the full `AnnealResult` to disk.
 | `--min-bg` / `--max-bg` | `-2.0` / `0.1` | Linear schedule endpoints |
 | `--curve-rate` | `2` | QQA penalty exponent (must be even) |
 | `--div-param` | `0.0` | Cross-replica diversity weight (0 = off) |
+| `--restart-patience` | `250` | Replace weak QQA replicas after this many epochs without an incumbent improvement; `0` disables |
+| `--restart-fraction` | `0.15` | Fraction of weak replicas replaced at each recovery event |
+| `--restart-jitter` | `0.10` | Local latent jitter around the incumbent for half of restarted replicas |
+| `--gradient-clip` | `100` | Global latent-gradient norm cap; `0` disables |
 
 ### Backend flags
 
@@ -183,6 +187,7 @@ List and run packaged realistic applications:
 qqa example list
 qqa example run microgrid-dispatch --output-dir results/dispatch
 qqa example run microgrid-pareto --device auto --output-dir results/pareto
+qqa example run portfolio-pareto --device auto --output-dir results/portfolio
 qqa example run process-blackbox --device auto --output-dir results/process
 ```
 

@@ -48,7 +48,7 @@ from qqa.sa import (
     _seq_mh_sweep,
     _validate_chain_problem,
 )
-from qqa.utils import require_cuda_if_requested, safe_score_summary
+from qqa.utils import require_cuda_if_requested, resolve_device, safe_score_summary
 
 
 @dataclass
@@ -267,6 +267,7 @@ def population_annealing(
             "actually want a heating schedule."
         )
 
+    device = resolve_device(device)
     require_cuda_if_requested(device)
     device = torch.device(device) if isinstance(device, str) else device
 
