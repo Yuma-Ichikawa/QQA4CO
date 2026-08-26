@@ -14,7 +14,7 @@ import math
 from collections.abc import Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field
-from time import time
+from time import perf_counter
 from typing import Any, Literal
 
 import numpy as np
@@ -160,6 +160,7 @@ def anneal(
     curve_rate: int = 2,
     div_param: float = 0.0,
     num_epochs: int = 10_000,
+    time_limit: float | None = None,
     check_interval: int = 1000,
     device: str | torch.device = "cpu",
     callbacks: Sequence[Callback] = (),
@@ -199,6 +200,10 @@ def anneal(
         Weight of the diversity term. Set to 0 to disable.
     num_epochs:
         Number of gradient steps.
+    time_limit:
+        Optional wall-clock budget in seconds. The loop checks this deadline
+        before each epoch, making it suitable for sharing one total budget
+        with a downstream exact solver.
     check_interval:
         How often to print progress logs.
     device:
@@ -258,6 +263,10 @@ def anneal(
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
     if not isinstance(num_epochs, int) or isinstance(num_epochs, bool) or num_epochs < 0:
         raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
+    if time_limit is not None and (
+        isinstance(time_limit, bool) or not math.isfinite(time_limit) or time_limit <= 0
+    ):
+        raise ValueError("time_limit must be finite and > 0, or None.")
     if not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError(f"learning_rate must be > 0, got {learning_rate}.")
     if not math.isfinite(temp) or temp < 0:
@@ -333,7 +342,7 @@ def anneal(
         cb_list.append(recorder)
     cb_list.extend(callbacks)
 
-    runtime_start = time()
+    runtime_start = perf_counter()
     is_batch = _is_instance_problem(problem)
     if initial_state is not None and is_batch:
         # Warm-starting batched-instance problems would require a
@@ -412,7 +421,12 @@ def anneal(
         # comparisons skip the cpu().numpy() roundtrip.
         best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
 
+    completed_epochs = 0
+    deadline_reached = False
     for epoch in range(num_epochs):
+        if time_limit is not None and perf_counter() - runtime_start >= time_limit:
+            deadline_reached = True
+            break
         optimizer.zero_grad(set_to_none=True)
         bg = float(schedule(epoch, num_epochs))
 
@@ -483,6 +497,7 @@ def anneal(
         )
         for cb in cb_list:
             cb.on_epoch_end(state)
+        completed_epochs = epoch + 1
 
         if verbose and (epoch % check_interval == 0 or epoch == num_epochs - 1):
             _print_progress(epoch, best_obj, losses, penalties, diversity, bg, hp["div_param"])
@@ -509,7 +524,7 @@ def anneal(
                 hp["restart_count"] = restart_count
             stagnant_epochs = 0
 
-    runtime = time() - runtime_start
+    runtime = perf_counter() - runtime_start
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
         print(f"  BEST LOSS : {best_obj}")
@@ -569,6 +584,9 @@ def anneal(
             "restart_jitter": float(restart_jitter),
             "restart_count": restart_count,
             "restart_events": len(restart_epochs),
+            "completed_epochs": completed_epochs,
+            "time_limit": time_limit,
+            "deadline_reached": deadline_reached,
         },
     )
 

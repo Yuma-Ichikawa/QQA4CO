@@ -6,15 +6,15 @@ provides dedicated Pareto and black-box solvers.
 
 ## At a glance
 
-| | **PQQA** | **QQA→SCIP** | **CRA-PI-GNN** | **CPRA** |
-|---|---|---|---|---|
-| **Module** | `qqa.anneal` | `qqa.solve_qqa_scip` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
-| **CLI flag** | `--backend qqa` | `--backend scip` | `--backend pignn` | `--backend cpra` |
-| **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
-| **Returns** | `AnnealResult` | `SCIPHybridResult` | `AnnealResult` | `AnnealResult` |
-| **Variables** | binary, integer, real, mixed, spin, categorical | binary QUBO | graph QUBO | graph QUBO |
-| **Role** | massively parallel heuristic | improve and certify | graph inductive bias | diverse GNN heads |
-| **GPU** | CUDA, MPS | QQA on GPU; SCIP on CPU | CUDA | CUDA |
+| | **PQQA** | **QQA→SCIP** | **SG-CQQA** | **CRA-PI-GNN** | **CPRA** |
+|---|---|---|---|---|---|
+| **Module** | `qqa.anneal` | `qqa.solve_qqa_scip` | `qqa.benchmarking.run_miplib` / `run_qplib` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
+| **CLI flag** | `--backend qqa` | `--backend scip` | `benchmark run --solver sg-cqqa` | `--backend pignn` | `--backend cpra` |
+| **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[scip,qplib]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
+| **Returns** | `AnnealResult` | `SCIPHybridResult` | `BenchmarkResult` | `AnnealResult` | `AnnealResult` |
+| **Variables** | binary, integer, real, mixed, spin, categorical | binary QUBO | sparse MIP/QP/QCQP | graph QUBO | graph QUBO |
+| **Role** | massively parallel heuristic | one-shot warm start and certify | iterative SCIP primal heuristic | graph inductive bias | diverse GNN heads |
+| **GPU** | CUDA, MPS | QQA on GPU; SCIP on CPU | QQA on configured Torch device; SCIP on CPU | CUDA | CUDA |
 
 ## When to use which
 
@@ -23,6 +23,11 @@ provides dedicated Pareto and black-box solvers.
 * **QQA→SCIP** when the model is a QUBO and a proof, dual bound, or target
   optimality gap matters. QQA supplies multiple incumbents; SCIP is never
   allowed to worsen the returned solution.
+* **SG-CQQA** for MIPLIB/QPLIB files. SCIP repeatedly selects a small
+  node-local integer core, tries a cheap original-objective surrogate move,
+  and invokes QQA only when the fast path does not improve and enough time
+  remains. Every candidate is completed in a sub-SCIP.
+  See the [MIPLIB/QPLIB guide](../miplib-qplib.md).
 * **CRA-PI-GNN** when you specifically want the GNN inductive bias
   (smoothness over the graph) on large sparse graph problems and you
   can afford a long training run.

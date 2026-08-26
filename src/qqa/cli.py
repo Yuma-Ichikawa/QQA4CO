@@ -210,7 +210,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--scip-time-limit",
         type=float,
         default=60.0,
-        help="SCIP proof-phase time limit in seconds (only --backend scip).",
+        help="Total QQA+SCIP wall-clock limit in seconds (only --backend scip).",
     )
     solve.add_argument(
         "--scip-gap",
@@ -387,6 +387,134 @@ def build_parser() -> argparse.ArgumentParser:
     bench_plot.add_argument("--theme", default="light", choices=("light", "dark"))
     bench_plot.add_argument("--dpi", type=int, default=160)
     bench_plot.add_argument("--format", default=None, dest="fmt")
+
+    benchmark = sub.add_parser(
+        "benchmark",
+        help="Fetch, inspect, and solve MIPLIB/QPLIB instances.",
+    )
+    benchmark_sub = benchmark.add_subparsers(dest="benchmark_command", required=True)
+    benchmark_fetch = benchmark_sub.add_parser(
+        "fetch",
+        help="Download an official benchmark snapshot or one public instance.",
+    )
+    benchmark_fetch.add_argument("library", choices=("miplib", "qplib"))
+    benchmark_fetch.add_argument("--output", required=True)
+    benchmark_fetch.add_argument(
+        "--instance",
+        default=None,
+        help="Fetch one instance id/name instead of the complete public archive.",
+    )
+    benchmark_fetch.add_argument("--no-extract", action="store_true")
+    benchmark_fetch.add_argument("--overwrite", action="store_true")
+
+    benchmark_inspect = benchmark_sub.add_parser(
+        "inspect",
+        help="Read an MPS/QPLIB instance and print sparse model metadata.",
+    )
+    benchmark_inspect.add_argument("instance")
+    benchmark_inspect.add_argument("--format", choices=("auto", "miplib", "qplib"), default="auto")
+
+    benchmark_merge = benchmark_sub.add_parser(
+        "merge",
+        help="Validate and merge disjoint benchmark comparison shards.",
+    )
+    benchmark_merge.add_argument("campaign", nargs="+")
+    benchmark_merge.add_argument("--output", required=True)
+
+    benchmark_run = benchmark_sub.add_parser(
+        "run",
+        help="Solve one MIPLIB/QPLIB instance with SCIP or SG-CQQA.",
+    )
+    benchmark_run.add_argument("instance", nargs="+")
+    benchmark_run.add_argument("--format", choices=("auto", "miplib", "qplib"), default="auto")
+    benchmark_run.add_argument(
+        "--solver",
+        choices=("scip", "scip-aggressive", "sg-cqqa"),
+        default="sg-cqqa",
+    )
+    benchmark_run.add_argument("--time-limit", type=float, default=60.0)
+    benchmark_run.add_argument("--gap", type=float, default=0.0)
+    benchmark_run.add_argument("--threads", type=int, default=1)
+    benchmark_run.add_argument("--reference-file", default=None)
+    benchmark_run.add_argument("--output", default=None, help="Write machine-readable JSON.")
+    benchmark_run.add_argument("--quiet", action="store_true")
+    benchmark_run.add_argument("--core-size", type=int, default=64)
+    benchmark_run.add_argument("--sol-size", type=int, default=32)
+    benchmark_run.add_argument("--epochs", type=int, default=120)
+    benchmark_run.add_argument("--max-calls", type=int, default=4)
+    benchmark_run.add_argument("--max-candidates", type=int, default=8)
+    benchmark_run.add_argument("--completion-time", type=float, default=1.0)
+    benchmark_run.add_argument("--completion-nodes", type=int, default=500)
+    benchmark_run.add_argument("--min-call-time", type=float, default=3.0)
+    benchmark_run.add_argument("--min-qqa-time", type=float, default=20.0)
+    benchmark_run.add_argument("--fast-candidates", type=int, default=2)
+    benchmark_run.add_argument("--local-branching-radius", type=int, default=None)
+    benchmark_run.add_argument("--max-lp-rows", type=int, default=128)
+    benchmark_run.add_argument("--objective-weight", type=float, default=1.0)
+    benchmark_run.add_argument("--row-penalty", type=float, default=20.0)
+    benchmark_run.add_argument("--proximity-weight", type=float, default=0.02)
+    benchmark_run.add_argument("--reduced-cost-weight", type=float, default=0.01)
+    benchmark_run.add_argument("--allow-nonimproving-candidates", action="store_true")
+    benchmark_run.add_argument("--continue-qqa-without-improvement", action="store_true")
+    benchmark_run.add_argument("--maximum-overhead-fraction", type=float, default=0.1)
+    benchmark_run.add_argument("--seed", type=int, default=0)
+    benchmark_run.add_argument("--device", default="cpu")
+
+    benchmark_compare = benchmark_sub.add_parser(
+        "compare",
+        help="Run paired SCIP/native-heuristic/SG-CQQA comparisons.",
+    )
+    benchmark_compare.add_argument("instance", nargs="+")
+    benchmark_compare.add_argument("--format", choices=("auto", "miplib", "qplib"), default="auto")
+    benchmark_compare.add_argument(
+        "--solvers",
+        nargs="+",
+        choices=("scip", "scip-aggressive", "sg-cqqa"),
+        default=("scip", "scip-aggressive", "sg-cqqa"),
+    )
+    benchmark_compare.add_argument("--baseline-solver", default="scip")
+    benchmark_compare.add_argument("--seeds", nargs="+", type=int, default=(0,))
+    benchmark_compare.add_argument("--time-limit", type=float, default=60.0)
+    benchmark_compare.add_argument("--gap", type=float, default=0.0)
+    benchmark_compare.add_argument("--threads", type=int, default=1)
+    benchmark_compare.add_argument("--reference-file", default=None)
+    benchmark_compare.add_argument("--output", required=True)
+    benchmark_compare.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume a matching incremental JSON checkpoint at --output.",
+    )
+    benchmark_compare.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Record a path-free failure and continue with the remaining runs.",
+    )
+    benchmark_compare.add_argument(
+        "--retry-failures",
+        action="store_true",
+        help="When resuming, retry runs recorded as failures.",
+    )
+    benchmark_compare.add_argument("--quiet", action="store_true")
+    benchmark_compare.add_argument("--core-size", type=int, default=64)
+    benchmark_compare.add_argument("--sol-size", type=int, default=32)
+    benchmark_compare.add_argument("--epochs", type=int, default=120)
+    benchmark_compare.add_argument("--max-calls", type=int, default=4)
+    benchmark_compare.add_argument("--max-candidates", type=int, default=8)
+    benchmark_compare.add_argument("--completion-time", type=float, default=1.0)
+    benchmark_compare.add_argument("--completion-nodes", type=int, default=500)
+    benchmark_compare.add_argument("--min-call-time", type=float, default=3.0)
+    benchmark_compare.add_argument("--min-qqa-time", type=float, default=20.0)
+    benchmark_compare.add_argument("--fast-candidates", type=int, default=2)
+    benchmark_compare.add_argument("--local-branching-radius", type=int, default=None)
+    benchmark_compare.add_argument("--max-lp-rows", type=int, default=128)
+    benchmark_compare.add_argument("--objective-weight", type=float, default=1.0)
+    benchmark_compare.add_argument("--row-penalty", type=float, default=20.0)
+    benchmark_compare.add_argument("--proximity-weight", type=float, default=0.02)
+    benchmark_compare.add_argument("--reduced-cost-weight", type=float, default=0.01)
+    benchmark_compare.add_argument("--allow-nonimproving-candidates", action="store_true")
+    benchmark_compare.add_argument("--continue-qqa-without-improvement", action="store_true")
+    benchmark_compare.add_argument("--maximum-overhead-fraction", type=float, default=0.1)
+    benchmark_compare.add_argument("--device", default="cpu")
 
     tex = sub.add_parser(
         "tex",
@@ -1163,6 +1291,130 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_benchmark(args: argparse.Namespace) -> int:
+    from qqa.benchmarking import (
+        compare_benchmark_solvers,
+        detect_format,
+        fetch_benchmark,
+        fetch_instance,
+        merge_benchmark_campaigns,
+        run_benchmark_instance,
+        run_benchmark_suite,
+    )
+
+    if args.benchmark_command == "fetch":
+        try:
+            if args.instance:
+                payload = fetch_instance(
+                    args.library,
+                    args.instance,
+                    args.output,
+                    overwrite=args.overwrite,
+                )
+            else:
+                payload = fetch_benchmark(
+                    args.library,
+                    args.output,
+                    extract=not args.no_extract,
+                    overwrite=args.overwrite,
+                )
+        except RuntimeError as exc:
+            print(f"[qqa benchmark] {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.benchmark_command == "inspect":
+        instance = Path(args.instance).expanduser()
+        resolved_format = detect_format(instance) if args.format == "auto" else args.format
+        if resolved_format == "qplib":
+            from qqa.io import load_qplib
+
+            model = load_qplib(instance)
+        else:
+            from qqa.io import load_mps
+
+            model = load_mps(instance)
+        print(json.dumps(model.summary(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.benchmark_command == "merge":
+        result = merge_benchmark_campaigns(args.campaign)
+        rendered = json.dumps(result.to_dict(), ensure_ascii=False, indent=2, allow_nan=False)
+        output = Path(args.output).expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered + "\n", encoding="utf-8")
+        print(rendered)
+        return 0
+
+    from qqa.hybrid import QQAHeuristicConfig
+
+    comparison = args.benchmark_command == "compare"
+    seed = args.seeds[0] if comparison else args.seed
+    config = QQAHeuristicConfig(
+        core_size=args.core_size,
+        sol_size=args.sol_size,
+        epochs=args.epochs,
+        max_calls=args.max_calls,
+        max_candidates=args.max_candidates,
+        completion_time=args.completion_time,
+        completion_nodes=args.completion_nodes,
+        minimum_call_time=args.min_call_time,
+        minimum_qqa_time=args.min_qqa_time,
+        fast_candidates=args.fast_candidates,
+        local_branching_radius=args.local_branching_radius,
+        max_lp_rows=args.max_lp_rows,
+        objective_weight=args.objective_weight,
+        row_penalty=args.row_penalty,
+        proximity_weight=args.proximity_weight,
+        reduced_cost_weight=args.reduced_cost_weight,
+        require_surrogate_improvement=not args.allow_nonimproving_candidates,
+        stop_qqa_after_nonimproving_call=not args.continue_qqa_without_improvement,
+        maximum_overhead_fraction=args.maximum_overhead_fraction,
+        threads=args.threads,
+        seed=seed,
+        device=args.device,
+        verbose=not args.quiet,
+    )
+    instances = tuple(Path(value).expanduser() for value in args.instance)
+    common = {
+        "format": args.format,
+        "time_limit": args.time_limit,
+        "relative_gap_limit": args.gap,
+        "threads": args.threads,
+        "reference_file": args.reference_file,
+        "verbose": not args.quiet,
+    }
+    if comparison:
+        result = compare_benchmark_solvers(
+            instances,
+            solvers=args.solvers,
+            seeds=args.seeds,
+            baseline_solver=args.baseline_solver,
+            qqa_config=config,
+            checkpoint_file=args.output,
+            resume=args.resume,
+            continue_on_error=args.continue_on_error,
+            retry_failures=args.retry_failures,
+            **common,
+        )
+    else:
+        common.update(solver=args.solver, seed=args.seed, qqa_config=config)
+        result = (
+            run_benchmark_instance(instances[0], **common)
+            if len(instances) == 1
+            else run_benchmark_suite(instances, **common)
+        )
+    payload = result.to_dict()
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2)
+    print(rendered)
+    if args.output:
+        output = Path(args.output).expanduser().resolve()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered + "\n", encoding="utf-8")
+    return 0
+
+
 def _cmd_example(args: argparse.Namespace) -> int:
     import qqa
 
@@ -1665,6 +1917,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_bench_run(args)
     if args.command == "bench-plot":
         return _cmd_bench_plot(args)
+    if args.command == "benchmark":
+        return _cmd_benchmark(args)
     if args.command == "tex":
         return _cmd_tex(args)
     if args.command == "ask":

@@ -86,6 +86,9 @@ pignn = ["torch-geometric>=2.6"]
 # Exact MIP/MIQP refinement. PySCIPOpt wheels bundle a compatible SCIP build,
 # but the dependency stays optional because QQA itself remains pure PyTorch.
 scip = ["pyscipopt>=6.1"]
+# Official QPLIB parser/evaluator. Kept separate from SCIP because users may
+# inspect and validate QPLIB files without running an exact solver.
+qplib = ["pyqplib>=0.1.8,<0.2"]
 # Needed only by the DISCS CO benchmark suite (data/discs/, scripts/setup_discs_data.sh,
 # scripts/convert_discs_to_qqa.py, scripts/bench_discs.py). Optional because most
 # qqa users will not download the DISCS instances.
@@ -102,7 +105,7 @@ dev = [
     "requests>=2.31",
 ]
 all = [
-    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,scip]",
+    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,scip,qplib]",
 ]
 
 [project.scripts]

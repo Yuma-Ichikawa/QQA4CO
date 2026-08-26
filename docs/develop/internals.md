@@ -62,7 +62,15 @@ src/qqa/
 │   ├── variables.py     # Declarations, bounds, pack/unpack layout
 │   ├── relaxation.py    # Normalised mixed-domain relaxation
 │   ├── problem.py       # Objective + constraint model
+│   ├── augmented_lagrangian.py # Constraint-wise PHR + split archives
+│   ├── encoding.py      # Node-local adaptive integer encodings
+│   ├── repair.py        # Elastic continuous repair
 │   └── solve.py         # Mixed-friendly high-level entry point
+├── algebraic/           # Sparse linear/quadratic benchmark IR
+├── io/                  # MPS and QPLIB importers
+├── presolve/            # Scaling and original/transformed SCIP state
+├── decomposition/       # Independent sub-SCIP continuous completion
+├── benchmarking/        # Public snapshot fetch, metrics, MIPLIB/QPLIB runners
 ├── multiobjective/      # Reference directions, Pareto archive, front plots
 │   ├── problem.py       # Objective directions + mixed-variable model
 │   ├── solver.py        # One-run augmented-Tchebycheff optimiser
@@ -72,7 +80,11 @@ src/qqa/
 │   ├── solver.py        # RBF surrogate + adaptive batch trust region
 │   └── visualization.py # Convergence/feasibility/trust diagnostics
 ├── hybrid/
-│   └── scip.py          # Optional QQA population → SCIP exact refinement
+│   ├── scip.py          # Optional QQA population → SCIP exact refinement
+│   ├── scip_heuristic.py # Iterative conditional QQA plugin
+│   ├── core_selector.py # RENS/RINS uncertain integer core
+│   ├── neighborhood.py  # Local branching descriptions
+│   └── nonconvex.py     # Sparse DC convexification helpers
 ├── tex/                 # TeX → audited declarative model → QQA
 │   ├── client.py        # Credential-safe Responses/Messages transport
 │   ├── schema.py        # Exact JSON model schema and validation

@@ -181,6 +181,9 @@ class MixedProblem(COProblem):
 
     def loss_fn(self, values: torch.Tensor) -> torch.Tensor:
         values = self._ensure_batched(values)
+        controller = getattr(self, "_augmented_lagrangian", None)
+        if controller is not None:
+            return self.objective_values(values) + controller.penalty(self, values)
         return self.objective_values(values) + self.penalty_multiplier * self.constraint_penalty(
             values
         )

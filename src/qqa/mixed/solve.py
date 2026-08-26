@@ -9,12 +9,19 @@ from typing import Any
 import torch
 
 from qqa.annealing import AnnealResult, anneal
+from qqa.mixed.augmented_lagrangian import (
+    AdaptiveALCallback,
+    AdaptiveAugmentedLagrangian,
+    ConstraintArchive,
+    ConstraintArchiveCallback,
+)
 from qqa.mixed.problem import MixedProblem
+from qqa.mixed.repair import repair_mixed_solution
 from qqa.utils import resolve_device
 
 
 def _prefer_feasible_incumbent(problem: MixedProblem, result: AnnealResult) -> None:
-    """Select the best feasible final replica before a penalized incumbent."""
+    """Select by feasibility, maximum/total violation, then objective."""
     if not problem.constraints or result.final_population is None:
         return
     candidates = torch.cat(
@@ -27,18 +34,85 @@ def _prefer_feasible_incumbent(problem: MixedProblem, result: AnnealResult) -> N
     with torch.no_grad():
         violations = problem.constraint_violations(candidates)
         feasible = torch.ones(len(candidates), dtype=torch.bool, device=candidates.device)
+        normalised = []
         for constraint in problem.constraints:
             feasible &= violations[constraint.name] <= constraint.tolerance
-        if not feasible.any():
-            return
-        indices = torch.where(feasible)[0]
+            normalised.append(violations[constraint.name] / constraint.scale)
+        matrix = torch.stack(normalised, dim=1)
+        maximum = matrix.amax(dim=1)
+        total = matrix.sum(dim=1)
         objective = problem.objective_values(candidates)
-        selected = indices[torch.argmin(objective[indices])]
+        ranked = sorted(
+            range(len(candidates)),
+            key=lambda index: (
+                not bool(feasible[index]),
+                0.0 if bool(feasible[index]) else float(maximum[index]),
+                0.0 if bool(feasible[index]) else float(total[index]),
+                float(objective[index]),
+            ),
+        )
+        selected = ranked[0]
         best_sol = candidates[selected].detach().clone()
-        best_obj = float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
+        best_obj = (
+            float(objective[selected].item())
+            if bool(feasible[selected])
+            else float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
+        )
     result.best_sol = best_sol
     result.best_obj = best_obj
     result.score = problem.score_summary(best_sol)
+
+
+def _repair_candidates(
+    problem: MixedProblem,
+    result: AnnealResult,
+    *,
+    max_candidates: int,
+    max_steps: int,
+) -> dict[str, int | float]:
+    if not problem.constraints or result.final_population is None:
+        return {"attempted": 0, "feasible": 0, "improved": 0}
+    if not any(kind == "real" for kind in problem.space.kinds):
+        return {"attempted": 0, "feasible": 0, "improved": 0}
+    candidates = torch.cat(
+        [result.best_sol.detach().reshape(1, -1), result.final_population.detach()],
+        dim=0,
+    )
+    with torch.no_grad():
+        violations = problem.constraint_violations(candidates)
+        matrix = torch.stack(
+            [violations[row.name] / row.scale for row in problem.constraints], dim=1
+        )
+        maximum = matrix.amax(dim=1)
+        total = matrix.sum(dim=1)
+        objective = problem.objective_values(candidates)
+    ranked = sorted(
+        range(len(candidates)),
+        key=lambda index: (float(maximum[index]), float(total[index]), float(objective[index])),
+    )
+    repaired = []
+    feasible_count = 0
+    improved_count = 0
+    for index in ranked[:max_candidates]:
+        repair = repair_mixed_solution(problem, candidates[index], max_steps=max_steps)
+        repaired.append(repair.solution)
+        feasible_count += int(repair.feasible)
+        if repair.maximum_violation < float(maximum[index]) - 1e-10 or (
+            repair.feasible
+            and float(maximum[index]) <= 1e-6
+            and repair.objective < float(objective[index]) - 1e-10
+        ):
+            improved_count += 1
+    if repaired:
+        result.final_population = torch.cat(
+            [result.final_population, torch.stack(repaired).to(result.final_population)],
+            dim=0,
+        )
+    return {
+        "attempted": len(repaired),
+        "feasible": feasible_count,
+        "improved": improved_count,
+    }
 
 
 def solve_mixed(
@@ -48,6 +122,13 @@ def solve_mixed(
     calibration_points: int = 256,
     penalty_safety_factor: float = 50.0,
     max_penalty_multiplier: float = 1e8,
+    adaptive_augmented_lagrangian: bool = True,
+    al_update_interval: int = 50,
+    al_rho_growth: float = 2.0,
+    al_maximum_rho: float = 1e10,
+    repair: bool = True,
+    repair_candidates: int = 4,
+    repair_steps: int = 150,
     **kwargs: Any,
 ) -> AnnealResult:
     """Solve a :class:`MixedProblem` with conservative mixed-domain defaults.
@@ -63,6 +144,18 @@ def solve_mixed(
         raise ValueError("penalty_safety_factor must be finite and > 0.")
     if not math.isfinite(max_penalty_multiplier) or max_penalty_multiplier < 1:
         raise ValueError("max_penalty_multiplier must be finite and >= 1.")
+    if not isinstance(adaptive_augmented_lagrangian, bool):
+        raise TypeError("adaptive_augmented_lagrangian must be boolean.")
+    if not isinstance(repair, bool):
+        raise TypeError("repair must be boolean.")
+    for name, value in (
+        ("al_update_interval", al_update_interval),
+        ("repair_candidates", repair_candidates),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
+    if isinstance(repair_steps, bool) or not isinstance(repair_steps, int) or repair_steps < 0:
+        raise ValueError("repair_steps must be a non-negative integer.")
     defaults = {
         "sol_size": 128,
         "learning_rate": 0.05,
@@ -113,9 +206,61 @@ def solve_mixed(
             max_penalty_multiplier,
             max(1.0, penalty_safety_factor * objective_scale / penalty_scale),
         )
+    controller = None
+    archive = ConstraintArchive() if problem.constraints else None
+    callbacks = list(defaults.get("callbacks", ()))
+    if archive is not None:
+        callbacks.append(
+            ConstraintArchiveCallback(
+                archive,
+                update_interval=min(10, al_update_interval),
+            )
+        )
+    if adaptive_augmented_lagrangian and problem.constraints:
+        controller = AdaptiveAugmentedLagrangian.for_problem(
+            solving_problem,
+            penalty_multiplier=solving_problem.penalty_multiplier,
+            rho_growth=al_rho_growth,
+            maximum_rho=al_maximum_rho,
+        )
+        solving_problem._augmented_lagrangian = controller
+        callbacks.append(AdaptiveALCallback(update_interval=al_update_interval))
+    if callbacks:
+        defaults["callbacks"] = callbacks
     result = anneal(solving_problem, **defaults)
+    if archive is not None and result.final_population is not None:
+        archive.update(
+            solving_problem,
+            torch.cat(
+                [result.best_sol.detach().reshape(1, -1), result.final_population.detach()],
+                dim=0,
+            ),
+        )
+        archived = archive.candidates()
+        if archived:
+            result.final_population = torch.cat(
+                [result.final_population, torch.stack(archived).to(result.final_population)],
+                dim=0,
+            )
+    repair_diagnostics = (
+        _repair_candidates(
+            solving_problem,
+            result,
+            max_candidates=repair_candidates,
+            max_steps=repair_steps,
+        )
+        if repair
+        else {"attempted": 0, "feasible": 0, "improved": 0}
+    )
     _prefer_feasible_incumbent(solving_problem, result)
     result.diagnostics["penalty_multiplier"] = float(solving_problem.penalty_multiplier)
+    result.diagnostics["adaptive_augmented_lagrangian"] = (
+        controller.diagnostics() if controller is not None else None
+    )
+    result.diagnostics["repair"] = repair_diagnostics
+    result.diagnostics["constraint_archive"] = (
+        archive.diagnostics() if archive is not None else None
+    )
     if not return_population:
         result.final_population = None
     return result

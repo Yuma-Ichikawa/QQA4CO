@@ -35,6 +35,7 @@ nav:
   - Home: index.md
   - Quickstart: quickstart.md
   - Mixed optimisation: mixed-optimization.md
+  - MIPLIB and QPLIB: miplib-qplib.md
   - Universal optimisation: universal-optimization.md
   - How-to:
     - Run on GPU: how-to/gpu.md

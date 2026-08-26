@@ -40,11 +40,31 @@ kept beside it rather than added as branches inside its hot loop:
   reusing typed mixed-variable domains.
 * `hybrid/scip.py` consumes a QQA population and hands it to an optional exact
   solver.
+* `algebraic/`, `io/`, and `presolve/` preserve sparse MIP/QP structure for
+  MIPLIB/QPLIB instead of compiling it into Python callables.
+* `hybrid/scip_heuristic.py` runs QQA repeatedly inside SCIP on an uncertain
+  integer core; `decomposition/` completes the remaining variables in an
+  independent sub-SCIP.
 * `tex/` is a modelling front-end: it emits `MixedProblem` or
   `MultiObjectiveProblem`, never executable model code.
 
 The CLI, Streamlit dashboard, visualisation modules, and optional backends are
 consumers of these public result contracts.
+
+The benchmark path therefore has a different data flow:
+
+```text
+MPS/QPLIB -> sparse AlgebraicModel -> SCIP presolve/node LP
+          -> RENS/RINS core -> objective/active-row surrogate
+          -> cheap integral move -> conditional float64 QQA population
+          -> independent continuous completion -> SCIP trySol/proof
+```
+
+Original and transformed SCIP variables remain mapped across presolve. A
+separate tracker evaluates every accepted incumbent in the original sparse
+model, which prevents nonlinear objective epigraph slack from corrupting
+reported primal progress. QQA never owns the proof, and one wall-clock deadline
+covers all arrows.
 
 ## Data flow for a single solve
 

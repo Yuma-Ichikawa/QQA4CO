@@ -29,6 +29,13 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from qqa import polish, warmstart
+from qqa.algebraic import (
+    AlgebraicConstraint,
+    AlgebraicEvaluation,
+    AlgebraicModel,
+    SparseQuadratic,
+    VariableType,
+)
 from qqa.annealing import AnnealResult, anneal
 from qqa.applications import (
     APPLICATIONS,
@@ -37,6 +44,20 @@ from qqa.applications import (
     build_microgrid_pareto,
     build_portfolio_pareto,
     build_process_blackbox,
+)
+from qqa.benchmarking import (
+    BenchmarkComparisonResult,
+    BenchmarkFailure,
+    BenchmarkResult,
+    BenchmarkSuiteResult,
+    compare_benchmark_solvers,
+    fetch_benchmark,
+    fetch_instance,
+    publish_benchmark_campaigns,
+    run_benchmark_instance,
+    run_benchmark_suite,
+    run_miplib,
+    run_qplib,
 )
 from qqa.blackbox import (
     BlackBoxConstraint,
@@ -54,6 +75,9 @@ from qqa.callbacks import (
     TrajectoryTracker,
 )
 from qqa.hybrid import (
+    QQAHeuristic,
+    QQAHeuristicConfig,
+    QQAHeuristicStats,
     SCIPExpressionError,
     SCIPHybridResult,
     SCIPModelResult,
@@ -61,6 +85,7 @@ from qqa.hybrid import (
     solve_qqa_scip,
     solve_spec_scip,
 )
+from qqa.io import load_mps, load_qplib, qplib_available
 from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
 from qqa.mixed import (
     Binary,
@@ -72,7 +97,9 @@ from qqa.mixed import (
     MixedRelaxation,
     Real,
     RealVariable,
+    RepairResult,
     VariableSpace,
+    repair_mixed_solution,
     solve_mixed,
 )
 from qqa.multiobjective import (
@@ -165,6 +192,9 @@ except PackageNotFoundError:  # pragma: no cover - editable install w/o metadata
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "AlgebraicConstraint",
+    "AlgebraicEvaluation",
+    "AlgebraicModel",
     "QAP",
     "TSP",
     "AnnealResult",
@@ -175,6 +205,10 @@ __all__ = [
     "BlackBoxConstraint",
     "BlackBoxProblem",
     "BlackBoxResult",
+    "BenchmarkResult",
+    "BenchmarkComparisonResult",
+    "BenchmarkFailure",
+    "BenchmarkSuiteResult",
     "Binary",
     "BinaryInstanceRelaxation",
     "BinaryPerceptron",
@@ -223,9 +257,13 @@ __all__ = [
     "PSpinGlass",
     "PopulationTracker",
     "QUBOProblem",
+    "QQAHeuristicConfig",
+    "QQAHeuristic",
+    "QQAHeuristicStats",
     "RandomFieldIsing",
     "Real",
     "RealVariable",
+    "RepairResult",
     "Relaxation",
     "SAResult",
     "SCIPHybridResult",
@@ -235,11 +273,13 @@ __all__ = [
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
+    "SparseQuadratic",
     "TEX_SYSTEM_PROMPT",
     "TexSolveResult",
     "TrajectoryTracker",
     "UserProblem",
     "VariableSpace",
+    "VariableType",
     "VertexCover",
     "__version__",
     "anneal",
@@ -257,9 +297,13 @@ __all__ = [
     "enable_tf32",
     "execute_plan",
     "fix_seed",
+    "fetch_benchmark",
+    "fetch_instance",
     "generate_graph",
     "isco_anneal",
     "load_problem_from_file",
+    "load_mps",
+    "load_qplib",
     "polish",
     "population_annealing",
     "pareto_anneal",
@@ -272,12 +316,20 @@ __all__ = [
     "random_prime",
     "random_semiprime",
     "resolve_device",
+    "repair_mixed_solution",
+    "compare_benchmark_solvers",
+    "publish_benchmark_campaigns",
+    "run_benchmark_instance",
+    "run_benchmark_suite",
+    "run_miplib",
+    "run_qplib",
     "simulated_annealing",
     "save_html_report",
     "solve_qqa_scip",
     "solve_spec_scip",
     "solve_tex",
     "solve_mixed",
+    "qplib_available",
     "user_problem_from_source",
     "warmstart",
 ]

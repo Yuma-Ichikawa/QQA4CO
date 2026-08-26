@@ -231,9 +231,9 @@ def solve_spec_scip(
     model = Model(f"qqa-scip-{spec.name}")
     if not verbose:
         model.hideOutput()
-    model.setRealParam("limits/time", float(time_limit))
     model.setRealParam("limits/gap", float(relative_gap))
     model.setIntParam("parallel/maxnthreads", threads)
+    model.setIntParam("lp/threads", threads)
 
     scip_variables: dict[str, list] = {}
     flat_variables = []
@@ -290,6 +290,16 @@ def solve_spec_scip(
     if qqa_kwargs:
         defaults.update(qqa_kwargs)
     defaults["return_population"] = True
+    qqa_budget = float(time_limit) - (perf_counter() - started)
+    if qqa_budget <= 0:
+        defaults["num_epochs"] = 0
+    else:
+        requested_qqa_budget = defaults.get("time_limit")
+        defaults["time_limit"] = (
+            qqa_budget
+            if requested_qqa_budget is None
+            else min(float(requested_qqa_budget), qqa_budget)
+        )
     qqa_result = problem.solve(**defaults)
     starts = _candidate_starts(problem, qqa_result, max_warm_starts)
 
@@ -301,11 +311,18 @@ def solve_spec_scip(
         if model.addSol(solution):
             accepted += 1
 
-    scip_started = perf_counter()
-    model.optimize()
-    scip_runtime = perf_counter() - scip_started
-    status = str(model.getStatus())
-    best = model.getBestSol()
+    remaining = float(time_limit) - (perf_counter() - started)
+    if remaining > 1e-3:
+        model.setRealParam("limits/time", remaining)
+        scip_started = perf_counter()
+        model.optimize()
+        scip_runtime = perf_counter() - scip_started
+        status = str(model.getStatus())
+        best = model.getBestSol()
+    else:
+        scip_runtime = 0.0
+        status = "timelimit"
+        best = None
 
     qqa_sol = qqa_result.best_sol.detach().cpu().to(dtype=problem.dtype)
     best_sol = qqa_sol

@@ -62,7 +62,7 @@ score or pickles the full `AnnealResult` to disk.
 | Flag | Default | What it does |
 |---|---|---|
 | `--backend` | `qqa` | `qqa`, `scip` (QQA→exact QUBO refinement), `pignn`, `cpra`, or `sa` |
-| `--scip-time-limit` / `--scip-gap` | `60` / `0` | SCIP proof budget and target relative gap |
+| `--scip-time-limit` / `--scip-gap` | `60` / `0` | Total QQA+SCIP wall-clock budget and target relative gap |
 | `--scip-warm-starts` / `--scip-threads` | `32` / `1` | Diverse QQA incumbents and exact-solver threads |
 | `--pignn-init-reg-param` | `-20.0` | CRA initial γ (only `--backend pignn`/`cpra`) |
 | `--pignn-annealing-rate` | `1e-3` | CRA γ increment per epoch |
@@ -145,6 +145,65 @@ sanity check.
 qqa bench --preset er-small
 ```
 
+## `qqa benchmark`
+
+Fetch, inspect, and solve public MIPLIB/QPLIB instances. This is distinct from
+`qqa bench`, which runs the bundled combinatorial presets.
+
+```bash
+qqa benchmark fetch miplib --instance pk1 --output benchmarks/miplib
+qqa benchmark fetch qplib --instance 31 --output benchmarks/qplib
+qqa benchmark inspect benchmarks/qplib/QPLIB_0031.qplib
+qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+  --solver sg-cqqa --time-limit 60 --output result.json
+qqa benchmark compare benchmarks/miplib/pk1.mps.gz \
+  --baseline-solver scip-aggressive --seeds 0 1 2 \
+  --time-limit 60 --output comparison.json
+qqa benchmark merge shard-0.json shard-1.json --output comparison.json
+```
+
+`fetch` accepts `miplib` or `qplib`; omit `--instance` to download the full
+official archive. `inspect` emits sparse dimensions, variable-type counts,
+PROBTYPE when available, and portable source provenance.
+
+`run` accepts `--solver scip`, `--solver scip-aggressive`, or
+`--solver sg-cqqa`. Shared flags are
+`--time-limit`, `--gap`, `--threads`, `--reference-file`, `--format`,
+`--output`, and `--quiet`. SG-CQQA additionally accepts `--core-size`,
+`--sol-size`, `--epochs`, `--max-calls`, `--max-candidates`,
+`--completion-time`, `--completion-nodes`, `--min-call-time`,
+`--min-qqa-time`, `--fast-candidates`, `--max-lp-rows`, objective/row/proximity
+weights, `--continue-qqa-without-improvement`, `--seed`, and `--device`.
+The time limit covers parsing/setup, QQA, continuous completion, and SCIP.
+
+`compare` runs a paired Cartesian product of input instances, `--solvers`, and
+`--seeds`. Every pair receives the same total budget and thread count. Its JSON
+contains per-run trajectories, portable run configuration, per-solver medians,
+and win/tie/loss counts against `--baseline-solver`. Use
+`scip-aggressive` as the ablation baseline when measuring the incremental
+effect of the SG-CQQA plugin, because both then use the same aggressive native
+SCIP heuristic setting.
+
+`--threads` constrains SCIP workers, LP-solver threads, and (for SG-CQQA)
+Torch threads. Reproducible CPU campaigns should additionally cap the BLAS and
+OpenMP thread pools in their launcher.
+For `run`, metric clocks begin before parsing. For paired `compare`, one common
+algebraic import is excluded from every solver and the clocks begin before each
+solver model is built. Primal integral uses the configured time limit as a
+fixed common horizon.
+
+`--output` is also an incremental checkpoint. Add `--continue-on-error` for a
+large heterogeneous archive and repeat the identical command with `--resume`
+after interruption. A mismatched instance list, solver list, seed set, time,
+thread count, reference name, or SG-CQQA configuration is rejected rather than
+mixed into an existing campaign. `--retry-failures` retries only the anonymous
+failure records during a resumed run.
+`merge` combines disjoint comparison shards after checking that every setting
+except the instance list is identical. It rejects overlapping instances or
+duplicate solver/instance/seed rows and recomputes all medians and W/T/L counts.
+See the [MIPLIB/QPLIB guide](../miplib-qplib.md) for metric definitions and
+reproducibility guidance.
+
 ## `qqa ask`
 
 Describe a bounded optimisation problem in ordinary language, compile it
@@ -190,7 +249,7 @@ Exactly one input source is required:
 | `--device` / `--seed` | `auto` / `0` | Compute device and reproducibility seed |
 | `--sol-size` / `--epochs` | `256` / `1500` | QQA or Pareto population and iterations |
 | `--budget` / `--batch-size` / `--workers` | `96` / `8` / `4` | Black-box evaluation budget and concurrency |
-| `--scip-time-limit` / `--scip-gap` | `60` / `0` | SCIP proof budget and target gap |
+| `--scip-time-limit` / `--scip-gap` | `60` / `0` | Total QQA+SCIP wall-clock budget and target gap |
 | `--scip-threads` / `--scip-warm-starts` | `1` / `32` | SCIP threads and QQA primal starts |
 | `--json` / `--output-result` | off / none | Print or save a machine-readable result |
 | `--report` | none | Save an interactive HTML report |

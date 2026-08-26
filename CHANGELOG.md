@@ -6,6 +6,59 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### MIPLIB/QPLIB and SCIP-guided conditional QQA
+
+- Add a sparse algebraic IR with infinite bounds, linear/quadratic objectives
+  and constraints, original-space evaluation, reversible scaling, and
+  path-free portable provenance.
+- Add SCIP-backed MPS/MIPLIB and `pyqplib`-backed QPLIB importers, including
+  lower-triangle quadratic cross-checks against the parser at nonzero points.
+- Add adaptive integer encodings, constraint-wise PHR augmented Lagrangian,
+  separate feasibility/objective archives, elastic continuous repair,
+  RENS/RINS core selection, local branching, and sparse DC convexification.
+- Add iterative SG-CQQA as a PySCIPOpt primal heuristic. An original-objective,
+  active-row surrogate first tries cheap integral core moves; QQA is a
+  conditional fallback when sufficient wall time remains. An independent
+  sub-SCIP completes continuous variables and submits full original-space
+  solutions through `trySol()`.
+- Add `qqa benchmark fetch|inspect|run|compare` for official MIPLIB/QPLIB snapshots,
+  with total shared deadlines, incumbent trajectories, time to first feasible,
+  primal integral, primal/dual gap, completion/acceptance rates, and snapshot
+  hashes. Paired comparisons include an aggressive-SCIP ablation and multiple
+  deterministic seeds; fast-surrogate and QQA-only candidate rates are
+  reported separately.
+- Add atomic, configuration-checked campaign checkpoints, anonymous
+  continue-on-error records, selective failure retries, and deterministic
+  path/private-host rejecting publication artifacts for full benchmark runs.
+- Add validated shard merging with duplicate-instance/record rejection and
+  complete aggregate recomputation for portable multi-GPU campaigns.
+- Isolate every QPLIB native solve in a disposable worker so nonlinear solver
+  crashes, bounded worker timeouts, and retained allocator state cannot
+  terminate or progressively exhaust a resumable campaign; support the same
+  safe path from scripts, notebooks, interactive Python, and the CLI.
+- Bound conditional heuristic overhead to 10% of the shared SCIP budget by
+  default, evaluate two fast candidates, and stop fast completion immediately
+  after a true original-objective improvement.
+- Add a bounded second-stage LNS repair: when fixing the rounded integer
+  complement is infeasible, retain the QQA core assignment and release the
+  complement, then retain only the highest-scored quarter if needed, inside
+  the original completion budget.
+- Stop later QQA calls after a first non-improving call by default, preserving
+  SCIP time when the learned neighbourhood is not productive while retaining
+  an explicit CLI ablation switch.
+- Route continuous-only QPLIB models directly through the matched aggressive
+  SCIP configuration, avoiding empty QQA plugin and completion-template setup.
+- Apply the constraint-wise PHR augmented Lagrangian and feasibility archive
+  inside every constrained conditional-QQA core solve, replacing its remaining
+  static selected-row penalty path.
+- Escalate from the primary fast hybrid path to QQA only after observing a
+  continuously completable fast candidate; QQA-only ablations remain explicit.
+- Evaluate nonlinear QPLIB incumbents monotonically in the original sparse
+  model, independent of SCIP's objective auxiliary, and report directional
+  reference error so a genuinely better incumbent is never penalised.
+- Apply the same total QQA+SCIP wall-clock budget to the existing one-shot
+  QUBO and safe symbolic SCIP hybrids.
+
 ### Universal optimisation studio
 
 - Remove provider-specific endpoint, model, and legacy credential identifiers

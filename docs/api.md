@@ -63,6 +63,21 @@ The functions below require `pip install "qqa[scip]"`.
 
 ::: qqa.hybrid.scip
 
+## Sparse algebraic benchmarks
+
+The QPLIB importer requires `pip install "qqa[qplib]"`; MPS execution and
+SCIP-guided completion require `pip install "qqa[scip]"`.
+
+::: qqa.algebraic
+
+::: qqa.io
+
+::: qqa.presolve
+
+::: qqa.decomposition
+
+::: qqa.benchmarking
+
 ## TeX modelling
 
 ::: qqa.tex

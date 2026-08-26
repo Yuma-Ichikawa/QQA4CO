@@ -348,6 +348,38 @@ See the [mixed optimisation guide](docs/mixed-optimization.md) and the
 [Colab notebook](examples/09_mixed_integer_real_optimization.ipynb) for pure
 integer, pure real, and practical mixed examples.
 
+### MIPLIB and QPLIB
+
+Install `qqa[scip,qplib]` to load public MPS/QPLIB files into a sparse
+solver-independent algebraic model and run either SCIP or the iterative
+SCIP-guided conditional QQA heuristic:
+
+```bash
+qqa benchmark fetch miplib --instance pk1 --output benchmarks/miplib
+qqa benchmark fetch qplib --instance 31 --output benchmarks/qplib
+qqa benchmark inspect benchmarks/miplib/pk1.mps.gz
+qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+  --solver sg-cqqa --time-limit 60 --output pk1.json
+qqa benchmark compare benchmarks/miplib/pk1.mps.gz \
+  --baseline-solver scip-aggressive --seeds 0 1 2 \
+  --time-limit 60 --output comparison.json
+```
+
+The hybrid lets QQA explore only SCIP's uncertain node-local integer core;
+sub-SCIP completes continuous variables and submits full candidates through
+`trySol()`, while SCIP retains bounds and proof responsibility. The time limit
+is shared by setup, QQA, completion, and SCIP. Results record public snapshot
+names and hashes, never absolute paths, hostnames, or private server details.
+The paired `compare` command runs SCIP, aggressive-heuristic SCIP, and SG-CQQA
+with identical instance/seed/budget settings and reports solution-quality and
+primal-integral win/tie/loss counts.
+Full archives can use `--continue-on-error`; the output is updated atomically
+after each run and an identical `--resume` command continues where it stopped.
+QPLIB runs use disposable native-solver workers, so a nonlinear native failure
+or bounded setup timeout is contained to one anonymous campaign record instead
+of terminating the caller or leaking state into later instances.
+See the [MIPLIB/QPLIB guide](docs/miplib-qplib.md).
+
 ### Pareto, black-box, SCIP, and TeX
 
 ```python
