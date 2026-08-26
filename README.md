@@ -379,6 +379,9 @@ QPLIB runs use disposable native-solver workers, so a nonlinear native failure
 or bounded setup timeout is contained to one anonymous campaign record instead
 of terminating the caller or leaking state into later instances.
 See the [MIPLIB/QPLIB guide](docs/miplib-qplib.md).
+The complete public 2026-08-26 campaigns, including negative results and
+anonymous failures, are summarised in the
+[benchmark results report](docs/benchmark-results.md).
 
 ### Pareto, black-box, SCIP, and TeX
 
