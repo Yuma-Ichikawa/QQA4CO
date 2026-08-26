@@ -236,6 +236,8 @@ def test_anneal_validates_dangerous_numeric_options():
         qqa.anneal(problem, learning_rate=float("nan"), num_epochs=0, verbose=False)
     with pytest.raises(ValueError, match="weight_decay"):
         qqa.anneal(problem, weight_decay=-1, num_epochs=0, verbose=False)
+    with pytest.raises(ValueError, match="optimizer"):
+        qqa.anneal(problem, optimizer="unknown", num_epochs=0, verbose=False)
     with pytest.raises(ValueError, match="gradient_clip_norm"):
         qqa.anneal(problem, gradient_clip_norm=0, num_epochs=0, verbose=False)
     with pytest.raises(ValueError, match="restart_patience"):
@@ -266,6 +268,24 @@ def test_anneal_adaptive_restarts_preserve_incumbent_and_report_diagnostics():
     assert result.diagnostics["restart_events"] == len(result.history["restart_epochs"])
     assert result.diagnostics["weight_decay"] == 0.0
     assert result.final_population.shape == (8, 1)
+
+
+def test_lightweight_adamw_runs_short_hybrid_anneals_without_optimizer_discovery():
+    problem = qqa.MixedProblem(
+        [qqa.Binary("x"), qqa.Binary("y")],
+        lambda values: -values["x"] - 2.0 * values["y"],
+    )
+    result = qqa.anneal(
+        problem,
+        sol_size=4,
+        learning_rate=0.05,
+        num_epochs=4,
+        optimizer="lightweight-adamw",
+        polish=False,
+        verbose=False,
+    )
+    assert result.diagnostics["optimizer"] == "lightweight-adamw"
+    assert result.best_sol.shape == (2,)
 
 
 def test_qubo_polish_handles_non_symmetric_user_matrix():

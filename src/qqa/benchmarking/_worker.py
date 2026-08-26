@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from qqa.benchmarking.algebraic_runner import _isolated_benchmark_worker
-from qqa.hybrid import QQAHeuristicConfig
+from qqa.hybrid.heuristic_types import QQAHeuristicConfig
 
 
 def main() -> None:

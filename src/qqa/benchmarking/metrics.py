@@ -264,6 +264,9 @@ def summarise_benchmarks(results: Sequence[BenchmarkResult]) -> dict[str, object
         partial_attempts = sum(int(row.get("partial_lns_attempts", 0)) for row in qqa_rows)
         partial_feasible = sum(int(row.get("partial_lns_feasible", 0)) for row in qqa_rows)
         partial_accepted = sum(int(row.get("partial_lns_accepted", 0)) for row in qqa_rows)
+        partial_improvements = sum(
+            int(row.get("partial_lns_incumbent_improvements", 0)) for row in qqa_rows
+        )
         return {
             "instances": len(rows),
             "feasible": sum(int(row.feasible) for row in rows),
@@ -300,6 +303,9 @@ def summarise_benchmarks(results: Sequence[BenchmarkResult]) -> dict[str, object
             ),
             "partial_lns_acceptance_rate": (
                 partial_accepted / partial_attempts if partial_attempts else 0.0
+            ),
+            "partial_lns_incumbent_improvement_rate": (
+                partial_improvements / partial_attempts if partial_attempts else 0.0
             ),
         }
 
@@ -354,6 +360,26 @@ def _compare_lower(candidate: float | None, baseline: float | None) -> int:
     return 1 if candidate < baseline - tolerance else -1 if candidate > baseline + tolerance else 0
 
 
+def _empty_outcome_bucket() -> dict[str, object]:
+    return {
+        "paired_runs": 0,
+        "primal_quality": {"losses": 0, "ties": 0, "wins": 0},
+        "primal_integral": {"losses": 0, "ties": 0, "wins": 0},
+    }
+
+
+def _record_outcome(
+    bucket: dict[str, object],
+    *,
+    primary: int,
+    integral: int,
+) -> None:
+    labels = ("losses", "ties", "wins")
+    bucket["paired_runs"] += 1
+    bucket["primal_quality"][labels[primary + 1]] += 1
+    bucket["primal_integral"][labels[integral + 1]] += 1
+
+
 def summarise_comparison(
     results: Sequence[BenchmarkResult],
     *,
@@ -374,18 +400,40 @@ def summarise_comparison(
         primary = [0, 0, 0]
         integral = [0, 0, 0]
         paired = 0
+        qqa_intervention = {
+            "heuristic_invoked_pairs": 0,
+            "qqa_executed_pairs": 0,
+            "qqa_incumbent_improvement_pairs": 0,
+            "executed": _empty_outcome_bucket(),
+            "not_executed": _empty_outcome_bucket(),
+        }
         for group in grouped.values():
             if baseline_solver not in group or solver not in group:
                 continue
             paired += 1
-            primary[_compare_primary(group[solver], group[baseline_solver]) + 1] += 1
-            integral[
-                _compare_lower(
-                    group[solver].primal_integral,
-                    group[baseline_solver].primal_integral,
+            candidate = group[solver]
+            baseline = group[baseline_solver]
+            primary_outcome = _compare_primary(candidate, baseline)
+            integral_outcome = _compare_lower(
+                candidate.primal_integral,
+                baseline.primal_integral,
+            )
+            primary[primary_outcome + 1] += 1
+            integral[integral_outcome + 1] += 1
+            if solver == "sg-cqqa":
+                qqa = candidate.qqa or {}
+                heuristic_invoked = int(qqa.get("calls", 0)) > 0
+                qqa_executed = int(qqa.get("qqa_calls", 0)) > 0
+                qqa_improved = int(qqa.get("qqa_incumbent_improvements", 0)) > 0
+                qqa_intervention["heuristic_invoked_pairs"] += int(heuristic_invoked)
+                qqa_intervention["qqa_executed_pairs"] += int(qqa_executed)
+                qqa_intervention["qqa_incumbent_improvement_pairs"] += int(qqa_improved)
+                bucket = qqa_intervention["executed" if qqa_executed else "not_executed"]
+                _record_outcome(
+                    bucket,
+                    primary=primary_outcome,
+                    integral=integral_outcome,
                 )
-                + 1
-            ] += 1
         pairwise[solver] = {
             "baseline": baseline_solver,
             "paired_runs": paired,
@@ -400,6 +448,8 @@ def summarise_comparison(
                 "wins": integral[2],
             },
         }
+        if solver == "sg-cqqa":
+            pairwise[solver]["qqa_intervention"] = qqa_intervention
     return {
         "baseline_solver": baseline_solver,
         "by_solver": {

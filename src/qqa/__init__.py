@@ -25,6 +25,7 @@ Spin-glass example::
 
 from __future__ import annotations
 
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
@@ -45,20 +46,6 @@ from qqa.applications import (
     build_portfolio_pareto,
     build_process_blackbox,
 )
-from qqa.benchmarking import (
-    BenchmarkComparisonResult,
-    BenchmarkFailure,
-    BenchmarkResult,
-    BenchmarkSuiteResult,
-    compare_benchmark_solvers,
-    fetch_benchmark,
-    fetch_instance,
-    publish_benchmark_campaigns,
-    run_benchmark_instance,
-    run_benchmark_suite,
-    run_miplib,
-    run_qplib,
-)
 from qqa.blackbox import (
     BlackBoxConstraint,
     BlackBoxProblem,
@@ -74,18 +61,6 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
-from qqa.hybrid import (
-    QQAHeuristic,
-    QQAHeuristicConfig,
-    QQAHeuristicStats,
-    SCIPExpressionError,
-    SCIPHybridResult,
-    SCIPModelResult,
-    scip_available,
-    solve_qqa_scip,
-    solve_spec_scip,
-)
-from qqa.io import load_mps, load_qplib, qplib_available
 from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
 from qqa.mixed import (
     Binary,
@@ -181,6 +156,53 @@ from qqa.tex import (
 )
 from qqa.utils import enable_tf32, fix_seed, generate_graph, resolve_device
 
+# Exact-solver and public-benchmark integrations are deliberately absent from
+# the eager package graph.  Explicit legacy access such as
+# ``qqa.solve_qqa_scip`` remains compatible, but only that access imports the
+# opt-in module.  New code should import from ``qqa.hybrid``,
+# ``qqa.benchmarking``, or ``qqa.io`` to make the boundary visible.
+_OPTIONAL_EXPORTS: dict[str, tuple[str, str]] = {
+    "BenchmarkComparisonResult": ("qqa.benchmarking", "BenchmarkComparisonResult"),
+    "BenchmarkFailure": ("qqa.benchmarking", "BenchmarkFailure"),
+    "BenchmarkResult": ("qqa.benchmarking", "BenchmarkResult"),
+    "BenchmarkSuiteResult": ("qqa.benchmarking", "BenchmarkSuiteResult"),
+    "QQAHeuristic": ("qqa.hybrid", "QQAHeuristic"),
+    "QQAHeuristicConfig": ("qqa.hybrid", "QQAHeuristicConfig"),
+    "QQAHeuristicStats": ("qqa.hybrid", "QQAHeuristicStats"),
+    "SCIPExpressionError": ("qqa.hybrid", "SCIPExpressionError"),
+    "SCIPHybridResult": ("qqa.hybrid", "SCIPHybridResult"),
+    "SCIPModelResult": ("qqa.hybrid", "SCIPModelResult"),
+    "compare_benchmark_solvers": ("qqa.benchmarking", "compare_benchmark_solvers"),
+    "fetch_benchmark": ("qqa.benchmarking", "fetch_benchmark"),
+    "fetch_instance": ("qqa.benchmarking", "fetch_instance"),
+    "load_mps": ("qqa.io", "load_mps"),
+    "load_qplib": ("qqa.io", "load_qplib"),
+    "publish_benchmark_campaigns": ("qqa.benchmarking", "publish_benchmark_campaigns"),
+    "qplib_available": ("qqa.io", "qplib_available"),
+    "run_benchmark_instance": ("qqa.benchmarking", "run_benchmark_instance"),
+    "run_benchmark_suite": ("qqa.benchmarking", "run_benchmark_suite"),
+    "run_miplib": ("qqa.benchmarking", "run_miplib"),
+    "run_qplib": ("qqa.benchmarking", "run_qplib"),
+    "scip_available": ("qqa.hybrid", "scip_available"),
+    "solve_qqa_scip": ("qqa.hybrid", "solve_qqa_scip"),
+    "solve_spec_scip": ("qqa.hybrid", "solve_spec_scip"),
+}
+
+
+def __getattr__(name: str):
+    """Resolve backwards-compatible optional exports on explicit access."""
+    target = _OPTIONAL_EXPORTS.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute = target
+    value = getattr(import_module(module_name), attribute)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted({*globals(), *_OPTIONAL_EXPORTS})
+
 # Single-source the version from the wheel metadata so ``__version__`` is
 # always whatever ``pip install qqa`` actually installed. The fallback covers
 # editable installs where the metadata is occasionally absent (e.g. a
@@ -205,10 +227,6 @@ __all__ = [
     "BlackBoxConstraint",
     "BlackBoxProblem",
     "BlackBoxResult",
-    "BenchmarkResult",
-    "BenchmarkComparisonResult",
-    "BenchmarkFailure",
-    "BenchmarkSuiteResult",
     "Binary",
     "BinaryInstanceRelaxation",
     "BinaryPerceptron",
@@ -257,19 +275,12 @@ __all__ = [
     "PSpinGlass",
     "PopulationTracker",
     "QUBOProblem",
-    "QQAHeuristicConfig",
-    "QQAHeuristic",
-    "QQAHeuristicStats",
     "RandomFieldIsing",
     "Real",
     "RealVariable",
     "RepairResult",
     "Relaxation",
     "SAResult",
-    "SCIPHybridResult",
-    "SCIPExpressionError",
-    "SCIPModelResult",
-    "scip_available",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
@@ -297,13 +308,9 @@ __all__ = [
     "enable_tf32",
     "execute_plan",
     "fix_seed",
-    "fetch_benchmark",
-    "fetch_instance",
     "generate_graph",
     "isco_anneal",
     "load_problem_from_file",
-    "load_mps",
-    "load_qplib",
     "polish",
     "population_annealing",
     "pareto_anneal",
@@ -317,19 +324,10 @@ __all__ = [
     "random_semiprime",
     "resolve_device",
     "repair_mixed_solution",
-    "compare_benchmark_solvers",
-    "publish_benchmark_campaigns",
-    "run_benchmark_instance",
-    "run_benchmark_suite",
-    "run_miplib",
-    "run_qplib",
     "simulated_annealing",
     "save_html_report",
-    "solve_qqa_scip",
-    "solve_spec_scip",
     "solve_tex",
     "solve_mixed",
-    "qplib_available",
     "user_problem_from_source",
     "warmstart",
 ]

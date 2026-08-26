@@ -103,7 +103,9 @@ def _solve_reviewed_model(spec, *, use_scip: bool, device: str, seed: int):
             verbose=False,
         )
     elif use_scip:
-        result = qqa.solve_spec_scip(
+        from qqa.hybrid import solve_spec_scip
+
+        result = solve_spec_scip(
             spec,
             qqa_kwargs={
                 "sol_size": 256,
@@ -182,8 +184,8 @@ with ask_tab:
             "Workflow",
             ("Auto", "QQA", "QQA + SCIP", "Parallel Pareto", "Black-box"),
             help=(
-                "Auto uses objective count, black-box intent, and local SCIP availability. "
-                "The routing decision is always shown before the result."
+                "Auto uses pure QQA for one objective and routes only explicit Pareto or "
+                "black-box intent. QQA + SCIP is an opt-in workflow."
             ),
         )
         workflow = {

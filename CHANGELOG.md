@@ -18,9 +18,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RENS/RINS core selection, local branching, and sparse DC convexification.
 - Add iterative SG-CQQA as a PySCIPOpt primal heuristic. An original-objective,
   active-row surrogate first tries cheap integral core moves; QQA is a
-  conditional fallback when sufficient wall time remains. An independent
-  sub-SCIP completes continuous variables and submits full original-space
-  solutions through `trySol()`.
+  conditional fallback when sufficient wall time remains. An in-place SCIP
+  dive performs the first completion and a bounded sub-SCIP repair is
+  available when needed; full solutions return through `trySol()`.
+- Keep the default `import qqa`, `auto` routing, and CLI solver path pure QQA.
+  Exact-solver and MIPLIB/QPLIB integrations now load lazily behind explicit
+  `qqa.hybrid`, `qqa.benchmarking`, and `qqa.io` opt-in boundaries; add the
+  aggregate `qqa[benchmark]` installation extra.
+- Split the conditional heuristic into configuration/diagnostics, vectorised
+  core-model, numerical runtime, and SCIP callback modules. Batch candidate
+  ranking and population generation, and cache core tensors per device/dtype
+  to avoid repeated Python dispatch and accelerator transfers.
 - Add `qqa benchmark fetch|inspect|run|compare` for official MIPLIB/QPLIB snapshots,
   with total shared deadlines, incumbent trajectories, time to first feasible,
   primal integral, primal/dual gap, completion/acceptance rates, and snapshot
@@ -49,8 +57,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Route continuous-only QPLIB models directly through the matched aggressive
   SCIP configuration, avoiding empty QQA plugin and completion-template setup.
 - Apply the constraint-wise PHR augmented Lagrangian and feasibility archive
-  inside every constrained conditional-QQA core solve, replacing its remaining
-  static selected-row penalty path.
+  to QPLIB/no-incumbent cores while retaining the cheaper static selected-row
+  merit for the screened incumbent-guided linear-MIP path.
 - Escalate from the primary fast hybrid path to QQA only after observing a
   continuously completable fast candidate; QQA-only ablations remain explicit.
 - Evaluate nonlinear QPLIB incumbents monotonically in the original sparse
@@ -71,7 +79,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add the unified `qqa.ask(...)`, `qqa ask`, and Streamlit **Ask QQA**
   entry points: natural language is compiled with a separate hardened system
   prompt, validated as an auditable `ModelSpec`, routed deterministically to
-  QQA, QQA+SCIP, Pareto QQA, or budgeted black-box search, and then solved.
+  pure QQA, Pareto QQA, or budgeted black-box search, and then solved.
+  QQA+SCIP remains available only when explicitly selected.
 - Add a Colab-ready natural-language optimisation walkthrough with a reviewed
   binary/integer/real production model, exact SCIP certification, one-run
   three-objective Pareto search, and constrained parallel black-box tuning.
@@ -97,7 +106,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   surrogate auto-selection, metadata, and full evaluation export.
 - Add safe mixed nonlinear `ModelSpec` → PySCIPOpt compilation with QQA
   multi-starts, exact constraints, dual bounds, gaps, and proof status.
-- Add `qqa doctor`, TeX file input, automatic QQA/SCIP routing, reviewed-model
+- Add `qqa doctor`, TeX file input, explicit QQA/SCIP routing, reviewed-model
   printing, and the Streamlit Universal Optimization Studio.
 
 ### Added

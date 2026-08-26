@@ -69,7 +69,7 @@ samples so a large currency-valued objective cannot silently overwhelm a
 small normalised constraint. Explicit weights still express the relative
 importance of the constraint rows. For exact mixed-integer/nonlinear
 refinement of a safe `ModelSpec`, install `qqa[scip]` and use
-`qqa.solve_spec_scip`.
+`qqa.hybrid.solve_spec_scip`.
 
 ## Warm starts in physical units
 

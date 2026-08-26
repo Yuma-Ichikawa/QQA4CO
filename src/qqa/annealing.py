@@ -82,6 +82,67 @@ class AnnealResult:
     numerical-stability controls used for the run."""
 
 
+class _LightweightAdamW:
+    """Single-parameter AdamW without ``torch.optim``'s lazy import cost."""
+
+    def __init__(
+        self,
+        parameter: torch.Tensor,
+        *,
+        learning_rate: float,
+        weight_decay: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        epsilon: float = 1e-8,
+    ) -> None:
+        self.parameter = parameter
+        self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.epsilon = epsilon
+        self.steps = 0
+        self.state = {
+            parameter: {
+                "exp_avg": torch.zeros_like(parameter),
+                "exp_avg_sq": torch.zeros_like(parameter),
+            }
+        }
+
+    def zero_grad(self, *, set_to_none: bool = True) -> None:
+        if set_to_none:
+            self.parameter.grad = None
+        elif self.parameter.grad is not None:
+            self.parameter.grad.zero_()
+
+    def step(self) -> None:
+        gradient = self.parameter.grad
+        if gradient is None:
+            return
+        self.steps += 1
+        state = self.state[self.parameter]
+        first = state["exp_avg"]
+        second = state["exp_avg_sq"]
+        with torch.no_grad():
+            if self.weight_decay:
+                self.parameter.mul_(1.0 - self.learning_rate * self.weight_decay)
+            first.mul_(self.beta1).add_(gradient, alpha=1.0 - self.beta1)
+            second.mul_(self.beta2).addcmul_(
+                gradient,
+                gradient,
+                value=1.0 - self.beta2,
+            )
+            bias1 = 1.0 - self.beta1**self.steps
+            bias2 = 1.0 - self.beta2**self.steps
+            denominator = second.sqrt() / math.sqrt(bias2)
+            denominator.add_(self.epsilon)
+            self.parameter.addcdiv_(
+                first,
+                denominator,
+                value=-self.learning_rate / bias1,
+            )
+
+
 def _is_instance_problem(problem) -> bool:
     return hasattr(problem, "num_instance")
 
@@ -97,7 +158,7 @@ def _replica_merit(discrete_losses: torch.Tensor) -> torch.Tensor:
 
 
 def _reset_optimizer_rows(
-    optimizer: torch.optim.Optimizer,
+    optimizer: Any,
     parameter: torch.Tensor,
     rows: torch.Tensor,
 ) -> None:
@@ -115,7 +176,7 @@ def _restart_replicas(
     best_sol: torch.Tensor,
     discrete_losses: torch.Tensor,
     relaxation,
-    optimizer: torch.optim.Optimizer,
+    optimizer: Any,
     fraction: float,
     jitter: float,
     learning_rate: float,
@@ -171,6 +232,7 @@ def anneal(
     polish: bool = True,
     return_population: bool = False,
     weight_decay: float = 0.0,
+    optimizer: Literal["adamw", "lightweight-adamw"] = "adamw",
     gradient_clip_norm: float | None = None,
     restart_patience: int | None = None,
     restart_fraction: float = 0.15,
@@ -243,6 +305,11 @@ def anneal(
         AdamW decay applied to the latent coordinates. Defaults to zero:
         shrinking every coordinate toward binary zero introduces an
         objective-independent bias and is not part of the QQA dynamics.
+    optimizer:
+        ``"adamw"`` preserves the standard Torch implementation.
+        ``"lightweight-adamw"`` uses the same single-parameter update without
+        Torch optimizer discovery overhead and is intended for short hybrid
+        callbacks.
     gradient_clip_norm:
         Optional global norm cap for the latent gradient. Useful for
         user-defined objectives with large coefficients or singular
@@ -283,6 +350,8 @@ def anneal(
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
     if not math.isfinite(weight_decay) or weight_decay < 0:
         raise ValueError(f"weight_decay must be finite and >= 0, got {weight_decay}.")
+    if optimizer not in {"adamw", "lightweight-adamw"}:
+        raise ValueError("optimizer must be 'adamw' or 'lightweight-adamw'.")
     if gradient_clip_norm is not None and (
         not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
     ):
@@ -370,7 +439,15 @@ def anneal(
         # seed inside the [0, 1] cube even when the user passes raw {0,1} bits.
         x = (seed + 0.05 * torch.randn_like(seed)).clamp_(0.0, 1.0)
         x.requires_grad_(True)
-    optimizer = torch.optim.AdamW([x], lr=learning_rate, weight_decay=weight_decay)
+    optimiser = (
+        torch.optim.AdamW([x], lr=learning_rate, weight_decay=weight_decay)
+        if optimizer == "adamw"
+        else _LightweightAdamW(
+            x,
+            learning_rate=learning_rate,
+            weight_decay=weight_decay,
+        )
+    )
 
     hp = {"div_param": float(div_param), "restart_count": 0}
     restart_epochs: list[int] = []
@@ -391,7 +468,6 @@ def anneal(
             # downstream code — ``problem.score_summary``, CLI, notebooks —
             # sees a clean ``(N, ...)`` tensor rather than ``(B, N, ...)``.
             best_sol = x_disc[int(min_idx.item())].detach().clone()
-
     # Pre-seed ``state`` with the post-init evaluation so ``on_train_end`` has
     # a valid CallbackState even when ``num_epochs == 0``. The loop below will
     # overwrite it as it iterates.
@@ -427,7 +503,7 @@ def anneal(
         if time_limit is not None and perf_counter() - runtime_start >= time_limit:
             deadline_reached = True
             break
-        optimizer.zero_grad(set_to_none=True)
+        optimiser.zero_grad(set_to_none=True)
         bg = float(schedule(epoch, num_epochs))
 
         with amp_ctx:
@@ -453,7 +529,7 @@ def anneal(
         total.backward()
         if gradient_clip_norm is not None:
             torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
-        optimizer.step()
+        optimiser.step()
 
         relax.perturb_(x, learning_rate, temp)
 
@@ -513,7 +589,7 @@ def anneal(
                 best_sol=best_sol,
                 discrete_losses=loss_disc,
                 relaxation=relax,
-                optimizer=optimizer,
+                optimizer=optimiser,
                 fraction=restart_fraction,
                 jitter=restart_jitter,
                 learning_rate=learning_rate,
@@ -578,6 +654,7 @@ def anneal(
         final_population=x_disc.detach().clone() if return_population else None,
         diagnostics={
             "weight_decay": float(weight_decay),
+            "optimizer": optimizer,
             "gradient_clip_norm": gradient_clip_norm,
             "restart_patience": restart_patience,
             "restart_fraction": float(restart_fraction),

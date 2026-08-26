@@ -32,6 +32,56 @@ def test_cli_help_describes_subcommands():
         assert cmd in out.stdout
 
 
+def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
+    from qqa.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["benchmark", "compare", "example.mps", "--output", "result.json"]
+    )
+    assert args.solvers == ("scip-aggressive", "sg-cqqa")
+    assert args.baseline_solver == "scip-aggressive"
+    assert args.execution_order == "balanced"
+    assert args.maximum_problem_variables == 32
+    assert args.minimum_core_size == 16
+    assert args.maximum_core_saturation == pytest.approx(0.9)
+    assert args.maximum_call_time == pytest.approx(0.15)
+    assert args.qqa_fix_fraction == pytest.approx(0.25)
+    assert args.minimum_relative_improvement == pytest.approx(0.001)
+    assert args.qplib_problem_types is None
+    assert not args.no_subscip_repair
+
+    qplib = build_parser().parse_args(
+        [
+            "benchmark",
+            "compare",
+            "example.qplib",
+            "--qplib-problem-types",
+            "QML",
+            "LIQ",
+            "--output",
+            "result.json",
+        ]
+    )
+    assert qplib.qplib_problem_types == ["QML", "LIQ"]
+
+    run = build_parser().parse_args(["benchmark", "run", "example.mps"])
+    for option in (
+        "core_size",
+        "maximum_problem_variables",
+        "minimum_core_size",
+        "maximum_core_saturation",
+        "completion_time",
+        "minimum_relative_improvement",
+        "maximum_overhead_fraction",
+    ):
+        assert getattr(run, option) == getattr(args, option)
+
+    merged = build_parser().parse_args(
+        ["benchmark", "merge", "shard.json.gz", "--output", "all.json", "--quiet"]
+    )
+    assert merged.quiet
+
+
 def test_cli_score_summary_is_compact_and_auditable(capsys):
     from qqa.cli import _print_score
 

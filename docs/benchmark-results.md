@@ -25,7 +25,43 @@ manifests are committed under
   overhead. The primary hybrid uses two fast candidates, a continuous-
   completion escalation gate, and a 10% overhead cap.
 
-## Primary full-suite comparison
+## Screened non-regression profile
+
+A later conservative campaign adds explicit structural bypasses, a 0.1%
+minimum completion improvement, core-coverage gates, in-place dive completion,
+and QPLIB `PROBTYPE` routing. Its complete artifacts are in
+[`screened-safe`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/benchmark-results/2026-08-26/screened-safe).
+Both suites
+use one solver/LP/Torch thread, seed 0, a 30-second budget, balanced execution
+order, and `scip-aggressive` as the direct baseline.
+The generated manifest intentionally omits `implementation_revision` because
+the campaign was generated before that implementation had a commit identity.
+The omission preserves provenance instead of assigning a later refactor SHA.
+
+| Library | Requested instances | Successful pairs | Final W/T/L | Integral W/T/L | QQA-executed pairs |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| MIPLIB | 240 | 240 | 1 / 239 / 0 | 1 / 239 / 0 | 1 |
+| QPLIB | 453 | 437 | 0 / 437 / 0 | 1 / 436 / 0 | 1 |
+| Combined | 693 | 677 | 1 / 676 / 0 | 2 / 675 / 0 | 2 |
+
+On the two pairs where QQA actually executed, final quality is 1/1/0 and
+primal integral is 2/0/0. MIPLIB uses a 32-variable applicability gate and
+QPLIB uses a 64-variable gate plus an explicit `QML` allow-list. Every other
+successful pair is an exact reuse of the matched aggressive-SCIP baseline,
+marked `equivalent_baseline_reuse`; those ties demonstrate suite-level
+non-regression but are not evidence that QQA improved the instance. QPLIB has
+the same 16 process-isolated failures for both solvers, so failures are not
+counted as wins or losses.
+
+Six-seed checks on the two active families recorded final-quality 1/5/0 for
+`gen-ip054` and 1/5/0 for `QPLIB_0031`. The anytime metric remained sensitive
+to the heuristic cost. Increasing QPLIB completion from 0.25 to 1 second was
+rejected: its six-seed final result was 1/4/1 despite a stronger local
+incumbent on the losing seed. These results support the short, selective
+profile; they do not establish universal dominance over SCIP on arbitrary
+instances, seeds, or time limits.
+
+## Earlier broad primary full-suite comparison
 
 | Library | Paired instances | Feasible baseline → SG-CQQA | Final W/T/L | Integral W/T/L | Median primal error baseline → SG-CQQA | Median integral baseline → SG-CQQA |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |

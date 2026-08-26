@@ -8,9 +8,9 @@ provides dedicated Pareto and black-box solvers.
 
 | | **PQQA** | **QQA→SCIP** | **SG-CQQA** | **CRA-PI-GNN** | **CPRA** |
 |---|---|---|---|---|---|
-| **Module** | `qqa.anneal` | `qqa.solve_qqa_scip` | `qqa.benchmarking.run_miplib` / `run_qplib` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
+| **Module** | `qqa.anneal` | `qqa.hybrid.solve_qqa_scip` | `qqa.benchmarking.run_miplib` / `run_qplib` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
 | **CLI flag** | `--backend qqa` | `--backend scip` | `benchmark run --solver sg-cqqa` | `--backend pignn` | `--backend cpra` |
-| **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[scip,qplib]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
+| **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[benchmark]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
 | **Returns** | `AnnealResult` | `SCIPHybridResult` | `BenchmarkResult` | `AnnealResult` | `AnnealResult` |
 | **Variables** | binary, integer, real, mixed, spin, categorical | binary QUBO | sparse MIP/QP/QCQP | graph QUBO | graph QUBO |
 | **Role** | massively parallel heuristic | one-shot warm start and certify | iterative SCIP primal heuristic | graph inductive bias | diverse GNN heads |
@@ -26,7 +26,8 @@ provides dedicated Pareto and black-box solvers.
 * **SG-CQQA** for MIPLIB/QPLIB files. SCIP repeatedly selects a small
   node-local integer core, tries a cheap original-objective surrogate move,
   and invokes QQA only when the fast path does not improve and enough time
-  remains. Every candidate is completed in a sub-SCIP.
+  remains. Candidates first use an in-place SCIP dive and may then use a
+  bounded sub-SCIP repair.
   See the [MIPLIB/QPLIB guide](../miplib-qplib.md).
 * **CRA-PI-GNN** when you specifically want the GNN inductive bias
   (smoothness over the graph) on large sparse graph problems and you

@@ -37,8 +37,10 @@ def _source_stem(path: Path) -> str:
     return name or "mip-model"
 
 
-def load_mps(path: str | Path) -> AlgebraicModel:
+def load_mps(path: str | Path, *, include_constraints: bool = True) -> AlgebraicModel:
     """Read a linear MPS/LP instance and preserve its sparse original model."""
+    if not isinstance(include_constraints, bool):
+        raise TypeError("include_constraints must be a bool.")
     source = Path(path).expanduser()
     if not source.is_file():
         raise FileNotFoundError(f"MPS instance does not exist: {source}")
@@ -66,34 +68,35 @@ def load_mps(path: str | Path) -> AlgebraicModel:
     )
 
     constraints: list[AlgebraicConstraint] = []
-    for row_number, constraint in enumerate(scip.getConss(transformed=False), start=1):
-        try:
-            coefficients = scip.getValsLinear(constraint)
-        except Exception as exc:
-            raise ValueError(
-                "The MPS importer currently supports linear MIPLIB constraints; "
-                f"constraint {constraint.name!r} is not linear."
-            ) from exc
-        columns: list[int] = []
-        values: list[float] = []
-        for name, value in coefficients.items():
-            if name not in index:
-                raise ValueError(f"Constraint references unknown variable {name!r}.")
-            columns.append(index[name])
-            values.append(float(value))
-        vector = sparse.coo_matrix(
-            (values, ([0] * len(columns), columns)),
-            shape=(1, len(variables)),
-            dtype=np.float64,
-        ).tocsr()
-        constraints.append(
-            AlgebraicConstraint(
-                name=constraint.name or f"c_{row_number}",
-                expression=SparseQuadratic.linear_expression(vector),
-                lower=float(scip.getLhs(constraint)),
-                upper=float(scip.getRhs(constraint)),
+    if include_constraints:
+        for row_number, constraint in enumerate(scip.getConss(transformed=False), start=1):
+            try:
+                coefficients = scip.getValsLinear(constraint)
+            except Exception as exc:
+                raise ValueError(
+                    "The MPS importer currently supports linear MIPLIB constraints; "
+                    f"constraint {constraint.name!r} is not linear."
+                ) from exc
+            columns: list[int] = []
+            values: list[float] = []
+            for name, value in coefficients.items():
+                if name not in index:
+                    raise ValueError(f"Constraint references unknown variable {name!r}.")
+                columns.append(index[name])
+                values.append(float(value))
+            vector = sparse.coo_matrix(
+                (values, ([0] * len(columns), columns)),
+                shape=(1, len(variables)),
+                dtype=np.float64,
+            ).tocsr()
+            constraints.append(
+                AlgebraicConstraint(
+                    name=constraint.name or f"c_{row_number}",
+                    expression=SparseQuadratic.linear_expression(vector),
+                    lower=float(scip.getLhs(constraint)),
+                    upper=float(scip.getRhs(constraint)),
+                )
             )
-        )
 
     result = AlgebraicModel(
         name=_source_stem(source),

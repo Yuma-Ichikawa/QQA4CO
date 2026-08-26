@@ -56,6 +56,7 @@ def complete_integer_assignment(
     time_limit: float = 1.0,
     node_limit: int = 500,
     seed: int = 0,
+    minimum_relative_improvement: float = 0.0,
     verbose: bool = False,
 ) -> CompletionResult:
     """Fix an integer proposal in an independent sub-SCIP and complete it.
@@ -75,6 +76,11 @@ def complete_integer_assignment(
         raise ValueError("node_limit must be a positive integer.")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("seed must be a non-negative integer.")
+    if (
+        not math.isfinite(minimum_relative_improvement)
+        or not 0 <= minimum_relative_improvement < 1
+    ):
+        raise ValueError("minimum_relative_improvement must be in [0, 1).")
     started = perf_counter()
     try:
         from pyscipopt import SCIP_PARAMSETTING, Model
@@ -129,6 +135,22 @@ def complete_integer_assignment(
         sub_model.setIntParam("randomization/lpseed", seed)
     with suppress(Exception):
         sub_model.setHeuristics(SCIP_PARAMSETTING.FAST)
+    primal_before = None
+    if main_model is not None:
+        with suppress(Exception):
+            infinity = abs(float(main_model.infinity()))
+            raw_primal_before = float(main_model.getPrimalbound())
+            if math.isfinite(raw_primal_before) and abs(raw_primal_before) < 0.99 * infinity:
+                primal_before = raw_primal_before
+                tolerance = max(1e-9, minimum_relative_improvement) * max(
+                    1.0, abs(primal_before)
+                )
+                objective_limit = (
+                    primal_before + tolerance
+                    if str(main_model.getObjectiveSense()) == "maximize"
+                    else primal_before - tolerance
+                )
+                sub_model.setObjlimit(objective_limit)
     sub_model.optimize()
     status = str(sub_model.getStatus())
     best = sub_model.getBestSol()
@@ -170,14 +192,40 @@ def complete_integer_assignment(
             ]
             if len(auxiliary) == 1:
                 objective_auxiliary = auxiliary[0].name
+    try:
+        candidate_objective = (
+            algebraic_objective
+            if algebraic_objective is not None
+            else float(sub_model.getSolObjVal(best))
+        )
+        if not math.isfinite(candidate_objective):
+            candidate_objective = None
+    except Exception:
+        candidate_objective = None
+    if primal_before is not None and candidate_objective is not None:
+        tolerance = max(1e-9, minimum_relative_improvement) * max(
+            1.0, abs(primal_before)
+        )
+        improves = (
+            candidate_objective > primal_before + tolerance
+            if str(main_model.getObjectiveSense()) == "maximize"
+            else candidate_objective < primal_before - tolerance
+        )
+        if not improves:
+            return CompletionResult(
+                True,
+                False,
+                False,
+                "nonimproving",
+                candidate_objective,
+                solution_values,
+                perf_counter() - started,
+                len(variable_names),
+            )
     accepted = False
     improved_incumbent = False
     if main_model is not None:
         try:
-            infinity = abs(float(main_model.infinity()))
-            primal_before = float(main_model.getPrimalbound())
-            if not math.isfinite(primal_before) or abs(primal_before) >= 0.99 * infinity:
-                primal_before = None
             main_variables = {
                 variable.name: variable for variable in main_model.getVars(transformed=False)
             }
@@ -214,7 +262,7 @@ def complete_integer_assignment(
                 accepted = bool(
                     main_model.trySol(
                         translated,
-                        printreason=False,
+                        printreason=verbose,
                         completely=True,
                         checkbounds=True,
                         checkintegrality=True,
@@ -247,30 +295,292 @@ def complete_integer_assignment(
         except Exception:
             accepted = False
             improved_incumbent = False
-    try:
-        objective = (
-            algebraic_objective
-            if algebraic_objective is not None
-            else float(sub_model.getSolObjVal(best))
-        )
-        if not math.isfinite(objective):
-            objective = None
-    except Exception:
-        objective = None
     return CompletionResult(
         True,
         accepted,
         improved_incumbent,
         status,
-        objective,
+        candidate_objective,
         solution_values,
         perf_counter() - started,
         len(variable_names),
     )
 
 
+def complete_integer_assignment_dive(
+    model,
+    variables: Sequence,
+    values: Sequence[float],
+    *,
+    heuristic=None,
+    algebraic: AlgebraicModel | None = None,
+    lp_iterations: int = 500,
+    anchor_values: Sequence[float] | None = None,
+    change_order: Sequence[int] | None = None,
+    max_repair_changes: int = 12,
+    minimum_relative_improvement: float = 0.0,
+) -> CompletionResult:
+    """Complete an integer assignment with the active node LP in-place.
+
+    SCIP diving temporarily fixes transformed integer variables, reoptimises
+    the already loaded node LP, and restores the original node afterwards.
+    This avoids constructing a complete sub-SCIP for every QQA candidate.  It
+    is an exact continuous completion for linear MIPs; ``trySol`` remains the
+    final authority for all original constraints and integrality conditions.
+    """
+    if len(variables) != len(values):
+        raise ValueError("variables and values must have the same length.")
+    if len({variable.name for variable in variables}) != len(variables):
+        raise ValueError("variables must be unique.")
+    if isinstance(lp_iterations, bool) or not isinstance(lp_iterations, int) or lp_iterations < 1:
+        raise ValueError("lp_iterations must be a positive integer.")
+    if (
+        isinstance(max_repair_changes, bool)
+        or not isinstance(max_repair_changes, int)
+        or max_repair_changes < 0
+    ):
+        raise ValueError("max_repair_changes must be a non-negative integer.")
+    if (
+        not math.isfinite(minimum_relative_improvement)
+        or not 0 <= minimum_relative_improvement < 1
+    ):
+        raise ValueError("minimum_relative_improvement must be in [0, 1).")
+    started = perf_counter()
+    candidate = None
+    unsuccessful_status = "lp_cutoff_or_infeasible"
+    incumbent = model.getBestSol()
+    fixed_values = np.asarray(values, dtype=np.float64)
+    anchor = None if anchor_values is None else np.rint(np.asarray(anchor_values, dtype=np.float64))
+    if anchor is not None and anchor.shape != fixed_values.shape:
+        raise ValueError("anchor_values must have the same shape as values.")
+    if change_order is None:
+        ordered_changes = list(range(len(variables)))
+    else:
+        ordered_changes = [int(index) for index in change_order]
+        if len(set(ordered_changes)) != len(ordered_changes) or any(
+            index < 0 or index >= len(variables) for index in ordered_changes
+        ):
+            raise ValueError("change_order must contain unique valid positions.")
+    primal_before = None
+    try:
+        model.startDive()
+        try:
+            local_lower = np.asarray(
+                [float(model.getVarLbDive(variable)) for variable in variables]
+            )
+            local_upper = np.asarray(
+                [float(model.getVarUbDive(variable)) for variable in variables]
+            )
+            if np.any(fixed_values < local_lower - 1e-7) or np.any(
+                fixed_values > local_upper + 1e-7
+            ):
+                return CompletionResult(
+                    False,
+                    False,
+                    False,
+                    "bound_infeasible",
+                    None,
+                    None,
+                    perf_counter() - started,
+                    len(variables),
+                )
+            if anchor is not None and (
+                np.any(anchor < local_lower - 1e-7) or np.any(anchor > local_upper + 1e-7)
+            ):
+                anchor = None
+
+            def fix(position: int, value: float) -> None:
+                variable = variables[position]
+                fixed = float(value)
+                current_lower = float(model.getVarLbDive(variable))
+                if fixed < current_lower:
+                    model.chgVarLbDive(variable, fixed)
+                    model.chgVarUbDive(variable, fixed)
+                else:
+                    model.chgVarUbDive(variable, fixed)
+                    model.chgVarLbDive(variable, fixed)
+
+            working = fixed_values.copy() if anchor is None else anchor.copy()
+            for position, value in enumerate(working):
+                fix(position, value)
+            changed = [
+                position
+                for position in ordered_changes
+                if anchor is not None and abs(fixed_values[position] - anchor[position]) > 0.5
+            ][:max_repair_changes]
+            solve_count = 2 + len(changed)
+            iteration_limit = max(20, lp_iterations // max(1, solve_count))
+            if anchor is None:
+                lp_error, cutoff = model.solveDiveLP(itlim=iteration_limit)
+            elif changed:
+                for position in changed:
+                    fix(position, fixed_values[position])
+                lp_error, cutoff = model.solveDiveLP(itlim=iteration_limit)
+                if not lp_error and not cutoff:
+                    working[changed] = fixed_values[changed]
+                elif cutoff and not lp_error:
+                    for position in changed:
+                        fix(position, anchor[position])
+                    accepted_change = False
+                    for position in changed:
+                        fix(position, fixed_values[position])
+                        trial_error, trial_cutoff = model.solveDiveLP(itlim=iteration_limit)
+                        if trial_error:
+                            lp_error = True
+                            break
+                        if trial_cutoff:
+                            fix(position, anchor[position])
+                        else:
+                            working[position] = fixed_values[position]
+                            accepted_change = True
+                    if not lp_error and accepted_change:
+                        lp_error, cutoff = model.solveDiveLP(itlim=iteration_limit)
+                    else:
+                        cutoff = True
+            else:
+                lp_error, cutoff = False, True
+            if not lp_error and not cutoff:
+                candidate = model.createSol(heuristic, initlp=True)
+                for variable in model.getVars(transformed=True):
+                    if variable.isInLP():
+                        value = float(model.getSolVal(None, variable))
+                    elif incumbent is not None:
+                        value = float(model.getSolVal(incumbent, variable))
+                    else:
+                        lower = float(variable.getLbLocal())
+                        upper = float(variable.getUbLocal())
+                        value = min(max(0.0, lower), upper)
+                    model.setSolVal(candidate, variable, value)
+                for variable, value in zip(variables, working, strict=True):
+                    model.setSolVal(candidate, variable, float(value))
+            elif anchor is not None and not changed:
+                unsuccessful_status = "no_integer_change"
+            else:
+                lp_status = int(model.getLPSolstat())
+                unsuccessful_status = {
+                    2: "lp_infeasible",
+                    4: "objective_cutoff",
+                    5: "lp_iteration_limit",
+                    6: "lp_time_limit",
+                    7: "lp_error",
+                }.get(lp_status, "lp_cutoff_or_infeasible")
+        finally:
+            model.endDive()
+    except Exception:
+        return CompletionResult(
+            False,
+            False,
+            False,
+            "dive_failed",
+            None,
+            None,
+            perf_counter() - started,
+            len(variables),
+        )
+    if candidate is None:
+        return CompletionResult(
+            False,
+            False,
+            False,
+            unsuccessful_status,
+            None,
+            None,
+            perf_counter() - started,
+            len(variables),
+        )
+
+    objective = None
+    solution_values = None
+    original_variables = tuple(model.getVars(transformed=False))
+    if algebraic is not None:
+        by_name = {variable.name: variable for variable in original_variables}
+        if all(name in by_name for name in algebraic.variable_names):
+            solution_values = np.asarray(
+                [model.getSolVal(candidate, by_name[name]) for name in algebraic.variable_names],
+                dtype=np.float64,
+            )
+            evaluation = algebraic.evaluate(solution_values)
+            if evaluation.maximum_infeasibility <= 1e-6:
+                objective = float(evaluation.objective)
+    try:
+        infinity = abs(float(model.infinity()))
+        raw_primal_before = float(model.getPrimalbound())
+        if math.isfinite(raw_primal_before) and abs(raw_primal_before) < 0.99 * infinity:
+            primal_before = raw_primal_before
+        feasible = bool(
+            model.checkSol(
+                candidate,
+                printreason=False,
+                completely=True,
+                checkbounds=True,
+                checkintegrality=True,
+                checklprows=True,
+            )
+        )
+        cutoff_objective = objective
+        if cutoff_objective is None:
+            with suppress(Exception):
+                cutoff_objective = float(model.getSolObjVal(candidate))
+        if feasible and primal_before is not None and cutoff_objective is not None:
+            tolerance = max(1e-9, minimum_relative_improvement) * max(
+                1.0,
+                abs(primal_before),
+            )
+            improves_enough = (
+                cutoff_objective > primal_before + tolerance
+                if str(model.getObjectiveSense()) == "maximize"
+                else cutoff_objective < primal_before - tolerance
+            )
+            if not improves_enough:
+                return CompletionResult(
+                    True,
+                    False,
+                    False,
+                    "nonimproving",
+                    objective,
+                    solution_values,
+                    perf_counter() - started,
+                    len(variables),
+                )
+        accepted = bool(
+            feasible
+            and model.trySol(
+                candidate,
+                printreason=False,
+                completely=False,
+                checkbounds=False,
+                checkintegrality=False,
+                checklprows=False,
+            )
+        )
+        primal_after = float(model.getPrimalbound()) if accepted else primal_before
+    except Exception:
+        feasible = False
+        accepted = False
+        primal_after = primal_before
+    improved = accepted and primal_before is None
+    if accepted and primal_before is not None and primal_after is not None:
+        tolerance = 1e-9 * max(1.0, abs(primal_after), abs(primal_before))
+        improved = (
+            primal_after > primal_before + tolerance
+            if str(model.getObjectiveSense()) == "maximize"
+            else primal_after < primal_before - tolerance
+        )
+    return CompletionResult(
+        feasible,
+        accepted,
+        improved,
+        "accepted" if accepted else "feasible" if feasible else "rejected",
+        objective,
+        solution_values,
+        perf_counter() - started,
+        len(variables),
+    )
+
+
 __all__ = [
     "CompletionResult",
     "complete_integer_assignment",
+    "complete_integer_assignment_dive",
     "create_completion_template",
 ]

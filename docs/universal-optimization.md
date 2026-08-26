@@ -85,9 +85,10 @@ pip install "qqa[scip]"
 ```python
 import networkx as nx
 import qqa
+from qqa.hybrid import solve_qqa_scip
 
 problem = qqa.MaxCut(nx.random_regular_graph(3, 100, seed=0))
-result = qqa.solve_qqa_scip(
+result = solve_qqa_scip(
     problem,
     qqa_kwargs={"sol_size": 512, "num_epochs": 2000, "device": "cuda"},
     time_limit=120,
@@ -109,9 +110,10 @@ bounded real, nonlinear objective, and nonlinear constraints:
 
 ```python
 from pathlib import Path
+from qqa.hybrid import solve_spec_scip
 
 spec = qqa.ModelSpec.from_json(Path("audited-model.json").read_text())
-result = qqa.solve_spec_scip(
+result = solve_spec_scip(
     spec,
     qqa_kwargs={"sol_size": 512, "num_epochs": 1500, "device": "cuda"},
     time_limit=120,
@@ -239,10 +241,10 @@ model can later be solved without an API call or key:
 qqa tex --spec audited-model.json --device cuda
 ```
 
-`--solver auto` selects the QQA→SCIP proof path for a single-objective model
-when `qqa[scip]` is installed, and otherwise uses QQA. `--solver qqa` is
-always available; multi-objective models automatically use the one-run Pareto
-solver. `--show-model` prints the reviewed intermediate representation.
+`--solver auto` keeps single-objective models on pure QQA regardless of which
+optional packages happen to be installed. Use `--solver scip` to opt in to the
+QQA→SCIP proof path. Multi-objective models automatically use the one-run
+Pareto solver. `--show-model` prints the reviewed intermediate representation.
 
 The translator requests a JSON schema through the Responses API and falls
 back to prompt-enforced JSON for compatible gateways without Structured

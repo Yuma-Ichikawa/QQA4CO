@@ -29,6 +29,46 @@ from pathlib import Path
 __all__ = ["main", "build_parser"]
 
 
+def _add_qqa_heuristic_options(parser: argparse.ArgumentParser) -> None:
+    """Register the shared, explicitly opt-in SG-CQQA tuning surface."""
+    parser.add_argument("--core-size", type=int, default=32)
+    parser.add_argument("--maximum-problem-variables", type=int, default=32)
+    parser.add_argument("--maximum-integer-variables", type=int, default=2048)
+    parser.add_argument("--qplib-problem-types", nargs="+", default=None)
+    parser.add_argument("--minimum-core-size", type=int, default=16)
+    parser.add_argument("--maximum-core-saturation", type=float, default=0.9)
+    parser.add_argument("--sol-size", type=int, default=16)
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--max-calls", type=int, default=1)
+    parser.add_argument("--max-candidates", type=int, default=1)
+    parser.add_argument("--completion-time", type=float, default=0.25)
+    parser.add_argument("--completion-nodes", type=int, default=100)
+    parser.add_argument("--dive-lp-iterations", type=int, default=300)
+    parser.add_argument("--qqa-fix-fraction", type=float, default=0.25)
+    parser.add_argument("--repair-beam-width", type=int, default=16)
+    parser.add_argument("--reference-pool-size", type=int, default=3)
+    parser.add_argument("--minimum-relative-improvement", type=float, default=0.001)
+    parser.add_argument("--min-call-time", type=float, default=1.0)
+    parser.add_argument("--min-qqa-time", type=float, default=2.0)
+    parser.add_argument("--maximum-call-time", type=float, default=0.15)
+    parser.add_argument("--maximum-call-time-fraction", type=float, default=0.05)
+    parser.add_argument("--min-nodes-between-calls", type=int, default=100)
+    parser.add_argument("--fast-candidates", type=int, default=0)
+    parser.add_argument("--no-subscip-repair", action="store_true")
+    parser.add_argument("--local-branching-radius", type=int, default=None)
+    parser.add_argument("--max-lp-rows", type=int, default=64)
+    parser.add_argument("--objective-weight", type=float, default=1.0)
+    parser.add_argument("--row-penalty", type=float, default=20.0)
+    parser.add_argument("--proximity-weight", type=float, default=0.02)
+    parser.add_argument("--reduced-cost-weight", type=float, default=0.01)
+    parser.add_argument("--allow-nonimproving-candidates", action="store_true")
+    parser.add_argument("--allow-no-incumbent", action="store_true")
+    parser.add_argument("--no-adaptive-row-lagrangian", action="store_true")
+    parser.add_argument("--continue-qqa-without-improvement", action="store_true")
+    parser.add_argument("--maximum-overhead-fraction", type=float, default=0.05)
+    parser.add_argument("--device", default="cpu")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qqa",
@@ -420,6 +460,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     benchmark_merge.add_argument("campaign", nargs="+")
     benchmark_merge.add_argument("--output", required=True)
+    benchmark_merge.add_argument("--quiet", action="store_true")
 
     benchmark_run = benchmark_sub.add_parser(
         "run",
@@ -438,27 +479,8 @@ def build_parser() -> argparse.ArgumentParser:
     benchmark_run.add_argument("--reference-file", default=None)
     benchmark_run.add_argument("--output", default=None, help="Write machine-readable JSON.")
     benchmark_run.add_argument("--quiet", action="store_true")
-    benchmark_run.add_argument("--core-size", type=int, default=64)
-    benchmark_run.add_argument("--sol-size", type=int, default=32)
-    benchmark_run.add_argument("--epochs", type=int, default=120)
-    benchmark_run.add_argument("--max-calls", type=int, default=4)
-    benchmark_run.add_argument("--max-candidates", type=int, default=8)
-    benchmark_run.add_argument("--completion-time", type=float, default=1.0)
-    benchmark_run.add_argument("--completion-nodes", type=int, default=500)
-    benchmark_run.add_argument("--min-call-time", type=float, default=3.0)
-    benchmark_run.add_argument("--min-qqa-time", type=float, default=20.0)
-    benchmark_run.add_argument("--fast-candidates", type=int, default=2)
-    benchmark_run.add_argument("--local-branching-radius", type=int, default=None)
-    benchmark_run.add_argument("--max-lp-rows", type=int, default=128)
-    benchmark_run.add_argument("--objective-weight", type=float, default=1.0)
-    benchmark_run.add_argument("--row-penalty", type=float, default=20.0)
-    benchmark_run.add_argument("--proximity-weight", type=float, default=0.02)
-    benchmark_run.add_argument("--reduced-cost-weight", type=float, default=0.01)
-    benchmark_run.add_argument("--allow-nonimproving-candidates", action="store_true")
-    benchmark_run.add_argument("--continue-qqa-without-improvement", action="store_true")
-    benchmark_run.add_argument("--maximum-overhead-fraction", type=float, default=0.1)
+    _add_qqa_heuristic_options(benchmark_run)
     benchmark_run.add_argument("--seed", type=int, default=0)
-    benchmark_run.add_argument("--device", default="cpu")
 
     benchmark_compare = benchmark_sub.add_parser(
         "compare",
@@ -470,9 +492,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--solvers",
         nargs="+",
         choices=("scip", "scip-aggressive", "sg-cqqa"),
-        default=("scip", "scip-aggressive", "sg-cqqa"),
+        default=("scip-aggressive", "sg-cqqa"),
     )
-    benchmark_compare.add_argument("--baseline-solver", default="scip")
+    benchmark_compare.add_argument("--baseline-solver", default="scip-aggressive")
+    benchmark_compare.add_argument(
+        "--execution-order", choices=("balanced", "fixed"), default="balanced"
+    )
     benchmark_compare.add_argument("--seeds", nargs="+", type=int, default=(0,))
     benchmark_compare.add_argument("--time-limit", type=float, default=60.0)
     benchmark_compare.add_argument("--gap", type=float, default=0.0)
@@ -495,26 +520,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="When resuming, retry runs recorded as failures.",
     )
     benchmark_compare.add_argument("--quiet", action="store_true")
-    benchmark_compare.add_argument("--core-size", type=int, default=64)
-    benchmark_compare.add_argument("--sol-size", type=int, default=32)
-    benchmark_compare.add_argument("--epochs", type=int, default=120)
-    benchmark_compare.add_argument("--max-calls", type=int, default=4)
-    benchmark_compare.add_argument("--max-candidates", type=int, default=8)
-    benchmark_compare.add_argument("--completion-time", type=float, default=1.0)
-    benchmark_compare.add_argument("--completion-nodes", type=int, default=500)
-    benchmark_compare.add_argument("--min-call-time", type=float, default=3.0)
-    benchmark_compare.add_argument("--min-qqa-time", type=float, default=20.0)
-    benchmark_compare.add_argument("--fast-candidates", type=int, default=2)
-    benchmark_compare.add_argument("--local-branching-radius", type=int, default=None)
-    benchmark_compare.add_argument("--max-lp-rows", type=int, default=128)
-    benchmark_compare.add_argument("--objective-weight", type=float, default=1.0)
-    benchmark_compare.add_argument("--row-penalty", type=float, default=20.0)
-    benchmark_compare.add_argument("--proximity-weight", type=float, default=0.02)
-    benchmark_compare.add_argument("--reduced-cost-weight", type=float, default=0.01)
-    benchmark_compare.add_argument("--allow-nonimproving-candidates", action="store_true")
-    benchmark_compare.add_argument("--continue-qqa-without-improvement", action="store_true")
-    benchmark_compare.add_argument("--maximum-overhead-fraction", type=float, default=0.1)
-    benchmark_compare.add_argument("--device", default="cpu")
+    _add_qqa_heuristic_options(benchmark_compare)
 
     tex = sub.add_parser(
         "tex",
@@ -570,8 +576,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("auto", "qqa", "scip"),
         default="auto",
         help=(
-            "Numerical solver. auto uses QQA→SCIP for single-objective models "
-            "when qqa[scip] is installed, otherwise QQA."
+            "Numerical solver. auto is pure QQA; SCIP refinement is opt-in via "
+            "--solver scip and requires qqa[scip]."
         ),
     )
     tex.add_argument("--scip-time-limit", type=float, default=60.0)
@@ -912,9 +918,11 @@ def _cmd_solve(args: argparse.Namespace) -> int:
 
     backend = getattr(args, "backend", "qqa")
     if backend == "scip":
+        from qqa.hybrid import solve_qqa_scip
+
         qqa_lr = args.learning_rate if args.learning_rate is not None else 1.0
         try:
-            result = qqa.solve_qqa_scip(
+            result = solve_qqa_scip(
                 problem,
                 qqa_kwargs={
                     "sol_size": args.sol_size,
@@ -1344,7 +1352,8 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         output = Path(args.output).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(rendered + "\n", encoding="utf-8")
-        print(rendered)
+        if not args.quiet:
+            print(rendered)
         return 0
 
     from qqa.hybrid import QQAHeuristicConfig
@@ -1353,15 +1362,33 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
     seed = args.seeds[0] if comparison else args.seed
     config = QQAHeuristicConfig(
         core_size=args.core_size,
+        maximum_problem_variables=args.maximum_problem_variables,
+        maximum_integer_variables=args.maximum_integer_variables,
+        allowed_qplib_problem_types=(
+            tuple(args.qplib_problem_types)
+            if args.qplib_problem_types is not None
+            else None
+        ),
+        minimum_core_size=args.minimum_core_size,
+        maximum_core_saturation=args.maximum_core_saturation,
         sol_size=args.sol_size,
         epochs=args.epochs,
         max_calls=args.max_calls,
         max_candidates=args.max_candidates,
         completion_time=args.completion_time,
         completion_nodes=args.completion_nodes,
+        dive_lp_iterations=args.dive_lp_iterations,
+        subscip_repair=not args.no_subscip_repair,
+        qqa_fix_fraction=args.qqa_fix_fraction,
+        repair_beam_width=args.repair_beam_width,
+        reference_pool_size=args.reference_pool_size,
+        minimum_relative_improvement=args.minimum_relative_improvement,
         minimum_call_time=args.min_call_time,
         minimum_qqa_time=args.min_qqa_time,
+        maximum_call_time=args.maximum_call_time,
+        maximum_call_time_fraction=args.maximum_call_time_fraction,
         fast_candidates=args.fast_candidates,
+        min_nodes_between_calls=args.min_nodes_between_calls,
         local_branching_radius=args.local_branching_radius,
         max_lp_rows=args.max_lp_rows,
         objective_weight=args.objective_weight,
@@ -1369,6 +1396,8 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
         proximity_weight=args.proximity_weight,
         reduced_cost_weight=args.reduced_cost_weight,
         require_surrogate_improvement=not args.allow_nonimproving_candidates,
+        require_incumbent=not args.allow_no_incumbent,
+        adaptive_row_lagrangian=not args.no_adaptive_row_lagrangian,
         stop_qqa_after_nonimproving_call=not args.continue_qqa_without_improvement,
         maximum_overhead_fraction=args.maximum_overhead_fraction,
         threads=args.threads,
@@ -1391,6 +1420,7 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
             solvers=args.solvers,
             seeds=args.seeds,
             baseline_solver=args.baseline_solver,
+            execution_order=args.execution_order,
             qqa_config=config,
             checkpoint_file=args.output,
             resume=args.resume,
@@ -1669,9 +1699,11 @@ def _cmd_tex(args: argparse.Namespace) -> int:
             figure.write_html(report_path, include_plotlyjs=True, full_html=True)
             print(f"report     : {report_path}")
     else:
-        use_scip = args.solver == "scip" or (args.solver == "auto" and qqa.scip_available())
+        use_scip = args.solver == "scip"
         if use_scip:
-            result = qqa.solve_spec_scip(
+            from qqa.hybrid import solve_spec_scip
+
+            result = solve_spec_scip(
                 spec,
                 qqa_kwargs={
                     "sol_size": args.sol_size,
@@ -1704,10 +1736,7 @@ def _cmd_tex(args: argparse.Namespace) -> int:
                 "proven_optimal": result.proven_optimal,
             }
         else:
-            if args.solver == "auto":
-                print("solver     : qqa (SCIP extra not installed)")
-            else:
-                print("solver     : qqa")
+            print("solver     : qqa")
             result = problem.solve(
                 sol_size=args.sol_size,
                 num_epochs=args.epochs,

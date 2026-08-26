@@ -17,7 +17,6 @@ from sys import version_info
 from time import perf_counter
 
 import numpy as np
-import torch
 
 from qqa.algebraic import AlgebraicModel
 from qqa.benchmarking.metrics import (
@@ -32,7 +31,8 @@ from qqa.benchmarking.metrics import (
     summarise_benchmarks,
     summarise_comparison,
 )
-from qqa.hybrid.scip_heuristic import QQAHeuristicConfig, include_qqa_heuristic
+from qqa.hybrid.heuristic_types import QQAHeuristicConfig
+from qqa.hybrid.scip_heuristic import include_qqa_heuristic
 from qqa.io import load_mps, load_qplib
 from qqa.presolve import build_scip_model
 
@@ -71,7 +71,10 @@ def load_reference_values(path: str | Path) -> dict[str, tuple[str, float | None
 
 
 def _load_algebraic(path: Path, format: str) -> AlgebraicModel:
-    return load_qplib(path) if format == "qplib" else load_mps(path)
+    # SCIP itself remains the feasibility authority for MIPLIB runs and the
+    # QQA surrogate reads active LP rows directly. Avoid duplicating every MPS
+    # row into Python sparse objects merely for objective/provenance metrics.
+    return load_qplib(path) if format == "qplib" else load_mps(path, include_constraints=False)
 
 
 def _load_model(
@@ -130,6 +133,97 @@ def _configure_scip_threads(model, threads: int) -> None:
     """
     model.setIntParam("parallel/maxnthreads", int(threads))
     model.setIntParam("lp/threads", int(threads))
+
+
+def _qqa_is_applicable(
+    algebraic: AlgebraicModel,
+    config: QQAHeuristicConfig,
+) -> bool:
+    """Apply cheap original-model gates before registering a SCIP plugin."""
+    return bool(
+        algebraic.integer_indices.size > 0
+        and (
+            algebraic.problem_type is None
+            or config.allowed_qplib_problem_types is None
+            or algebraic.problem_type.upper() in config.allowed_qplib_problem_types
+        )
+        and (
+            config.maximum_integer_variables is None
+            or algebraic.integer_indices.size <= config.maximum_integer_variables
+        )
+        and (
+            config.maximum_problem_variables is None
+            or algebraic.num_variables <= config.maximum_problem_variables
+        )
+    )
+
+
+def _qqa_applicability_hint(
+    source: Path,
+    resolved_format: str,
+    config: QQAHeuristicConfig,
+    *,
+    algebraic: AlgebraicModel | None,
+) -> bool | None:
+    """Return a cheap structural decision without loading a QPLIB model.
+
+    QPLIB's second ``PROBTYPE`` character is the variable class and the fourth
+    header line is the variable count.  Returning ``None`` on malformed input
+    deliberately falls back to independent solver runs and the normal parser
+    error boundary.
+    """
+    if algebraic is not None:
+        return _qqa_is_applicable(algebraic, config)
+    if resolved_format != "qplib":
+        return None
+    try:
+        with source.open(encoding="utf-8") as stream:
+            stream.readline()
+            problem_type = stream.readline().strip().upper()
+            stream.readline()
+            num_variables = int(stream.readline().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    if len(problem_type) != 3 or problem_type[1] not in {"B", "C", "G", "I", "M"}:
+        return None
+    if (
+        config.allowed_qplib_problem_types is not None
+        and problem_type not in config.allowed_qplib_problem_types
+    ):
+        return False
+    variable_class = problem_type[1]
+    if variable_class == "C":
+        return False
+    if (
+        config.maximum_problem_variables is not None
+        and num_variables > config.maximum_problem_variables
+    ):
+        return False
+    # Pure-binary and pure-integer QPLIB models expose the exact integer
+    # count in the header. Mixed classes need their sparse type exceptions to
+    # be parsed, so an integer-count gate remains deliberately undecided here
+    # and is applied exactly after loading the algebraic model.
+    return not (
+        variable_class in {"B", "I"}
+        and config.maximum_integer_variables is not None
+        and num_variables > config.maximum_integer_variables
+    )
+
+
+def _reuse_equivalent_aggressive_result(result: BenchmarkResult) -> BenchmarkResult:
+    """Represent SG-CQQA's exact structural bypass without a noisy rerun."""
+    return replace(
+        result,
+        solver="sg-cqqa",
+        qqa=None,
+        run_config={
+            **result.run_config,
+            "torch_threads": None,
+            "qqa_applicable": False,
+            "qqa_plugin_active": False,
+            "equivalent_baseline_reuse": True,
+        },
+    )
 
 
 def run_benchmark_instance(
@@ -218,36 +312,32 @@ def run_benchmark_instance(
         time_horizon=float(time_limit),
     )
     tracker.attach(model)
-    has_integer_variables = algebraic.integer_indices.size > 0
-    qqa_applicable = solver == "sg-cqqa" and has_integer_variables
+    resolved_qqa_config = qqa_config or QQAHeuristicConfig()
+    qqa_structurally_applicable = _qqa_is_applicable(algebraic, resolved_qqa_config)
+    qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable
     heuristic = (
         include_qqa_heuristic(
             model,
-            qqa_config,
+            resolved_qqa_config,
             algebraic=algebraic,
             incumbent_provider=lambda: tracker.best_values,
+            completion_template_factory=(
+                lambda: _load_model(source, resolved_format, algebraic=algebraic)[1]
+            ),
         )
         if qqa_applicable
         else None
     )
-    previous_torch_threads = torch.get_num_threads()
-    changed_torch_threads = qqa_applicable and previous_torch_threads != threads
-    if changed_torch_threads:
-        torch.set_num_threads(threads)
     # Solver-model construction, plugin setup, QQA calls and SCIP share one
     # wall-clock budget. A paired campaign performs its common algebraic import
     # once before entering this solver-specific clock.
     tracker.time_offset = perf_counter() - started
     remaining = float(time_limit) - tracker.time_offset
     optimised = remaining > 1e-3
-    try:
-        if optimised:
-            model.setRealParam("limits/time", remaining)
-            model.optimize()
-        runtime = perf_counter() - started
-    finally:
-        if changed_torch_threads:
-            torch.set_num_threads(previous_torch_threads)
+    if optimised:
+        model.setRealParam("limits/time", remaining)
+        model.optimize()
+    runtime = perf_counter() - started
     status = str(model.getStatus()) if optimised else "setup-time-limit"
     best = model.getBestSol() if optimised else None
     objective = None
@@ -335,7 +425,7 @@ def run_benchmark_instance(
             "scip_parallel_threads": threads,
             "scip_lp_threads": threads,
             "torch_threads": threads if qqa_applicable else None,
-            "qqa_applicable": has_integer_variables,
+            "qqa_applicable": qqa_structurally_applicable,
             "qqa_plugin_active": qqa_applicable,
             "metric_clock": (
                 "total_wall_clock"
@@ -486,12 +576,26 @@ def run_benchmark_suite(
     return BenchmarkSuiteResult(results, summarise_benchmarks(results))
 
 
+def _comparison_solver_order(
+    solvers: tuple[str, ...],
+    *,
+    execution_order: str,
+    seed: int,
+    instance_index: int,
+) -> tuple[str, ...]:
+    """Return a deterministic order while balancing first-run cache effects."""
+    if execution_order == "fixed" or (seed + instance_index) % 2 == 0:
+        return solvers
+    return tuple(reversed(solvers))
+
+
 def compare_benchmark_solvers(
     paths,
     *,
     solvers=("scip", "scip-aggressive", "sg-cqqa"),
     seeds=(0,),
     baseline_solver: str = "scip",
+    execution_order: str = "balanced",
     qqa_config: QQAHeuristicConfig | None = None,
     checkpoint_file: str | Path | None = None,
     resume: bool = False,
@@ -516,6 +620,8 @@ def compare_benchmark_solvers(
         raise ValueError("Unknown comparison solver.")
     if baseline_solver not in solver_names:
         raise ValueError("baseline_solver must be included in solvers.")
+    if execution_order not in {"fixed", "balanced"}:
+        raise ValueError("execution_order must be 'fixed' or 'balanced'.")
     seed_values = tuple(seeds)
     if not seed_values or any(
         isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 for seed in seed_values
@@ -523,11 +629,17 @@ def compare_benchmark_solvers(
         raise ValueError("seeds must contain non-negative integers.")
 
     base_config = qqa_config or QQAHeuristicConfig()
+    qqa_config_metadata = asdict(base_config)
+    # Per-run seeds come from the explicit campaign ``seeds`` axis below.
+    # Keeping the constructor seed here duplicates that axis and prevents
+    # independently executed seed shards from validating as one campaign.
+    qqa_config_metadata.pop("seed", None)
     comparison_config = {
         "instances": list(instance_names),
         "solvers": list(solver_names),
         "seeds": list(seed_values),
         "baseline_solver": baseline_solver,
+        "execution_order": execution_order,
         "format": kwargs.get("format", "auto"),
         "time_limit": float(kwargs.get("time_limit", 60.0)),
         "relative_gap_limit": float(kwargs.get("relative_gap_limit", 0.0)),
@@ -538,10 +650,11 @@ def compare_benchmark_solvers(
             "torch_sg_cqqa": int(kwargs.get("threads", 1)),
         },
         "metric_clock": "solver_wall_clock_after_common_import",
+        "equivalent_bypass_reuse": True,
         "reference_name": (
             Path(kwargs["reference_file"]).name if kwargs.get("reference_file") else None
         ),
-        "qqa_config": asdict(base_config),
+        "qqa_config": qqa_config_metadata,
     }
     checkpoint = Path(checkpoint_file).expanduser() if checkpoint_file is not None else None
     results: list[BenchmarkResult] = []
@@ -614,7 +727,7 @@ def compare_benchmark_solvers(
 
     for seed in seed_values:
         seeded_config = replace(base_config, seed=seed)
-        for instance in instances:
+        for instance_index, instance in enumerate(instances):
             source = Path(instance).expanduser()
             name = source.name
             requested_format = kwargs.get("format", "auto")
@@ -647,10 +760,66 @@ def compare_benchmark_solvers(
                         )
                     save_checkpoint()
                     continue
-            for solver in solver_names:
+            ordered_solvers = _comparison_solver_order(
+                solver_names,
+                execution_order=execution_order,
+                seed=seed,
+                instance_index=instance_index,
+            )
+            applicability_hint = _qqa_applicability_hint(
+                source,
+                resolved_format,
+                seeded_config,
+                algebraic=algebraic,
+            )
+            if applicability_hint is False and "scip-aggressive" in ordered_solvers:
+                ordered_solvers = (
+                    "scip-aggressive",
+                    *(solver for solver in ordered_solvers if solver != "scip-aggressive"),
+                )
+            for solver in ordered_solvers:
                 key = (name, solver, seed)
                 if key in completed or key in failed:
                     continue
+                if solver == "sg-cqqa" and applicability_hint is False:
+                    equivalent = next(
+                        (
+                            row
+                            for row in results
+                            if str(row.provenance.get("source_name", row.instance)) == name
+                            and row.solver == "scip-aggressive"
+                            and int(row.run_config.get("seed", 0)) == seed
+                        ),
+                        None,
+                    )
+                    if equivalent is not None:
+                        results.append(_reuse_equivalent_aggressive_result(equivalent))
+                        completed.add(key)
+                        save_checkpoint()
+                        continue
+                    equivalent_failure = next(
+                        (
+                            row
+                            for row in failures
+                            if row.instance == name
+                            and row.solver == "scip-aggressive"
+                            and row.seed == seed
+                        ),
+                        None,
+                    )
+                    if equivalent_failure is not None:
+                        failures.append(
+                            BenchmarkFailure(
+                                name,
+                                equivalent_failure.format,
+                                "sg-cqqa",
+                                seed,
+                                equivalent_failure.error_type,
+                            )
+                        )
+                        failed.add(key)
+                        save_checkpoint()
+                        continue
                 try:
                     if resolved_format == "qplib":
                         result = _run_isolated_benchmark_instance(

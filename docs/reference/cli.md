@@ -170,19 +170,27 @@ PROBTYPE when available, and portable source provenance.
 `--solver sg-cqqa`. Shared flags are
 `--time-limit`, `--gap`, `--threads`, `--reference-file`, `--format`,
 `--output`, and `--quiet`. SG-CQQA additionally accepts `--core-size`,
-`--sol-size`, `--epochs`, `--max-calls`, `--max-candidates`,
-`--completion-time`, `--completion-nodes`, `--min-call-time`,
-`--min-qqa-time`, `--fast-candidates`, `--max-lp-rows`, objective/row/proximity
-weights, `--continue-qqa-without-improvement`, `--seed`, and `--device`.
+`--maximum-problem-variables`, `--maximum-integer-variables`,
+`--qplib-problem-types`, `--minimum-core-size`,
+`--maximum-core-saturation`, `--sol-size`, `--epochs`, `--max-calls`,
+`--max-candidates`, `--completion-time`, `--completion-nodes`,
+`--dive-lp-iterations`, `--qqa-fix-fraction`, `--repair-beam-width`,
+`--reference-pool-size`, `--minimum-relative-improvement`,
+call-time/node spacing limits,
+`--fast-candidates`, `--max-lp-rows`, objective/row/proximity weights,
+`--allow-no-incumbent`, `--no-adaptive-row-lagrangian`,
+`--no-subscip-repair`, `--continue-qqa-without-improvement`, `--seed`, and
+`--device`. `--qplib-problem-types` is a three-character PROBTYPE allow-list;
+non-matching QPLIB inputs use the exact aggressive-SCIP bypass in paired runs.
 The time limit covers parsing/setup, QQA, continuous completion, and SCIP.
 
 `compare` runs a paired Cartesian product of input instances, `--solvers`, and
 `--seeds`. Every pair receives the same total budget and thread count. Its JSON
 contains per-run trajectories, portable run configuration, per-solver medians,
-and win/tie/loss counts against `--baseline-solver`. Use
-`scip-aggressive` as the ablation baseline when measuring the incremental
-effect of the SG-CQQA plugin, because both then use the same aggressive native
-SCIP heuristic setting.
+and win/tie/loss counts against `--baseline-solver`, including counts
+stratified by actual QQA execution. The defaults compare `scip-aggressive`
+against `sg-cqqa` in balanced order. This is the direct plugin ablation because
+both use the same aggressive native SCIP heuristic setting.
 
 `--threads` constrains SCIP workers, LP-solver threads, and (for SG-CQQA)
 Torch threads. Reproducible CPU campaigns should additionally cap the BLAS and
@@ -198,6 +206,14 @@ after interruption. A mismatched instance list, solver list, seed set, time,
 thread count, reference name, or SG-CQQA configuration is rejected rather than
 mixed into an existing campaign. `--retry-failures` retries only the anonymous
 failure records during a resumed run.
+
+`benchmark merge` accepts plain JSON and gzip-compressed JSON shards. Add
+`--quiet` when merging large campaigns to write the validated result without
+also echoing the full payload to the terminal.
+
+`benchmark merge` can combine shards split by instances, seeds, or both. The
+requested `(instance, seed)` cells must be disjoint and form one complete
+Cartesian grid; partial or overlapping campaign collections are rejected.
 `merge` combines disjoint comparison shards after checking that every setting
 except the instance list is identical. It rejects overlapping instances or
 duplicate solver/instance/seed rows and recomputes all medians and W/T/L counts.
@@ -254,9 +270,9 @@ Exactly one input source is required:
 | `--json` / `--output-result` | off / none | Print or save a machine-readable result |
 | `--report` | none | Save an interactive HTML report |
 
-`auto` routes multiple declared objectives to one-run parallel Pareto QQA.
-A compatible single-objective symbolic model uses QQA→SCIP when the optional
-backend is installed and QQA otherwise. Black-box intent can select the
+`auto` routes multiple declared objectives to one-run parallel Pareto QQA and
+keeps compatible single-objective symbolic models on pure QQA. QQA→SCIP is
+enabled only by explicitly selecting `qqa-scip` or `scip`. Black-box intent can select the
 budget-aware route when the request explicitly provides a safe objective
 formula: the validated expression is evaluated point by point without
 gradients. If the objective exists only in a simulator, external API, or
@@ -301,13 +317,14 @@ printf '%s' '\min_{n\in\mathbb{Z},0\le n\le 10}(n-4)^2' | qqa tex -
 Production-style file input and exact refinement:
 
 ```bash
-qqa tex --file production-plan.tex --solver auto --device auto \
+qqa tex --file production-plan.tex --solver scip --device auto \
   --output-model audited-model.json --output-result result.json \
   --report result.html
 ```
 
-`--solver auto` uses QQA→SCIP for a single objective when the `scip` extra is
-installed. `--show-model` prints the strict intermediate JSON. Use
+`--solver auto` is pure QQA for a single objective. `--solver scip` explicitly
+uses QQA→SCIP when the `scip` extra is installed. `--show-model` prints the
+strict intermediate JSON. Use
 `--spec audited-model.json` for repeatable offline solving without an API key.
 
 ## `qqa example`

@@ -87,8 +87,8 @@ Two actions make the review boundary explicit:
 
 The result panel shows the selected solver, local routing rationale, warnings,
 audited JSON, and a downloadable plan before the numerical result. Multiple
-objectives route to parallel Pareto QQA. Compatible single-objective models may
-use QQA→SCIP when the optional backend is installed.
+objectives route to parallel Pareto QQA. Compatible single-objective models
+remain on pure QQA unless **QQA + SCIP** is explicitly selected.
 
 If the request explicitly states a safe objective formula, the black-box route
 validates it and evaluates it point by point without gradients. Natural

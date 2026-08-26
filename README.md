@@ -31,8 +31,9 @@ Minimize 3*batches + square(overtime), subject to 4*batches + overtime >= 45."
 API, and the dashboard's **Ask QQA** tab share one audited workflow. A dedicated
 system prompt treats user text as untrusted data; strict JSON-schema, expression,
 dimension, shape, and finite-value checks run locally. Trusted local routing
-then selects QQA, QQA→SCIP when compatible and installed, or one-run parallel
-Pareto QQA. The same Universal surface covers the major bounded optimisation
+then selects pure QQA, a black-box workflow, or one-run parallel Pareto QQA.
+QQA→SCIP is available only when explicitly selected and installed. The same
+Universal surface covers the major bounded optimisation
 classes—binary, integer, real, mixed, constrained, multi-objective, and
 black-box. For the `qqa ask --solver blackbox` route, the request must explicitly
 state a safe objective formula; QQA evaluates that validated formula point by
@@ -94,7 +95,7 @@ parallel population in 3D solution-space PCA / loss-spectrogram views.
 | **Solve** | Run PQQA / CRA-PI-GNN / CPRA with live progress, domain-aware monotone polish and warm-start toggles, and a per-problem solution viewer (TSP tour, NQueens board, highlighted IS, colouring, …). |
 | **Visualize** | 10 tabs of post-hoc plots — **solution-space PCA** of the final parallel population (3D, replicas coloured by loss, global best highlighted), **loss spectrogram** over time, diversity, replica fate, schedule, ridgeline. |
 | **Compare** | Hyper-parameter grid sweep with parallel-coordinates view, **and** a head-to-head **PQQA vs. SA vs. Population-Annealing shootout** that reports the wall-clock speed-up at matched compute budget. |
-| **Universal** | In **Ask QQA**, describe a bounded symbolic model and review the generated plan and automatic QQA / QQA→SCIP / Pareto route. The other tabs solve a realistic mixed microgrid, generate a Pareto front, tune an explicitly defined constrained black-box process, or review and solve TeX/JSON. |
+| **Universal** | In **Ask QQA**, describe a bounded symbolic model and review the generated plan. Auto keeps the single-objective path on pure QQA; QQA→SCIP is an explicit opt-in. The other tabs solve a realistic mixed microgrid, generate a Pareto front, tune an explicitly defined constrained black-box process, or review and solve TeX/JSON. |
 
 ### Or run it locally — same UI, your hardware
 
@@ -209,7 +210,8 @@ With [uv](https://github.com/astral-sh/uv) (recommended for development):
 ```bash
 git clone https://github.com/Yuma-Ichikawa/QQA4CO.git && cd QQA4CO
 uv sync                                            # core only
-uv sync --extra plotly --extra gui --extra dev     # everything
+uv sync --extra plotly --extra gui --extra dev     # core development/UI
+uv sync --extra benchmark                          # opt-in SCIP/MIPLIB/QPLIB
 uv run pytest -q                                   # sanity check
 ```
 
@@ -219,8 +221,16 @@ With pip:
 pip install qqa                # core
 pip install "qqa[plotly]"      # + interactive plots
 pip install "qqa[gui]"         # + Streamlit dashboard
+pip install "qqa[benchmark]"   # + opt-in SCIP/MIPLIB/QPLIB integration
 pip install "qqa[all]"         # everything
 ```
+
+The default package surface is pure QQA: `import qqa` does not import SCIP,
+QPLIB, or the public benchmark runner, even if those packages are present in
+the environment. Exact-solver APIs live under `qqa.hybrid`, and MIPLIB/QPLIB
+APIs live under `qqa.benchmarking` and `qqa.io`; importing or invoking those
+names is the explicit opt-in boundary. Legacy top-level exact-solver names are
+resolved lazily for compatibility but are not advertised by `qqa.__all__`.
 
 Check the installed capabilities, then run a complete real-world workflow:
 
@@ -350,7 +360,7 @@ integer, pure real, and practical mixed examples.
 
 ### MIPLIB and QPLIB
 
-Install `qqa[scip,qplib]` to load public MPS/QPLIB files into a sparse
+Install `qqa[benchmark]` to load public MPS/QPLIB files into a sparse
 solver-independent algebraic model and run either SCIP or the iterative
 SCIP-guided conditional QQA heuristic:
 
@@ -365,14 +375,17 @@ qqa benchmark compare benchmarks/miplib/pk1.mps.gz \
   --time-limit 60 --output comparison.json
 ```
 
-The hybrid lets QQA explore only SCIP's uncertain node-local integer core;
-sub-SCIP completes continuous variables and submits full candidates through
-`trySol()`, while SCIP retains bounds and proof responsibility. The time limit
-is shared by setup, QQA, completion, and SCIP. Results record public snapshot
+The hybrid lets QQA explore only SCIP's uncertain node-local integer core. An
+in-place LP dive performs the first continuous completion; a bounded sub-SCIP
+repairs selected interacting QQA changes when needed. Full candidates return
+through `trySol()`, while SCIP retains bounds and proof responsibility. The
+time limit is shared by setup, QQA, completion, and SCIP. Results record public snapshot
 names and hashes, never absolute paths, hostnames, or private server details.
-The paired `compare` command runs SCIP, aggressive-heuristic SCIP, and SG-CQQA
-with identical instance/seed/budget settings and reports solution-quality and
-primal-integral win/tie/loss counts.
+The paired `compare` command defaults to aggressive-heuristic SCIP versus
+SG-CQQA with identical instance/seed/budget settings and balanced execution
+order. It reports solution-quality and primal-integral win/tie/loss counts,
+including a stratum for pairs in which QQA was actually executed. Plain SCIP
+can be added explicitly with `--solvers scip scip-aggressive sg-cqqa`.
 Full archives can use `--continue-on-error`; the output is updated atomically
 after each run and an identical `--resume` command continues where it stopped.
 QPLIB runs use disposable native-solver workers, so a nonlinear native failure
@@ -406,9 +419,16 @@ blackbox = qqa.BlackBoxProblem(
 best = blackbox.solve(budget=100, batch_size=8, workers=8)
 ```
 
-For exact QUBO improvement/certification, install `qqa[scip]` and call
-`qqa.solve_qqa_scip(problem)`. To solve TeX directly, keep the API key only in
-your environment and use:
+For exact QUBO improvement/certification, install `qqa[scip]` and import the
+opt-in API explicitly:
+
+```python
+from qqa.hybrid import solve_qqa_scip
+
+result = solve_qqa_scip(problem)
+```
+
+To solve TeX directly, keep the API key only in your environment and use:
 
 ```bash
 export QQA_LLM_API_KEY='…'  # never put this in Git

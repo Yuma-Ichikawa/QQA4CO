@@ -9,6 +9,11 @@ be a breaking change.
 from __future__ import annotations
 
 import importlib
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -182,3 +187,64 @@ def test_logging_module_imports_and_returns_qqa_logger() -> None:
     # Child loggers via dotted name.
     child = mod.get_logger("qqa.subpackage")
     assert child.name == "qqa.subpackage"
+
+
+def test_plain_import_does_not_activate_optional_solver_modules() -> None:
+    code = """
+import json
+import sys
+import qqa
+
+optional = sorted(
+    name for name in sys.modules
+    if name.startswith(("qqa.hybrid", "qqa.benchmarking", "qqa.io"))
+    or name.startswith(("pyscipopt", "pyqplib"))
+)
+print(json.dumps(optional))
+"""
+    environment = dict(os.environ)
+    source = str((Path(__file__).parents[1] / "src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source, environment.get("PYTHONPATH", "")) if item
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert json.loads(completed.stdout) == []
+
+
+def test_optional_legacy_exports_are_lazy_and_not_in_pure_dunder_all() -> None:
+    assert "solve_qqa_scip" not in qqa.__all__
+    assert qqa.solve_qqa_scip.__module__ == "qqa.hybrid.scip"
+
+
+def test_hybrid_configuration_does_not_load_scip_plugin() -> None:
+    code = """
+import json
+import sys
+from qqa.hybrid import QQAHeuristicConfig
+
+QQAHeuristicConfig()
+loaded = sorted(
+    name for name in sys.modules
+    if name == "qqa.hybrid.scip_heuristic" or name.startswith("pyscipopt")
+)
+print(json.dumps(loaded))
+"""
+    environment = dict(os.environ)
+    source = str((Path(__file__).parents[1] / "src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source, environment.get("PYTHONPATH", "")) if item
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert json.loads(completed.stdout) == []

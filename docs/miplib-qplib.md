@@ -8,7 +8,7 @@ constraints, and original variable identities are retained directly.
 Install the two optional readers/solvers:
 
 ```bash
-pip install "qqa[scip,qplib]"
+pip install "qqa[benchmark]"
 ```
 
 ## Fetch and inspect an instance
@@ -50,12 +50,20 @@ qqa benchmark run benchmarks/miplib/pk1.mps.gz \
 # SCIP-guided conditional QQA primal heuristic
 qqa benchmark run benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --threads 1 \
-  --core-size 64 --sol-size 32 --epochs 120 --max-calls 4 \
-  --completion-time 1 --seed 0 --output pk1-sgcqqa.json
+  --core-size 32 --maximum-problem-variables 32 \
+  --minimum-core-size 16 --maximum-core-saturation 0.9 \
+  --sol-size 16 --epochs 20 --max-calls 1 --max-candidates 1 \
+  --completion-time 0.25 --qqa-fix-fraction 0.25 \
+  --minimum-relative-improvement 0.001 \
+  --seed 0 --output pk1-sgcqqa.json
 
-# QPLIB uses the same command
+# A screened QPLIB profile may open a longer early window and select PROBTYPEs
 qqa benchmark run benchmarks/qplib/QPLIB_0031.qplib \
-  --solver sg-cqqa --time-limit 60 --output qplib-31.json
+  --solver sg-cqqa --time-limit 60 \
+  --maximum-problem-variables 64 --minimum-core-size 8 \
+  --maximum-call-time 5 --maximum-call-time-fraction 0.25 \
+  --allow-no-incumbent --qplib-problem-types QML \
+  --output qplib-31.json
 
 # Several files: emits per-instance results plus overall/PROBTYPE summaries
 qqa benchmark run benchmarks/qplib/QPLIB_*.qplib \
@@ -83,7 +91,7 @@ qqa benchmark compare benchmarks/miplib/instances/*.mps.gz \
   --reference-file benchmarks/miplib/miplib2017-v36.solu \
   --continue-on-error --resume --output miplib-campaign.json --quiet
 
-# Or run disjoint instance shards independently, then validate and merge them
+# Or shard instances, seeds, or both, then validate and merge the full grid
 qqa benchmark merge miplib-shard-*.json --output miplib-campaign.json
 ```
 
@@ -107,36 +115,56 @@ continuous QPLIB comparisons matched while avoiding an empty plugin and
 completion-model setup cost. The result records `qqa_applicable: false` and
 `qqa_plugin_active: false`.
 
-1. SCIP presolves the model and solves a root or node LP.
-2. RENS is used before an incumbent exists; RINS-style agreement is used
-   afterwards. For nonlinear models, the RINS centre is the best feasible
-   point measured in the original algebraic model rather than an objective
-   auxiliary maintained by SCIP.
+In a paired comparison that includes `scip-aggressive`, a structurally
+bypassed SG-CQQA run is exactly that same solver configuration. The runner
+therefore executes the aggressive baseline once and reuses its complete result
+for the bypassed SG-CQQA record, marked
+`equivalent_baseline_reuse: true`. This prevents two wall-clock-limited runs of
+an identical algorithm from being misreported as a QQA win or loss. Applicable
+instances are always solved independently. A standalone `benchmark run` also
+always performs the requested solve.
+
+The CLI also defaults to a conservative, empirically screened profile:
+instances with more than 32 original variables bypass the plugin; advanced
+users can raise `--maximum-problem-variables` explicitly. This is a
+cost-control boundary, not a statement that larger instances are unsuitable
+for QQA. At a callback, fewer than 16 LP branching candidates or a selected
+core occupying more than 90% of the 32-position budget is rejected before
+full transformed-state extraction. These gates avoid paying Python/Torch
+overhead where a small uncertain-core heuristic has little room to help.
+`--qplib-problem-types` provides an independent, exact `PROBTYPE` allow-list.
+It is intended for auditable screened campaigns: an omitted type is reported
+as a structural bypass, not silently counted as a QQA result.
+
+1. SCIP presolves the model, obtains an incumbent, and solves a root or node
+   LP. The default profile considers only an early callback within 0.15
+   seconds and makes at most one full heuristic call.
+2. The number of LP branching candidates is checked before transformed-state
+   extraction. Small or saturated cores return immediately.
 3. A normalised score built from fractionality, incumbent disagreement,
-   pseudocosts, and reduced costs selects a small uncertain integer core.
+   pseudocosts, reduced costs, and disagreement among recent LP references
+   selects a small uncertain integer core. Distinct recent references seed the
+   QQA population when more than one call is allowed.
 4. General integers are restricted to node-local `floor`/`ceil` or incumbent
    neighbourhoods. Wide global integer intervals are never represented by one
    high-frequency periodic penalty.
-5. The original linear/quadratic objective and either original linear rows or
-   selected active LP rows form a normalised core surrogate. Selected rows use
-   independent PHR multipliers and penalty growth during QQA, with separate
-   feasibility/objective archives. Cheap floor/ceil coordinate moves are
-   tried first.
-6. If the fast path does not improve the original incumbent and the configured
-   time reserve remains, float64 QQA proposes a diverse population of integer
-   assignments. In the primary hybrid, escalation also requires at least one
-   fast candidate to have a feasible continuous completion; this prevents an
-   expensive QQA call in a locally uncompletable neighbourhood. Setting
-   `--fast-candidates 0` intentionally bypasses that gate for QQA-only
-   ablations. The default requires more than 20 seconds remaining; change this
-   explicitly with `--min-qqa-time` for long-run experiments.
-7. An independent sub-SCIP fixes each assignment and completes all remaining
-   continuous variables. If fixing the rounded core complement is infeasible,
-   a bounded second-stage LNS repair keeps only the proposed core fixed and
-   releases the complement. If that remains infeasible, a final broad LNS
-   fixes only the highest-scored quarter of the core. All stages share the
-   same completion time/node allowance and plugin overhead cap. Full solutions
-   return through `trySol()`.
+5. The original linear/quadratic objective and selected active LP rows form a
+   normalised core surrogate. QQA optimises a diverse float64 population, and
+   every replica is ranked by its best jointly improving partial repair plan,
+   not merely by the complete surrogate assignment. Quadratic/QPLIB and
+   no-incumbent RENS calls use row-specific adaptive PHR multipliers and a
+   feasibility archive; incumbent-guided linear MIP calls retain the cheaper
+   static row merit that was more stable in the screened MIP experiments.
+6. SCIP first attempts an in-place dive with the proposed integer assignment.
+   If it is infeasible, a bounded sub-SCIP LNS keeps the stable complement and
+   only the highest-value QQA changes (25% of the core by default), releasing
+   the remaining uncertain positions. The partial change set is selected by a
+   beam search so useful interacting flips are retained together.
+7. Objective limits reject non-improving completion solves before solution
+   injection. `--minimum-relative-improvement` can reserve the perturbation
+   cost for material improvements (the conservative CLI default is 0.1%).
+   Full candidates return through `trySol()`, leaving feasibility, bounds, and
+   transformed-variable handling under SCIP's authority.
 8. SCIP retains cuts, dual bounds, branch-and-bound, and certification.
 
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
@@ -162,11 +190,19 @@ print(mip.summary())
 print(qp.problem_type, qp.evaluate(qp.lower_bounds).maximum_infeasibility)
 
 config = QQAHeuristicConfig(
-    core_size=64,
-    sol_size=32,
-    epochs=120,
-    max_calls=4,
-    max_candidates=8,
+    core_size=32,
+    maximum_problem_variables=32,
+    minimum_core_size=16,
+    maximum_core_saturation=0.9,
+    sol_size=16,
+    epochs=20,
+    max_calls=1,
+    max_candidates=1,
+    maximum_call_time=0.15,
+    completion_time=0.25,
+    completion_nodes=100,
+    qqa_fix_fraction=0.25,
+    subscip_repair=True,
     seed=0,
     threads=1,
 )
@@ -242,11 +278,14 @@ SG-CQQA also applies it to Torch. For externally reproducible CPU runs, cap
 BLAS/OpenMP threads in the execution environment as well.
 
 `benchmark compare` automates the matched instance/seed runs. `scip` is the
-library default, `scip-aggressive` enables SCIP's aggressive native heuristic
-setting, and `sg-cqqa` uses that same setting plus the conditional plugin.
-Therefore `scip-aggressive` is the direct ablation baseline. The output reports
-paired final-primal-quality and anytime primal-integral win/tie/loss counts;
-publish the complete JSON rather than only a favourable aggregate.
+unguided solver option, `scip-aggressive` enables SCIP's aggressive native
+heuristic setting, and `sg-cqqa` uses that same setting plus the conditional
+plugin. The compare CLI defaults to the two latter solvers, balanced execution
+order, and `scip-aggressive` as the direct ablation baseline. The output
+reports paired final-primal-quality and anytime primal-integral win/tie/loss
+counts. It also stratifies those counts by whether QQA was actually executed,
+so time-limit noise from bypassed instances is not misattributed to QQA.
+Publish the complete JSON rather than only a favourable aggregate.
 
 Long campaigns write the complete JSON atomically after every run when
 `checkpoint_file` is supplied through Python, or automatically to `--output`
@@ -256,6 +295,11 @@ the source basename, format, solver, seed, and exception class; exception text
 is deliberately omitted because it can contain a machine path. Use
 `--retry-failures` with `--resume` after correcting an optional dependency or
 solver issue.
+
+`benchmark merge` accepts disjoint `(instance, seed)` cells, so seed campaigns
+can be distributed independently as well as instance campaigns. It rejects
+duplicate cells and also rejects collections that do not form one complete
+instance-by-seed Cartesian grid.
 
 QPLIB execution uses a disposable native-solver process for both the Python
 API and CLI. A native crash or bounded worker timeout therefore cannot corrupt
@@ -294,7 +338,7 @@ keys before writing an artifact.
 The workflow requires no repository-specific directory layout:
 
 1. Create a fresh Python 3.10+ environment and install
-   `pip install "qqa[scip,qplib]"` (or a wheel built from the repository).
+   `pip install "qqa[benchmark]"` (or a wheel built from the repository).
 2. Fetch instances with `qqa benchmark fetch`, or download them from the
    official public MIPLIB/QPLIB hosts.
 3. Keep the generated `snapshot.json` and public `.solu` snapshot with the

@@ -72,12 +72,27 @@ def test_multiobjective_routing_is_local_and_deterministic():
         qqa.plan_spec(spec, solver="blackbox")
 
 
-def test_auto_routing_uses_a_real_scip_import_probe(monkeypatch):
+def test_auto_routing_stays_pure_qqa_without_probing_scip(monkeypatch):
     spec = qqa.ModelSpec.from_dict(_spec())
-    monkeypatch.setattr("qqa.natural_language.planner.scip_available", lambda: False)
+    monkeypatch.setattr(
+        "qqa.natural_language.planner.scip_available",
+        lambda: (_ for _ in ()).throw(AssertionError("auto must not probe SCIP")),
+    )
     plan = qqa.plan_spec(spec, solver="auto")
     assert plan.selected_solver == "qqa"
-    assert "SCIP is unavailable" in plan.rationale
+    assert "default workflow is pure" in plan.rationale
+
+
+def test_scip_routing_remains_explicitly_available(monkeypatch):
+    spec = qqa.ModelSpec.from_dict(_spec())
+    monkeypatch.setattr("qqa.natural_language.planner.scip_available", lambda: True)
+    plan = qqa.plan_spec(spec, solver="qqa-scip")
+    assert plan.selected_solver == "qqa-scip"
+
+
+def test_explicit_scip_routing_reports_missing_extra(monkeypatch):
+    spec = qqa.ModelSpec.from_dict(_spec())
+    monkeypatch.setattr("qqa.natural_language.planner.scip_available", lambda: False)
     with pytest.raises(ImportError, match="PySCIPOpt is unavailable"):
         qqa.plan_spec(spec, solver="scip")
 

@@ -89,6 +89,9 @@ scip = ["pyscipopt>=6.1"]
 # Official QPLIB parser/evaluator. Kept separate from SCIP because users may
 # inspect and validate QPLIB files without running an exact solver.
 qplib = ["pyqplib>=0.1.8,<0.2"]
+# Full public MIPLIB/QPLIB comparison stack. Neither parser nor SCIP is loaded
+# by ``import qqa``; installation and invocation are both explicit opt-ins.
+benchmark = ["qqa[scip,qplib]"]
 # Needed only by the DISCS CO benchmark suite (data/discs/, scripts/setup_discs_data.sh,
 # scripts/convert_discs_to_qqa.py, scripts/bench_discs.py). Optional because most
 # qqa users will not download the DISCS instances.
@@ -105,7 +108,7 @@ dev = [
     "requests>=2.31",
 ]
 all = [
-    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,scip,qplib]",
+    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,benchmark]",
 ]
 
 [project.scripts]

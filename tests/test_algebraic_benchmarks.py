@@ -30,25 +30,33 @@ from qqa.benchmarking import (
     run_benchmark_suite,
 )
 from qqa.benchmarking import download as benchmark_download
-from qqa.benchmarking.algebraic_runner import _configure_scip_threads
+from qqa.benchmarking.algebraic_runner import (
+    _comparison_solver_order,
+    _configure_scip_threads,
+    _qqa_applicability_hint,
+    _qqa_is_applicable,
+)
 from qqa.benchmarking.metrics import (
     IncumbentPoint,
     SCIPProgressTracker,
     normalised_primal_error,
     primal_integral,
     relative_gap,
+    summarise_comparison,
 )
 from qqa.cli import build_parser
 from qqa.decomposition import (
     CompletionResult,
     complete_integer_assignment,
+    complete_integer_assignment_dive,
     create_completion_template,
 )
 from qqa.hybrid import scip_heuristic as scip_heuristic_module
 from qqa.hybrid.core_selector import CoreSelection, select_uncertain_integer_core
+from qqa.hybrid.heuristic_types import QQAHeuristicConfig
 from qqa.hybrid.neighborhood import IntegerNeighborhood
 from qqa.hybrid.nonconvex import dc_decomposition, linearize_concave_part
-from qqa.hybrid.scip_heuristic import QQAHeuristic, QQAHeuristicConfig
+from qqa.hybrid.scip_heuristic import QQAHeuristic
 from qqa.hybrid.surrogate import build_core_surrogate, generate_surrogate_candidates
 from qqa.io import load_mps, load_qplib
 from qqa.mixed import ConstraintArchive
@@ -98,6 +106,37 @@ def test_sparse_algebraic_ir_evaluates_without_dense_row_storage():
     assert fractional.maximum_infeasibility == pytest.approx(0.4)
 
 
+def test_qqa_static_size_gate_avoids_registering_out_of_scope_plugins():
+    algebraic = _algebraic_fixture()
+    assert _qqa_is_applicable(
+        algebraic,
+        QQAHeuristicConfig(maximum_problem_variables=3),
+    )
+    assert not _qqa_is_applicable(
+        algebraic,
+        QQAHeuristicConfig(maximum_problem_variables=2),
+    )
+    assert _qqa_is_applicable(
+        algebraic,
+        QQAHeuristicConfig(maximum_integer_variables=2),
+    )
+    assert not _qqa_is_applicable(
+        algebraic,
+        QQAHeuristicConfig(maximum_integer_variables=1),
+    )
+    qplib = replace(algebraic, problem_type="QML")
+    assert _qqa_is_applicable(
+        qplib,
+        QQAHeuristicConfig(allowed_qplib_problem_types=("qml",)),
+    )
+    assert not _qqa_is_applicable(
+        qplib,
+        QQAHeuristicConfig(allowed_qplib_problem_types=("LIQ",)),
+    )
+    with pytest.raises(ValueError, match="valid three-character"):
+        QQAHeuristicConfig(allowed_qplib_problem_types=("QXX",))
+
+
 def test_linear_rows_share_one_structural_zero_hessian():
     first = SparseQuadratic.linear_expression(np.ones(10_000))
     second = SparseQuadratic.linear_expression(np.arange(10_000))
@@ -112,6 +151,28 @@ def test_benchmark_thread_limit_includes_the_lp_solver():
     _configure_scip_threads(model, 1)
     assert model.getParam("parallel/maxnthreads") == 1
     assert model.getParam("lp/threads") == 1
+
+
+def test_paired_benchmark_balances_solver_execution_order():
+    solvers = ("scip-aggressive", "sg-cqqa")
+    assert _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=0,
+        instance_index=0,
+    ) == solvers
+    assert _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=0,
+        instance_index=1,
+    ) == tuple(reversed(solvers))
+    assert _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=1,
+        instance_index=0,
+    ) == tuple(reversed(solvers))
 
 
 def test_algebraic_metadata_rejects_private_environment_fields():
@@ -220,6 +281,44 @@ def test_rens_and_rins_core_selection_uses_local_integer_domains():
     assert select_uncertain_integer_core(rins_state, max_core_size=2).mode == "rins"
 
 
+def test_qqa_reference_pool_tracks_node_disagreement_and_previous_values():
+    heuristic = QQAHeuristic(QQAHeuristicConfig(reference_pool_size=2))
+    state = SCIPState(
+        variables=tuple(range(3)),
+        names=("binary", "integer", "continuous"),
+        variable_types=("BINARY", "INTEGER", "CONTINUOUS"),
+        lp_values=np.asarray([0.1, 2.0, 0.5]),
+        incumbent_values=None,
+        local_lower=np.asarray([0.0, 0.0, 0.0]),
+        local_upper=np.asarray([1.0, 4.0, 1.0]),
+        reduced_costs=np.zeros(3),
+        pseudocosts=np.zeros(3),
+        node_number=1,
+        depth=0,
+    )
+    heuristic._remember_reference(state)
+    later = replace(
+        state,
+        lp_values=np.asarray([0.9, 4.0, 0.1]),
+        node_number=2,
+    )
+    np.testing.assert_allclose(
+        heuristic._reference_disagreement(later),
+        np.asarray([0.8, 0.5, 0.0]),
+    )
+    previous = heuristic._reference_initial_values(
+        later,
+        np.asarray([0, 1]),
+        np.asarray([0.0, 0.0]),
+        np.asarray([1.0, 4.0]),
+    )
+    assert len(previous) == 1
+    np.testing.assert_allclose(previous[0], np.asarray([0.1, 2.0]))
+    heuristic._remember_reference(later)
+    heuristic._remember_reference(later)
+    assert len(heuristic._reference_pool) == 2
+
+
 def test_core_surrogate_uses_original_objective_and_active_lp_rows():
     class Variable:
         def __init__(self, name, objective):
@@ -315,14 +414,45 @@ def test_core_surrogate_uses_original_objective_and_active_lp_rows():
         [0, 1],
         surrogate,
         QQAHeuristicConfig(),
+        adaptive_rows=True,
     )
-    assert [row.sense for row in core_problem.constraints] == ["<="]
-    assert core_problem.constraints[0].rhs == pytest.approx(1.0)
-    controller = AdaptiveAugmentedLagrangian.for_problem(core_problem)
+    assert len(core_problem.constraints) == 1
+    assert core_problem.constraints[0].sense == "<="
     violating = torch.tensor([[1.0, 1.0]], dtype=torch.float64)
-    before = controller.penalty(core_problem, violating).item()
-    controller.update(core_problem, violating)
-    assert controller.penalty(core_problem, violating).item() > before
+    expected = surrogate.merit_values(
+        violating.numpy(),
+        target=state.lp_values,
+        span=np.ones(2),
+        row_penalty=20.0,
+        proximity_weight=0.02,
+    )[0]
+    assert core_problem.loss_fn(violating).item() == pytest.approx(expected)
+    cached_rows = next(iter(core_problem._row_device_cache.values()))
+    core_problem.constraint_values(violating)
+    assert next(iter(core_problem._row_device_cache.values())) is cached_rows
+    static_problem, _ = scip_heuristic_module._core_problem(
+        state,
+        selection,
+        [0, 1],
+        surrogate,
+        QQAHeuristicConfig(),
+    )
+    assert static_problem.constraints == ()
+    assert static_problem.loss_fn(violating).item() == pytest.approx(expected)
+    result = core_problem.solve(
+        sol_size=4,
+        num_epochs=4,
+        initial_state=violating.expand(4, -1),
+        adaptive_augmented_lagrangian=True,
+        al_update_interval=1,
+        calibrate_penalty=False,
+        repair=False,
+        polish=False,
+        return_population=True,
+        verbose=False,
+    )
+    assert result.diagnostics["adaptive_augmented_lagrangian"]["updates"] == 4
+    assert result.diagnostics["constraint_archive"]["observations"] > 0
 
 
 def _constrained_real_problem() -> qqa.MixedProblem:
@@ -389,12 +519,12 @@ def test_elastic_repair_and_mixed_solver_archive_restore_feasibility():
     assert result.score["feasible"]
 
 
-def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypatch):
+def test_conditional_heuristic_uses_qqa_guided_partial_fixings_for_lns_repair(monkeypatch):
     calls = []
 
     def fake_completion(template, variable_names, values, **kwargs):
         calls.append((tuple(variable_names), tuple(values)))
-        repaired = len(variable_names) == 1
+        repaired = tuple(variable_names) == ("complement", "core")
         return CompletionResult(
             feasible=repaired,
             accepted=repaired,
@@ -415,6 +545,8 @@ def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypa
         QQAHeuristicConfig(
             completion_time=1.0,
             maximum_overhead_fraction=0.5,
+            use_dive_completion=False,
+            subscip_repair=True,
         ),
         completion_template=object(),
     )
@@ -425,7 +557,7 @@ def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypa
     heuristic.model = active_model
     state = SimpleNamespace(
         lp_values=np.asarray([0.4, 0.0]),
-        incumbent_values=None,
+        incumbent_values=np.asarray([0.0, 0.0]),
         names=("core", "complement"),
         local_lower=np.asarray([0.0, 0.0]),
         local_upper=np.asarray([1.0, 1.0]),
@@ -436,6 +568,7 @@ def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypa
         fixed_values=np.asarray([0.0]),
         local_lower=np.asarray([0.0]),
         local_upper=np.asarray([1.0]),
+        scores=np.asarray([1.0]),
     )
     neighborhood = IntegerNeighborhood(
         core_indices=np.asarray([0]),
@@ -460,7 +593,10 @@ def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypa
         set(),
         source="qqa",
     )
-    assert calls == [(("core", "complement"), (1.0, 0.0)), (("core",), (1.0,))]
+    assert calls == [
+        (("core", "complement"), (1.0, 0.0)),
+        (("complement", "core"), (0.0, 1.0)),
+    ]
     assert accepted and improved
     assert heuristic.stats.lns_repair_attempts == 1
     assert heuristic.stats.lns_repair_feasible == 1
@@ -468,12 +604,45 @@ def test_conditional_heuristic_releases_fixed_complement_for_lns_repair(monkeypa
     active_model.free()
 
 
-def test_conditional_heuristic_broadens_an_infeasible_core_lns(monkeypatch):
+def test_qqa_repair_beam_retains_jointly_improving_changes():
+    problem = qqa.MixedProblem(
+        [qqa.Binary("x0"), qqa.Binary("x1"), qqa.Binary("x2")],
+        lambda values: (
+            2.0 * values["x0"]
+            + 2.0 * values["x1"]
+            - 5.0 * values["x0"] * values["x1"]
+            + 0.1 * values["x2"]
+        ),
+        dtype=torch.float64,
+    )
+    selected = scip_heuristic_module._select_repair_positions(
+        problem,
+        np.zeros(3),
+        np.ones(3),
+        [10, 20, 30],
+        max_changes=2,
+        beam_width=2,
+    )
+    assert selected == [10, 20]
+    assert (
+        scip_heuristic_module._select_repair_positions(
+            problem,
+            np.zeros(3),
+            np.asarray([0.0, 0.0, 1.0]),
+            [10, 20, 30],
+            max_changes=1,
+            beam_width=2,
+        )
+        == []
+    )
+
+
+def test_conditional_heuristic_partially_fixes_an_infeasible_core_lns(monkeypatch):
     fixed_counts = []
 
     def fake_completion(template, variable_names, values, **kwargs):
         fixed_counts.append(len(variable_names))
-        feasible = len(variable_names) == 1
+        feasible = len(variable_names) == 2
         return CompletionResult(
             feasible=feasible,
             accepted=feasible,
@@ -491,7 +660,96 @@ def test_conditional_heuristic_broadens_an_infeasible_core_lns(monkeypatch):
         fake_completion,
     )
     heuristic = QQAHeuristic(
-        QQAHeuristicConfig(completion_time=1.0, maximum_overhead_fraction=0.5),
+        QQAHeuristicConfig(
+            completion_time=1.0,
+            maximum_overhead_fraction=0.5,
+            use_dive_completion=False,
+            subscip_repair=True,
+        ),
+        completion_template=object(),
+    )
+    pyscipopt = pytest.importorskip("pyscipopt")
+    active_model = pyscipopt.Model()
+    active_model.hideOutput()
+    active_model.setRealParam("limits/time", 10.0)
+    heuristic.model = active_model
+    core = np.arange(4)
+    state = SimpleNamespace(
+        lp_values=np.full(5, 0.4),
+        incumbent_values=np.zeros(5),
+        names=tuple(f"x_{index}" for index in range(5)),
+        local_lower=np.zeros(5),
+        local_upper=np.ones(5),
+    )
+    selection = SimpleNamespace(
+        core_indices=core,
+        fixed_indices=np.asarray([4]),
+        fixed_values=np.asarray([0.0]),
+        local_lower=np.zeros(4),
+        local_upper=np.ones(4),
+        scores=np.asarray([0.1, 0.2, 0.3, 0.4]),
+    )
+    neighborhood = IntegerNeighborhood(
+        core_indices=core,
+        lower=np.zeros(4),
+        upper=np.ones(4),
+        fixed_indices=np.asarray([4]),
+        fixed_values=np.asarray([0.0]),
+    )
+    problem = qqa.MixedProblem(
+        [qqa.Binary(f"x_{index}") for index in range(4)],
+        lambda values: -sum(values.values()),
+        dtype=torch.float64,
+    )
+    accepted, improved = heuristic._complete_population(
+        [np.ones(4)],
+        problem,
+        state,
+        selection,
+        list(range(4)),
+        core,
+        neighborhood,
+        set(),
+        source="qqa",
+    )
+    assert fixed_counts == [5, 2]
+    assert accepted and improved
+    assert heuristic.stats.partial_lns_attempts == 0
+    assert heuristic.stats.lns_repair_feasible == 1
+    assert heuristic.stats.lns_repair_accepted == 1
+    active_model.free()
+
+
+def test_conditional_heuristic_repairs_without_an_incumbent(monkeypatch):
+    fixed_counts = []
+
+    def fake_completion(template, variable_names, values, **kwargs):
+        fixed_counts.append(len(variable_names))
+        feasible = len(variable_names) == 2
+        return CompletionResult(
+            feasible=feasible,
+            accepted=feasible,
+            improved_incumbent=feasible,
+            status="optimal" if feasible else "infeasible",
+            objective=-1.0 if feasible else None,
+            values=np.asarray(values) if feasible else None,
+            runtime=0.01,
+            fixed_variables=len(variable_names),
+        )
+
+    monkeypatch.setattr(
+        scip_heuristic_module,
+        "complete_integer_assignment",
+        fake_completion,
+    )
+    heuristic = QQAHeuristic(
+        QQAHeuristicConfig(
+            completion_time=1.0,
+            maximum_overhead_fraction=0.5,
+            use_dive_completion=False,
+            subscip_repair=True,
+            require_incumbent=False,
+        ),
         completion_template=object(),
     )
     pyscipopt = pytest.importorskip("pyscipopt")
@@ -538,11 +796,13 @@ def test_conditional_heuristic_broadens_an_infeasible_core_lns(monkeypatch):
         set(),
         source="qqa",
     )
-    assert fixed_counts == [5, 4, 1]
+    assert fixed_counts == [5, 2]
     assert accepted and improved
     assert heuristic.stats.partial_lns_attempts == 1
     assert heuristic.stats.partial_lns_feasible == 1
     assert heuristic.stats.partial_lns_accepted == 1
+    assert heuristic.stats.partial_lns_incumbent_improvements == 1
+    assert heuristic.stats.lns_repair_attempts == 0
     active_model.free()
 
 
@@ -556,6 +816,46 @@ def test_conditional_heuristic_suppresses_repeated_unproductive_qqa_calls():
     ablation = QQAHeuristic(QQAHeuristicConfig(stop_qqa_after_nonimproving_call=False))
     ablation.stats.qqa_calls = 1
     assert not ablation._qqa_has_stalled()
+
+
+def test_completion_improvement_threshold_is_validated_before_solver_use():
+    with pytest.raises(ValueError, match="minimum_relative_improvement"):
+        complete_integer_assignment(
+            object(),
+            [],
+            [],
+            minimum_relative_improvement=1.0,
+        )
+    with pytest.raises(ValueError, match="minimum_relative_improvement"):
+        complete_integer_assignment_dive(
+            object(),
+            [],
+            [],
+            minimum_relative_improvement=-0.1,
+        )
+
+
+def test_qqa_priority_preserves_mip_order_and_opens_qplib_early_window():
+    pytest.importorskip("pyscipopt")
+
+    class RecordingModel:
+        def __init__(self):
+            self.priority = None
+
+        def includeHeur(self, heuristic, *args, **kwargs):  # noqa: N802, ARG002
+            self.priority = kwargs["priority"]
+
+    linear_model = _algebraic_fixture()
+    mip = RecordingModel()
+    scip_heuristic_module.include_qqa_heuristic(mip, algebraic=linear_model)
+    assert mip.priority == -1_200_000
+
+    qplib = RecordingModel()
+    scip_heuristic_module.include_qqa_heuristic(
+        qplib,
+        algebraic=replace(linear_model, problem_type="QML"),
+    )
+    assert qplib.priority == -1_100_000
 
 
 def test_primary_hybrid_escalates_only_after_a_completable_fast_candidate():
@@ -647,6 +947,14 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert algebraic.summary()["constraint_linear_nonzeros"] == 3
     assert sparse.isspmatrix_csr(algebraic.constraints[0].expression.linear)
     assert str(tmp_path) not in json.dumps(algebraic.summary())
+    lightweight = load_mps(path, include_constraints=False)
+    assert lightweight.num_constraints == 0
+    assert lightweight.variable_names == algebraic.variable_names
+    np.testing.assert_allclose(
+        lightweight.objective.linear.toarray(), algebraic.objective.linear.toarray()
+    )
+    with pytest.raises(TypeError, match="include_constraints"):
+        load_mps(path, include_constraints=1)
 
     model, variables = build_scip_model(algebraic)
     template = create_completion_template(model)
@@ -697,6 +1005,7 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert paired["paired_runs"] == 1
     assert sum(paired["primal_quality"].values()) == 1
     assert comparison.comparison_config["instances"] == ["portable.mps"]
+    assert "seed" not in comparison.comparison_config["qqa_config"]
     assert str(tmp_path) not in json.dumps(comparison.to_dict())
     resumed = compare_benchmark_solvers(
         [path],
@@ -709,6 +1018,90 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     )
     assert len(resumed.results) == 2
     assert resumed.summary["campaign"]["completed_runs"] == 2
+
+
+def test_comparison_reuses_exact_aggressive_result_for_structural_bypass(tmp_path):
+    path = tmp_path / "bypassed.mps"
+    _write_tiny_mps(path)
+    comparison = compare_benchmark_solvers(
+        [path],
+        solvers=("scip-aggressive", "sg-cqqa"),
+        seeds=(0,),
+        baseline_solver="scip-aggressive",
+        qqa_config=QQAHeuristicConfig(maximum_problem_variables=1),
+        time_limit=1.0,
+    )
+    baseline = next(row for row in comparison.results if row.solver == "scip-aggressive")
+    hybrid = next(row for row in comparison.results if row.solver == "sg-cqqa")
+    assert hybrid.objective == baseline.objective
+    assert hybrid.trajectory == baseline.trajectory
+    assert hybrid.run_config["equivalent_baseline_reuse"] is True
+    assert hybrid.run_config["qqa_plugin_active"] is False
+    assert comparison.summary["pairwise"]["sg-cqqa"]["primal_quality"] == {
+        "losses": 0,
+        "ties": 1,
+        "wins": 0,
+    }
+
+
+def test_qplib_applicability_hint_uses_public_header(tmp_path):
+    path = tmp_path / "small.qplib"
+    path.write_text("small\nQML\nminimize\n60 # variables\n", encoding="utf-8")
+    assert _qqa_applicability_hint(
+        path,
+        "qplib",
+        QQAHeuristicConfig(maximum_problem_variables=64),
+        algebraic=None,
+    )
+    assert not _qqa_applicability_hint(
+        path,
+        "qplib",
+        QQAHeuristicConfig(maximum_problem_variables=32),
+        algebraic=None,
+    )
+    pure_binary = tmp_path / "binary.qplib"
+    pure_binary.write_text("binary\nQBL\nminimize\n60 # variables\n", encoding="utf-8")
+    assert not _qqa_applicability_hint(
+        pure_binary,
+        "qplib",
+        QQAHeuristicConfig(maximum_integer_variables=32),
+        algebraic=None,
+    )
+    assert not _qqa_applicability_hint(
+        path,
+        "qplib",
+        QQAHeuristicConfig(allowed_qplib_problem_types=("LIQ",)),
+        algebraic=None,
+    )
+
+
+def test_structural_bypass_reuses_aggressive_failure(tmp_path, monkeypatch):
+    path = tmp_path / "continuous.qplib"
+    path.write_text("continuous\nQCL\nminimize\n10 # variables\n", encoding="utf-8")
+    attempted = []
+
+    def fail_once(source, *, solver, **kwargs):  # noqa: ARG001
+        attempted.append(solver)
+        raise RuntimeError("synthetic worker failure")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner._run_isolated_benchmark_instance",
+        fail_once,
+    )
+    comparison = compare_benchmark_solvers(
+        [path],
+        solvers=("scip-aggressive", "sg-cqqa"),
+        baseline_solver="scip-aggressive",
+        format="qplib",
+        time_limit=0.1,
+        continue_on_error=True,
+    )
+    assert attempted == ["scip-aggressive"]
+    assert [failure.solver for failure in comparison.failures] == [
+        "scip-aggressive",
+        "sg-cqqa",
+    ]
+    assert {failure.error_type for failure in comparison.failures} == {"RuntimeError"}
 
 
 def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
@@ -813,10 +1206,10 @@ def test_disjoint_campaign_shards_merge_and_recompute_aggregates(tmp_path):
         "thread_policy": {"scip_parallel": 1, "scip_lp": 1, "torch_sg_cqqa": 1},
         "metric_clock": "solver_wall_clock_after_common_import",
         "reference_name": None,
-        "qqa_config": {},
+        "qqa_config": {"seed": 0},
     }
 
-    def result(instance, solver, objective):
+    def result(instance, solver, objective, *, seed=0):
         return BenchmarkResult(
             instance=instance,
             format="miplib",
@@ -836,41 +1229,127 @@ def test_disjoint_campaign_shards_merge_and_recompute_aggregates(tmp_path):
             reference_objective=None,
             primal_error=None,
             problem_type="MIPLIB",
-            run_config={"seed": 0},
+            run_config={"seed": seed},
             provenance={"source_name": instance},
         ).to_dict()
 
     shards = []
     for index, instance in enumerate(("first.mps.gz", "second.mps.gz")):
-        path = tmp_path / f"shard-{index}.json"
+        path = tmp_path / f"shard-{index}.json{'.gz' if index else ''}"
         shard_config = {**config, "instances": [instance]}
-        path.write_text(
-            json.dumps(
-                {
-                    "results": [
-                        result(instance, "scip-aggressive", 2.0),
-                        result(instance, "sg-cqqa", 1.0),
-                    ],
-                    "summary": {},
-                    "comparison_config": shard_config,
-                    "failures": [],
-                }
-            ),
-            encoding="utf-8",
+        payload = json.dumps(
+            {
+                "results": [
+                    result(instance, "scip-aggressive", 2.0),
+                    result(instance, "sg-cqqa", 1.0),
+                ],
+                "summary": {},
+                "comparison_config": shard_config,
+                "failures": [],
+            }
         )
+        if path.suffix == ".gz":
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                stream.write(payload)
+        else:
+            path.write_text(payload, encoding="utf-8")
         shards.append(path)
     merged = merge_benchmark_campaigns(shards)
     assert merged.comparison_config["instances"] == ["first.mps.gz", "second.mps.gz"]
     assert merged.summary["campaign"]["requested_runs"] == 4
     assert merged.summary["campaign"]["completed_runs"] == 4
     assert merged.summary["pairwise"]["sg-cqqa"]["primal_quality"]["wins"] == 2
-    with pytest.raises(ValueError, match="duplicate instance"):
+    with pytest.raises(ValueError, match="duplicate request cell"):
         merge_benchmark_campaigns([shards[0], shards[0]])
+
+    seed_shard = tmp_path / "seed-1.json"
+    seed_config = {
+        **config,
+        "instances": ["first.mps.gz", "second.mps.gz"],
+        "seeds": [1],
+        "qqa_config": {"seed": 1},
+    }
+    seed_shard.write_text(
+        json.dumps(
+            {
+                "results": [
+                    result(instance, solver, objective, seed=1)
+                    for instance in ("first.mps.gz", "second.mps.gz")
+                    for solver, objective in (("scip-aggressive", 2.0), ("sg-cqqa", 1.0))
+                ],
+                "summary": {},
+                "comparison_config": seed_config,
+                "failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    multiseed = merge_benchmark_campaigns([*shards, seed_shard])
+    assert multiseed.comparison_config["seeds"] == [0, 1]
+    assert multiseed.comparison_config["qqa_config"] == {}
+    assert multiseed.summary["campaign"]["requested_runs"] == 8
+    assert multiseed.summary["pairwise"]["sg-cqqa"]["primal_quality"]["wins"] == 4
+
     outside = json.loads(shards[0].read_text(encoding="utf-8"))
     outside["results"][0]["provenance"]["source_name"] = "outside.mps.gz"
     shards[0].write_text(json.dumps(outside), encoding="utf-8")
     with pytest.raises(ValueError, match="is outside"):
         merge_benchmark_campaigns([shards[0]])
+
+
+def test_comparison_stratifies_actual_qqa_execution():
+    def result(instance, solver, objective, *, qqa=None):
+        return BenchmarkResult(
+            instance=instance,
+            format="miplib",
+            solver=solver,
+            objective_sense="minimize",
+            status="timelimit",
+            runtime=1.0,
+            solving_time=1.0,
+            nodes=1,
+            objective=objective,
+            dual_bound=0.0,
+            gap=None,
+            feasible=True,
+            maximum_infeasibility=0.0,
+            time_to_first_feasible=0.1,
+            primal_integral=objective,
+            reference_objective=None,
+            primal_error=None,
+            problem_type="MIPLIB",
+            qqa=qqa,
+            run_config={"seed": 0},
+        )
+
+    summary = summarise_comparison(
+        [
+            result("executed", "scip-aggressive", 2.0),
+            result(
+                "executed",
+                "sg-cqqa",
+                1.0,
+                qqa={"calls": 1, "qqa_calls": 1, "qqa_incumbent_improvements": 1},
+            ),
+            result("bypassed", "scip-aggressive", 1.0),
+            result("bypassed", "sg-cqqa", 2.0),
+        ],
+        baseline_solver="scip-aggressive",
+    )
+    intervention = summary["pairwise"]["sg-cqqa"]["qqa_intervention"]
+    assert intervention["heuristic_invoked_pairs"] == 1
+    assert intervention["qqa_executed_pairs"] == 1
+    assert intervention["qqa_incumbent_improvement_pairs"] == 1
+    assert intervention["executed"]["primal_quality"] == {
+        "losses": 0,
+        "ties": 0,
+        "wins": 1,
+    }
+    assert intervention["not_executed"]["primal_quality"] == {
+        "losses": 1,
+        "ties": 0,
+        "wins": 0,
+    }
 
 
 def test_public_campaign_artifacts_are_deterministic_and_path_free(tmp_path):
@@ -1023,11 +1502,14 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
             "comparison.json",
         ]
     )
-    assert args.solvers == ("scip", "scip-aggressive", "sg-cqqa")
-    assert args.baseline_solver == "scip"
+    assert args.solvers == ("scip-aggressive", "sg-cqqa")
+    assert args.baseline_solver == "scip-aggressive"
+    assert args.execution_order == "balanced"
     assert args.seeds == (0,)
-    assert args.min_qqa_time == 20.0
-    assert args.fast_candidates == 2
-    assert args.maximum_overhead_fraction == 0.1
+    assert args.maximum_problem_variables == 32
+    assert args.maximum_call_time == pytest.approx(0.15)
+    assert args.min_qqa_time == pytest.approx(2.0)
+    assert args.fast_candidates == 0
+    assert args.maximum_overhead_fraction == pytest.approx(0.05)
     assert not args.resume
     assert not args.continue_on_error
