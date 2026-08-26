@@ -44,8 +44,10 @@ import torch
 from qqa.polish import apply_polish_if_improves
 from qqa.sa import (
     _build_beta_schedule,
+    _interaction_color_classes,
     _qubo_seq_glauber_sweep,
     _seq_mh_sweep,
+    _sparse_colored_metropolis_sweep,
     _validate_chain_problem,
 )
 from qqa.utils import require_cuda_if_requested, resolve_device, safe_score_summary
@@ -288,9 +290,24 @@ def population_annealing(
 
     betas = _build_beta_schedule(beta_schedule, beta_start, beta_end, num_temps).to(device)
 
-    q_mat = getattr(problem, "Q_mat", None)
+    sparse_qubo = getattr(problem, "sparse_qubo", None)
+    use_sparse_fast = bool(
+        is_binary
+        and sparse_qubo is not None
+        and getattr(sparse_qubo, "num_variables", None) == num_vars
+        and callable(getattr(sparse_qubo, "gradient", None))
+    )
+    color_classes = (
+        _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
+        if use_sparse_fast
+        else ()
+    )
+    q_mat = None if use_sparse_fast else getattr(problem, "Q_mat", None)
     use_qubo_fast = (
-        is_binary and isinstance(q_mat, torch.Tensor) and q_mat.shape == (num_vars, num_vars)
+        not use_sparse_fast
+        and is_binary
+        and isinstance(q_mat, torch.Tensor)
+        and q_mat.shape == (num_vars, num_vars)
     )
     if use_qubo_fast:
         q_mat = q_mat.to(device)
@@ -373,7 +390,15 @@ def population_annealing(
         # ----- Equilibration sweeps at the new temperature ----------------
         with torch.no_grad():
             for _ in range(sweeps_per_temp):
-                if use_qubo_fast:
+                if use_sparse_fast:
+                    x = _sparse_colored_metropolis_sweep(
+                        x,
+                        sparse_qubo,
+                        color_classes,
+                        betas[step],
+                        rng,
+                    )
+                elif use_qubo_fast:
                     x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
                 else:
                     x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)

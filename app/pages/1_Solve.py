@@ -677,7 +677,7 @@ else:
 # actionable warning BEFORE they click Run instead of the opaque
 # ``NotImplementedError: ... uses a CategoricalRelaxation`` stacktrace they
 # used to get on TSP / QAP / Coloring / NQueens / BGP (categorical) and on
-# TSP (structured BinaryRelaxation). The probe is cheap — it only imports
+# explicitly selected structured binary formulations. The probe is cheap — it only imports
 # the validator and the built problem, never starts MCMC.
 # ---------------------------------------------------------------------------
 pa_capability_error: str | None = None
@@ -702,8 +702,8 @@ if backend != "PQQA":
             "**Population Annealing is not available for this problem.** "
             f"{pa_capability_error}  \n\n"
             "Switch **Backend → PQQA** in the sidebar — PQQA handles "
-            "categorical (TSP / QAP / Coloring / NQueens) and structured "
-            "binary relaxations natively. Or pick a QUBO / Ising / spin "
+            "categorical and permutation models (TSP / QAP / Coloring / "
+            "NQueens) natively. Or pick a QUBO / Ising / spin "
             "family on **Home** (MIS, MaxCut, MaxClique, VertexCover, "
             "GraphBisection, MDS, Knapsack, NumberPartition, Ising, SK, EA, "
             "RFIM, p-spin, Hopfield, Perceptron) to keep PA.",

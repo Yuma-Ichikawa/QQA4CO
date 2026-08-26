@@ -18,4 +18,28 @@ def scip_available() -> bool:
     return callable(Model) and callable(quicksum) and callable(set_nonlinear_objective)
 
 
-__all__ = ["scip_available"]
+def highs_available() -> bool:
+    try:
+        import highspy
+    except (ImportError, OSError):
+        return False
+    return hasattr(highspy, "Highs")
+
+
+def cpsat_available() -> bool:
+    try:
+        from ortools.sat.python import cp_model
+    except (ImportError, OSError):
+        return False
+    return hasattr(cp_model, "CpModel")
+
+
+def cuopt_available() -> bool:
+    try:
+        import cuopt
+    except (ImportError, OSError):
+        return False
+    return cuopt is not None
+
+
+__all__ = ["cpsat_available", "cuopt_available", "highs_available", "scip_available"]

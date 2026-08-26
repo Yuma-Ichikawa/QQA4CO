@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from dataclasses import dataclass, field
 from numbers import Real
+from pathlib import Path
 from time import perf_counter
 
 import torch
@@ -116,6 +119,70 @@ class _RBFSurrogate:
         return mean, std
 
 
+class _RFFSurrogate:
+    """Bounded-cost random Fourier feature surrogate for larger campaigns."""
+
+    def __init__(self, *, ridge: float, features: int, seed: int):
+        self.ridge = max(float(ridge), 1e-10)
+        self.features = int(features)
+        self.seed = int(seed)
+
+    def _transform(self, x: torch.Tensor) -> torch.Tensor:
+        return math.sqrt(2.0 / self.features) * torch.cos(x @ self.frequency + self.phase)
+
+    def fit(self, x: torch.Tensor, y: torch.Tensor) -> None:
+        self.scalar_output = y.ndim == 1
+        targets = y[:, None] if self.scalar_output else y
+        generator = torch.Generator(device=x.device)
+        generator.manual_seed(self.seed)
+        self.frequency = (
+            torch.randn(
+                (x.shape[1], self.features), device=x.device, dtype=x.dtype, generator=generator
+            )
+            / 0.2
+        )
+        self.phase = (
+            2
+            * math.pi
+            * torch.rand(self.features, device=x.device, dtype=x.dtype, generator=generator)
+        )
+        features = self._transform(x)
+        self.mean = targets.mean(dim=0)
+        self.std = targets.std(dim=0, correction=0).clamp_min(1e-8)
+        normalised = (targets - self.mean) / self.std
+        gram = features.T @ features
+        gram.diagonal().add_(self.ridge)
+        self.factor = torch.linalg.cholesky(gram)
+        self.weights = torch.cholesky_solve(features.T @ normalised, self.factor)
+        residual = normalised - features @ self.weights
+        self.noise = residual.square().mean(dim=0).clamp_min(1e-8).sqrt()
+
+    def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        features = self._transform(x)
+        mean = (features @ self.weights) * self.std + self.mean
+        solved = torch.linalg.solve_triangular(self.factor, features.T, upper=False)
+        leverage = solved.square().sum(dim=0).clamp_min(1e-8).sqrt()[:, None]
+        std = (self.noise * self.std)[None, :] * (1.0 + leverage)
+        if self.scalar_output:
+            return mean[:, 0], std[:, 0]
+        return mean, std
+
+
+def _surrogate(
+    kind: str,
+    *,
+    ridge: float,
+    noise: float,
+    features: int,
+    seed: int,
+):
+    return (
+        _RBFSurrogate(ridge=ridge, noise=noise)
+        if kind == "rbf"
+        else _RFFSurrogate(ridge=ridge, features=features, seed=seed)
+    )
+
+
 def _total_violation(violations: torch.Tensor) -> torch.Tensor:
     return violations.sum(dim=1) if violations.shape[1] else violations.new_zeros(len(violations))
 
@@ -131,8 +198,68 @@ def _best_index(values: torch.Tensor, violations: torch.Tensor, direction: str) 
     return int(torch.argmin(total).item()), False
 
 
-def _keys(values: torch.Tensor) -> list[bytes]:
-    return [bytes(row.contiguous().numpy().tobytes()) for row in values.to(torch.float64).cpu()]
+def _unseen_indices(observed: torch.Tensor, candidates: torch.Tensor) -> torch.Tensor:
+    """Return first unseen candidate rows without per-point host hashing."""
+    if len(candidates) == 0:
+        return torch.empty(0, dtype=torch.long, device=candidates.device)
+    observed = observed.to(candidates)
+    combined = torch.cat([observed, candidates], dim=0)
+    unique, inverse = torch.unique(combined, dim=0, return_inverse=True)
+    group_count = len(unique)
+    occupied = torch.zeros(group_count, dtype=torch.bool, device=candidates.device)
+    if len(observed):
+        occupied[inverse[: len(observed)]] = True
+    groups = inverse[len(observed) :]
+    positions = torch.arange(len(candidates), device=candidates.device)
+    first = torch.full((group_count,), len(candidates), dtype=torch.long, device=candidates.device)
+    first.scatter_reduce_(0, groups, positions, reduce="amin", include_self=True)
+    keep = (~occupied[groups]) & (positions == first[groups])
+    return torch.nonzero(keep, as_tuple=False).reshape(-1)
+
+
+def _fingerprint(signature: dict[str, object]) -> str:
+    payload = json.dumps(signature, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _evaluate_cached(
+    problem: BlackBoxProblem,
+    values: torch.Tensor,
+    *,
+    workers: int,
+    database,
+    fingerprint: str,
+    seed: int,
+) -> tuple[torch.Tensor, torch.Tensor, list[dict]]:
+    if database is None:
+        return problem.evaluate_batch(values, workers=workers)
+    from qqa.blackbox.evaluation import (  # noqa: PLC0415
+        AsynchronousEvaluationScheduler,
+        EvaluationStatus,
+    )
+
+    with AsynchronousEvaluationScheduler(
+        problem,
+        workers=workers,
+        database=database,
+        problem_fingerprint=fingerprint,
+        seed=seed,
+    ) as scheduler:
+        futures = [
+            scheduler.submit(row, worker=index % workers) for index, row in enumerate(values)
+        ]
+        records = [future.result() for future in futures]
+    failed = [record for record in records if record.status is not EvaluationStatus.COMPLETED]
+    if failed:
+        categories = sorted({record.exception_category or record.status.value for record in failed})
+        raise RuntimeError(f"Black-box evaluation failed ({', '.join(categories)}).")
+    objectives = torch.tensor([record.objective for record in records], dtype=torch.float64)
+    violations = (
+        torch.tensor([record.violations for record in records], dtype=torch.float64)
+        if problem.constraints
+        else torch.zeros((len(records), 0), dtype=torch.float64)
+    )
+    return objectives, violations, [problem._named_point(row) for row in values]
 
 
 def _problem_signature(problem: BlackBoxProblem) -> dict[str, object]:
@@ -179,6 +306,64 @@ def _candidate_set(
     return torch.cat([global_points, local_points], dim=0)
 
 
+def _trust_region_centres(
+    x: torch.Tensor,
+    values: torch.Tensor,
+    violations: torch.Tensor,
+    *,
+    direction: str,
+    count: int,
+) -> torch.Tensor:
+    """Choose quality-ranked, spatially diverse observed centres."""
+    total = _total_violation(violations)
+    feasible = total <= 1e-10
+    sign = 1.0 if direction == "min" else -1.0
+    order = sorted(
+        range(len(x)),
+        key=lambda index: (
+            not bool(feasible[index]),
+            float(total[index]),
+            float(sign * values[index]),
+            index,
+        ),
+    )
+    chosen = [order[0]]
+    while len(chosen) < min(count, len(order)):
+        remaining = torch.as_tensor(
+            [index for index in order if index not in chosen], device=x.device
+        )
+        if not len(remaining):
+            break
+        separation = torch.cdist(x[remaining], x[chosen]).amin(dim=1)
+        quality_rank = torch.linspace(1.0, 0.5, steps=len(remaining), device=x.device)
+        chosen.append(int(remaining[torch.argmax(separation * quality_rank)].item()))
+    return x[chosen]
+
+
+def _candidate_set_multi(
+    *,
+    dimension: int,
+    count: int,
+    centres: torch.Tensor,
+    radii: torch.Tensor,
+    iteration: int,
+    seed: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    engine = torch.quasirandom.SobolEngine(
+        dimension, scramble=True, seed=seed + 7919 * (iteration + 1)
+    )
+    global_count = count // 3
+    global_points = engine.draw(global_count).to(device=device, dtype=dtype)
+    local_count = count - global_count
+    base = engine.draw(local_count).to(device=device, dtype=dtype)
+    region = torch.arange(local_count, device=device) % len(centres)
+    noise = (base - 0.5) * (2 * radii[region, None])
+    local_points = (centres[region] + noise).clamp(0.0, 1.0)
+    return torch.cat([global_points, local_points], dim=0)
+
+
 def _normal_cdf(value: torch.Tensor) -> torch.Tensor:
     return 0.5 * (1.0 + torch.erf(value / math.sqrt(2.0)))
 
@@ -222,6 +407,50 @@ def _model_subset(
     return x[selected], y[selected], selected
 
 
+def _qqa_acquisition_batch(
+    candidates: torch.Tensor,
+    acquisition: torch.Tensor,
+    *,
+    take: int,
+    radius: float,
+    epochs: int,
+    replicas: int,
+) -> list[int]:
+    """Select a diverse candidate subset through an opt-in QQA QUBO."""
+    from qqa.annealing import anneal  # noqa: PLC0415
+    from qqa.compile import SparseQUBO  # noqa: PLC0415
+    from qqa.engines.qqa import SparseQUBOProblem  # noqa: PLC0415
+    from qqa.repair import exact_k_projection  # noqa: PLC0415
+
+    shortlist_size = min(128, len(candidates))
+    shortlist = torch.topk(acquisition, k=shortlist_size, largest=False).indices
+    points = candidates[shortlist]
+    scores = acquisition[shortlist]
+    scores = (scores - scores.min()) / (scores.max() - scores.min()).clamp_min(1e-12)
+    left, right = torch.triu_indices(shortlist_size, shortlist_size, offset=1, device=points.device)
+    distance = torch.linalg.vector_norm(points[left] - points[right], dim=1)
+    diversity_cost = torch.exp(-distance.square() / max(radius**2, 1e-8))
+    cardinality_penalty = 2.0
+    linear = scores + cardinality_penalty * (1 - 2 * take)
+    edge_weight = 2 * cardinality_penalty + diversity_cost
+    problem = SparseQUBOProblem(
+        SparseQUBO(linear, torch.stack((left, right)), edge_weight),
+        name="blackbox-acquisition",
+    )
+    result = anneal(
+        problem,
+        sol_size=replicas,
+        num_epochs=epochs,
+        learning_rate=0.08,
+        device=points.device,
+        polish=True,
+        verbose=False,
+    )
+    priority = 2.0 * result.best_sol.to(scores) - scores
+    chosen = exact_k_projection(priority, min(take, shortlist_size)) > 0.5
+    return shortlist[chosen].detach().cpu().tolist()
+
+
 def _project_latent(
     problem: BlackBoxProblem, latent: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -239,14 +468,22 @@ def blackbox_optimize(
     candidate_pool: int = 4096,
     exploration: float = 2.0,
     acquisition: str = "expected_improvement",
+    acquisition_optimizer: str = "pool",
+    qqa_acquisition_epochs: int = 60,
+    qqa_acquisition_replicas: int = 16,
     constraint_weight: float = 10.0,
     initial_radius: float = 0.35,
     min_radius: float = 0.02,
+    trust_regions: int = 1,
     ridge: float = 1e-6,
     noise: float = 0.0,
     max_model_points: int = 512,
+    surrogate: str = "rbf",
+    rff_features: int = 128,
     resume_from: BlackBoxResult | None = None,
     surrogate_dtype: str = "auto",
+    evaluation_database: str | Path | object | None = None,
+    problem_fingerprint: str | None = None,
     seed: int = 0,
     device: str | torch.device = "cpu",
     verbose: bool = False,
@@ -275,6 +512,14 @@ def blackbox_optimize(
         raise ValueError("candidate_pool must be an integer >= max(32, batch_size).")
     if acquisition not in {"expected_improvement", "lcb"}:
         raise ValueError("acquisition must be 'expected_improvement' or 'lcb'.")
+    if acquisition_optimizer not in {"pool", "qqa"}:
+        raise ValueError("acquisition_optimizer must be 'pool' or 'qqa'.")
+    for name, value in (
+        ("qqa_acquisition_epochs", qqa_acquisition_epochs),
+        ("qqa_acquisition_replicas", qqa_acquisition_replicas),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError(f"{name} must be a positive integer.")
     if (
         isinstance(max_model_points, bool)
         or not isinstance(max_model_points, int)
@@ -283,6 +528,10 @@ def blackbox_optimize(
         raise ValueError("max_model_points must be an integer >= 16.")
     if surrogate_dtype not in {"auto", "float32", "float64"}:
         raise ValueError("surrogate_dtype must be 'auto', 'float32', or 'float64'.")
+    if surrogate not in {"rbf", "rff"}:
+        raise ValueError("surrogate must be 'rbf' or 'rff'.")
+    if isinstance(rff_features, bool) or not isinstance(rff_features, int) or rff_features < 8:
+        raise ValueError("rff_features must be an integer >= 8.")
     for name, value, lower in (
         ("exploration", exploration, 0.0),
         ("constraint_weight", constraint_weight, 0.0),
@@ -302,6 +551,8 @@ def blackbox_optimize(
         raise ValueError("initial_radius must be in (0, 1].")
     if min_radius <= 0 or min_radius > initial_radius:
         raise ValueError("min_radius must be in (0, initial_radius].")
+    if isinstance(trust_regions, bool) or not isinstance(trust_regions, int) or trust_regions < 1:
+        raise ValueError("trust_regions must be a positive integer.")
 
     device = resolve_device(device)
     require_cuda_if_requested(device)
@@ -312,6 +563,17 @@ def blackbox_optimize(
         dtype = torch.float32 if surrogate_dtype == "float32" else torch.float64
     dimension = problem.space.dimension
     problem_signature = _problem_signature(problem)
+    database = None
+    if evaluation_database is not None:
+        from qqa.blackbox.evaluation import EvaluationDatabase  # noqa: PLC0415
+
+        if isinstance(evaluation_database, EvaluationDatabase):
+            database = evaluation_database
+        elif isinstance(evaluation_database, (str, Path)):
+            database = EvaluationDatabase(evaluation_database)
+        else:
+            raise TypeError("evaluation_database must be a path, EvaluationDatabase, or None.")
+    fingerprint = problem_fingerprint or _fingerprint(problem_signature)
     if initial_points is None:
         initial_points = min(budget, max(4 * (dimension + 1), 2 * batch_size))
     if (
@@ -332,7 +594,14 @@ def blackbox_optimize(
         )
         latent = torch.unique(latent, dim=0)
         physical = problem.space.project(latent)
-        y, violations, _ = problem.evaluate_batch(physical, workers=workers)
+        y, violations, _ = _evaluate_cached(
+            problem,
+            physical,
+            workers=workers,
+            database=database,
+            fingerprint=fingerprint,
+            seed=seed,
+        )
         x_obs = latent.cpu()
         p_obs = physical.cpu()
         y_obs = y
@@ -376,7 +645,6 @@ def blackbox_optimize(
             "feasible_count",
         ):
             history.setdefault(key, [])
-    seen = set(_keys(p_obs))
     if resume_from is not None and history["trust_radius"]:
         try:
             previous_radius = float(history["trust_radius"][-1])
@@ -387,8 +655,9 @@ def blackbox_optimize(
         radius = min(1.0, max(min_radius, previous_radius))
     else:
         radius = initial_radius
-    success_streak = 0
-    failure_streak = 0
+    radii = torch.full((trust_regions,), radius, dtype=dtype, device=compute_device)
+    success_streak = [0] * trust_regions
+    failure_streak = [0] * trust_regions
     iteration = 0
     initial_best, _ = _best_index(y_obs, v_obs, problem.direction)
     initial_total_v = _total_violation(v_obs)
@@ -410,38 +679,66 @@ def blackbox_optimize(
             incumbent=model_x[best_before],
             max_points=max_model_points,
         )
-        objective_model = _RBFSurrogate(ridge=ridge, noise=noise)
+        objective_model = _surrogate(
+            surrogate,
+            ridge=ridge,
+            noise=noise,
+            features=rff_features,
+            seed=seed + iteration,
+        )
         objective_model.fit(model_x, model_y)
         violation_model = None
         total_v = _total_violation(v_obs)
         feasible_count = int((total_v <= 1e-10).sum().item())
         enough_feasible = feasible_count >= min(max(3, batch_size), len(y_obs))
         if problem.constraints:
-            violation_model = _RBFSurrogate(ridge=ridge, noise=noise)
+            violation_model = _surrogate(
+                surrogate,
+                ridge=ridge,
+                noise=noise,
+                features=rff_features,
+                seed=seed + 104729 + iteration,
+            )
             violation_model.fit(
                 model_x,
                 torch.log1p(v_obs).to(device=compute_device, dtype=dtype)[model_indices],
             )
 
-        pool_latent = _candidate_set(
-            dimension=dimension,
-            count=candidate_pool,
-            incumbent=x_obs[best_before].to(device=compute_device, dtype=dtype),
-            radius=radius,
-            iteration=iteration,
-            seed=seed,
-            device=compute_device,
-            dtype=dtype,
-        )
+        if trust_regions == 1:
+            centres = x_obs[best_before : best_before + 1].to(device=compute_device, dtype=dtype)
+            pool_latent = _candidate_set(
+                dimension=dimension,
+                count=candidate_pool,
+                incumbent=centres[0],
+                radius=float(radii[0].item()),
+                iteration=iteration,
+                seed=seed,
+                device=compute_device,
+                dtype=dtype,
+            )
+        else:
+            centres = _trust_region_centres(
+                x_obs.to(device=compute_device, dtype=dtype),
+                y_obs.to(device=compute_device, dtype=dtype),
+                v_obs.to(device=compute_device, dtype=dtype),
+                direction=problem.direction,
+                count=trust_regions,
+            )
+            pool_latent = _candidate_set_multi(
+                dimension=dimension,
+                count=candidate_pool,
+                centres=centres,
+                radii=radii[: len(centres)],
+                iteration=iteration,
+                seed=seed,
+                device=compute_device,
+                dtype=dtype,
+            )
         pool_latent, pool_physical = _project_latent(problem, pool_latent)
-        pool_keys = _keys(pool_physical)
-        unseen_indices: list[int] = []
-        local_seen: set[bytes] = set()
-        for index, key in enumerate(pool_keys):
-            if key not in seen and key not in local_seen:
-                unseen_indices.append(index)
-                local_seen.add(key)
-        if not unseen_indices:
+        unseen_indices = _unseen_indices(
+            p_obs.to(device=pool_physical.device, dtype=pool_physical.dtype), pool_physical
+        )
+        if not len(unseen_indices):
             break
         pool_latent = pool_latent[unseen_indices]
         pool_physical = pool_physical[unseen_indices]
@@ -479,25 +776,43 @@ def blackbox_optimize(
                 )
 
         take = min(batch_size, budget - len(y_obs), len(pool_latent))
-        selected: list[int] = []
-        working = acquisition_values.clone()
-        for _ in range(take):
-            index = int(torch.argmin(working).item())
-            selected.append(index)
-            distance = torch.cdist(pool_latent, pool_latent[index : index + 1]).squeeze(1)
-            # Local penalisation prevents a parallel batch from collapsing
-            # onto one surrogate optimum.
-            working = working + torch.exp(-distance.square() / max(radius**2, 1e-8))
-            working[selected] = float("inf")
+        if acquisition_optimizer == "qqa" and take > 1:
+            selected = _qqa_acquisition_batch(
+                pool_latent,
+                acquisition_values,
+                take=take,
+                radius=float(radii.max().item()),
+                epochs=qqa_acquisition_epochs,
+                replicas=qqa_acquisition_replicas,
+            )
+        else:
+            selected = []
+            working = acquisition_values.clone()
+            for _ in range(take):
+                index = int(torch.argmin(working).item())
+                selected.append(index)
+                distance = torch.cdist(pool_latent, pool_latent[index : index + 1]).squeeze(1)
+                # Local penalisation prevents a parallel batch from
+                # collapsing onto one surrogate optimum.
+                working = working + torch.exp(
+                    -distance.square() / max(float(radii.max().item()) ** 2, 1e-8)
+                )
+                working[selected] = float("inf")
 
         new_latent = pool_latent[selected]
         new_physical = pool_physical[selected]
-        new_y, new_v, _ = problem.evaluate_batch(new_physical, workers=workers)
+        new_y, new_v, _ = _evaluate_cached(
+            problem,
+            new_physical,
+            workers=workers,
+            database=database,
+            fingerprint=fingerprint,
+            seed=seed,
+        )
         x_obs = torch.cat([x_obs, new_latent.cpu()])
         p_obs = torch.cat([p_obs, new_physical.cpu()])
         y_obs = torch.cat([y_obs, new_y])
         v_obs = torch.cat([v_obs, new_v])
-        seen.update(_keys(new_physical))
 
         best_after, feasible_after = _best_index(y_obs, v_obs, problem.direction)
         improved = False
@@ -511,24 +826,28 @@ def blackbox_optimize(
             improved = bool(
                 _total_violation(v_obs)[best_after] < _total_violation(v_obs)[best_before] - 1e-12
             )
+        best_point = x_obs[best_after].to(device=compute_device, dtype=dtype)
+        region = int(torch.argmin(torch.linalg.vector_norm(centres - best_point, dim=1)).item())
         if improved:
-            success_streak += 1
-            failure_streak = 0
-            if success_streak >= 2:
-                radius = min(1.0, radius * 1.5)
-                success_streak = 0
+            success_streak[region] += 1
+            failure_streak[region] = 0
+            if success_streak[region] >= 2:
+                radii[region] = min(1.0, float(radii[region].item()) * 1.5)
+                success_streak[region] = 0
         else:
-            failure_streak += 1
-            success_streak = 0
-            if failure_streak >= 3:
-                radius = max(min_radius, radius * 0.5)
-                failure_streak = 0
+            failure_streak[region] += 1
+            success_streak[region] = 0
+            if failure_streak[region] >= 3:
+                radii[region] = max(min_radius, float(radii[region].item()) * 0.5)
+                failure_streak[region] = 0
+        radius = float(radii.max().item())
 
         total_v_now = _total_violation(v_obs)
         history["evaluations"].append(len(y_obs))
         history["best_value"].append(float(y_obs[best_after].item()))
         history["best_violation"].append(float(total_v_now[best_after].item()))
         history["trust_radius"].append(radius)
+        history.setdefault("trust_radii", []).append(radii.detach().cpu().tolist())
         history["feasible_count"].append(int((total_v_now <= 1e-10).sum().item()))
         if verbose:
             print(
@@ -556,13 +875,18 @@ def blackbox_optimize(
         history=history,
         metadata={
             "acquisition": acquisition,
+            "acquisition_optimizer": acquisition_optimizer,
             "device": str(compute_device),
             "surrogate_dtype": str(dtype).removeprefix("torch."),
+            "surrogate": surrogate,
+            "rff_features": rff_features if surrogate == "rff" else None,
+            "trust_regions": trust_regions,
             "max_model_points": max_model_points,
             "resumed": resume_from is not None,
             "prior_runtime": 0.0 if resume_from is None else resume_from.runtime,
             "cumulative_runtime": runtime if resume_from is None else resume_from.runtime + runtime,
             "problem_signature": problem_signature,
+            "evaluation_cache": database is not None,
         },
     )
 

@@ -53,11 +53,11 @@ def _prefer_feasible_incumbent(problem: MixedProblem, result: AnnealResult) -> N
         )
         selected = ranked[0]
         best_sol = candidates[selected].detach().clone()
-        best_obj = (
-            float(objective[selected].item())
-            if bool(feasible[selected])
-            else float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
-        )
+        # ``AnnealResult.best_obj`` remains the internal search energy for
+        # every candidate.  The original mathematical objective is exposed
+        # separately through ``score['value']`` and the stable SolveResult.
+        # Never switch this field's meaning based on feasibility.
+        best_obj = float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
     result.best_sol = best_sol
     result.best_obj = best_obj
     result.score = problem.score_summary(best_sol)
@@ -261,6 +261,8 @@ def solve_mixed(
     result.diagnostics["constraint_archive"] = (
         archive.diagnostics() if archive is not None else None
     )
+    result.diagnostics["objective_value"] = float(result.score.get("value", result.best_obj))
+    result.diagnostics["internal_energy"] = float(result.best_obj)
     if not return_population:
         result.final_population = None
     return result

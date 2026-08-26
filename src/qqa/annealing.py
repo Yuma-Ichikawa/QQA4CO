@@ -24,7 +24,7 @@ from qqa.callbacks import Callback, CallbackState, HistoryRecorder
 from qqa.polish import apply_polish_if_improves
 from qqa.problems.base import COProblem
 from qqa.relaxation import _default_penalty_from_forward
-from qqa.schedule import LinearBGSchedule
+from qqa.schedule import LinearBGSchedule, Schedule
 from qqa.utils import require_cuda_if_requested, resolve_device, safe_score_summary
 
 
@@ -215,7 +215,7 @@ def anneal(
     sol_size: int = 100,
     learning_rate: float = 1.0,
     temp: float = 0.0,
-    schedule: LinearBGSchedule | None = None,
+    schedule: Schedule | None = None,
     min_bg: float | None = None,
     max_bg: float | None = None,
     curve_rate: int = 2,
@@ -237,6 +237,7 @@ def anneal(
     restart_patience: int | None = None,
     restart_fraction: float = 0.15,
     restart_jitter: float = 0.10,
+    compile_core: bool = False,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -279,12 +280,11 @@ def anneal(
         If True, print periodic progress.
     mixed_precision:
         If ``"bf16"`` and ``device`` is CUDA, the forward pass and loss
-        evaluation run inside ``torch.amp.autocast`` with bfloat16 — typically
-        a 1.3x-2x speedup on Ampere/Hopper/Blackwell with negligible accuracy
-        loss for QUBO/spin objectives. The relaxed variable, gradients, and
-        AdamW state stay in float32 for numerical stability. Defaults to
-        ``"fp32"`` so behaviour is bit-for-bit identical to the legacy loop.
-        On CPU this option is silently downgraded to ``"fp32"``.
+        evaluation run inside ``torch.amp.autocast`` with bfloat16. The
+        relaxed variable, gradients, reductions, and AdamW state stay in
+        float32 for numerical stability. Measure the effect on the target
+        hardware and model; no fixed speedup or quality claim is assumed.
+        Defaults to ``"fp32"``. On CPU this option is downgraded to ``"fp32"``.
     initial_state:
         Optional warm-start bitstring. Shape ``(N,)`` (broadcast to every
         chain with light Gaussian jitter so the population still
@@ -325,6 +325,10 @@ def anneal(
     restart_jitter:
         Latent-space standard deviation around the incumbent for the local
         half of each restart.
+    compile_core:
+        Opt-in ``torch.compile(fullgraph=True)`` for the static objective
+        evaluation. Unsupported user callables fail explicitly instead of
+        silently falling back through graph breaks.
     """
     if not isinstance(sol_size, int) or isinstance(sol_size, bool) or sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
@@ -366,6 +370,8 @@ def anneal(
         raise ValueError("restart_fraction must be finite and in (0, 1).")
     if not math.isfinite(restart_jitter) or not 0 <= restart_jitter <= 1:
         raise ValueError("restart_jitter must be finite and in [0, 1].")
+    if not isinstance(compile_core, bool):
+        raise TypeError("compile_core must be boolean.")
     # Mirror the validation that the pignn / cpra trainers already enforce:
     # the binary / spin penalty 1 - (1 - 2p)^c is asymmetric for odd c and
     # silently breaks the discrete attractor at γ > 0. CategoricalRelaxation
@@ -403,6 +409,9 @@ def anneal(
         )
 
     relax = problem.relaxation
+    loss_function = (
+        torch.compile(problem.loss_fn, fullgraph=True) if compile_core else problem.loss_fn
+    )
 
     cb_list: list[Callback] = []
     recorder: HistoryRecorder | None = None
@@ -426,7 +435,13 @@ def anneal(
         encode = getattr(relax, "encode", None)
         if encode is not None:
             seed = encode(seed)
-        if seed.dim() == 1:
+        structured_shape = (
+            int(getattr(problem, "num_node", 0)),
+            int(getattr(problem, "num_category", 0)),
+        )
+        if seed.ndim == 2 and structured_shape[1] >= 2 and seed.shape == structured_shape:
+            seed = seed.unsqueeze(0).expand(sol_size, -1, -1).contiguous()
+        elif seed.dim() == 1:
             seed = seed.unsqueeze(0).expand(sol_size, -1).contiguous()
         if seed.shape[0] != sol_size:
             raise ValueError(
@@ -452,15 +467,16 @@ def anneal(
     hp = {"div_param": float(div_param), "restart_count": 0}
     restart_epochs: list[int] = []
     restart_count = 0
-    stagnant_epochs = 0
+    restart_window_epochs = 0
 
     with torch.no_grad():
         x_disc = relax.project(x)
-        loss_disc = problem.loss_fn(x_disc)
+        loss_disc = loss_function(x_disc)
         if is_batch:
             min_vals, min_idx = torch.min(loss_disc, dim=0)
             best_obj = min_vals.detach().cpu().numpy().astype(np.float64)
-            best_sol = x_disc[min_idx, torch.arange(x_disc.size(1))].detach().clone()
+            columns = torch.arange(x_disc.size(1), device=x_disc.device)
+            best_sol = x_disc[min_idx, columns].detach().clone()
         else:
             min_val, min_idx = torch.min(loss_disc, dim=0)
             best_obj = float(min_val.item())
@@ -468,6 +484,13 @@ def anneal(
             # downstream code — ``problem.score_summary``, CLI, notebooks —
             # sees a clean ``(N, ...)`` tensor rather than ``(B, N, ...)``.
             best_sol = x_disc[int(min_idx.item())].detach().clone()
+    # Keep incumbent comparisons and solution selection device-resident.  The
+    # host receives the final value once after the loop (or when an explicit
+    # user callback chooses to inspect it).
+    best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
+    restart_reference = best_obj_gpu.detach().clone()
+    adaptive_reference = best_obj_gpu.detach().clone()
+    adaptive_interval = max(1, min(check_interval, max(1, num_epochs // 20)))
     # Pre-seed ``state`` with the post-init evaluation so ``on_train_end`` has
     # a valid CallbackState even when ``num_epochs == 0``. The loop below will
     # overwrite it as it iterates.
@@ -479,23 +502,13 @@ def anneal(
         losses=torch.zeros(1, device=x.device),
         penalties=torch.zeros(1, device=x.device),
         diversity=torch.zeros((), device=x.device),
-        best_obj=best_obj,
+        best_obj=best_obj_gpu,
         hyperparams=hp,
         problem=problem,
         relaxation=relax,
     )
     for cb in cb_list:
         cb.on_train_begin(state)
-
-    # Pre-allocate a GPU scalar to track the best objective for single-instance
-    # problems. We only sync it to the host on the (rare) ``check_interval``
-    # tick or when an actual improvement happens, instead of every epoch.
-    if not is_batch:
-        best_obj_gpu = torch.tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
-    else:
-        # Batched problems: keep ``best_obj`` on GPU as well so per-epoch
-        # comparisons skip the cpu().numpy() roundtrip.
-        best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
 
     completed_epochs = 0
     deadline_reached = False
@@ -508,7 +521,7 @@ def anneal(
 
         with amp_ctx:
             x_fwd = relax.forward(x)
-            losses = problem.loss_fn(x_fwd)  # (B,) or (B, I)
+            losses = loss_function(x_fwd)  # (B,) or (B, I)
             # Reuse the cached forward output for relaxations that would
             # otherwise re-run their forward inside ``penalty`` (notably
             # CategoricalRelaxation, which does a simplex normalisation per call).
@@ -535,28 +548,20 @@ def anneal(
 
         with torch.no_grad():
             x_disc = relax.project(x)
-            loss_disc = problem.loss_fn(x_disc)
-            improved_this_epoch = False
+            loss_disc = loss_function(x_disc)
             if is_batch:
                 min_vals, min_idx = torch.min(loss_disc, dim=0)
-                # GPU-side improvement mask; one ``.any().item()`` sync per
-                # epoch (vs the previous full ``cpu().numpy()`` transfer).
                 improved_mask = min_vals < best_obj_gpu
-                if improved_mask.any().item():
-                    improved_this_epoch = True
-                    sel = x_disc[min_idx, torch.arange(x_disc.size(1), device=x.device)]
-                    best_sol = torch.where(improved_mask.unsqueeze(-1), sel, best_sol)
-                    best_obj_gpu = torch.minimum(best_obj_gpu, min_vals)
-                    best_obj = best_obj_gpu.detach().cpu().numpy().astype(np.float64)
+                selected = x_disc[min_idx, torch.arange(x_disc.size(1), device=x.device)]
+                best_sol = torch.where(improved_mask.unsqueeze(-1), selected, best_sol)
+                best_obj_gpu = torch.minimum(best_obj_gpu, min_vals)
             else:
                 min_val, min_idx = torch.min(loss_disc, dim=0)
-                # One sync per epoch in the common (non-improving) case.
-                if (min_val < best_obj_gpu).item():
-                    improved_this_epoch = True
-                    best_obj_gpu = min_val.detach()
-                    best_obj = float(best_obj_gpu.item())
-                    best_sol = x_disc[int(min_idx.item())].detach().clone()
-        stagnant_epochs = 0 if improved_this_epoch else stagnant_epochs + 1
+                improved = min_val < best_obj_gpu
+                selected = x_disc[min_idx]
+                best_sol = torch.where(improved, selected, best_sol)
+                best_obj_gpu = torch.minimum(best_obj_gpu, min_val)
+        restart_window_epochs += 1
 
         state = CallbackState(
             epoch=epoch,
@@ -566,7 +571,7 @@ def anneal(
             losses=losses.detach(),
             penalties=penalties.detach(),
             diversity=diversity.detach() if torch.is_tensor(diversity) else diversity,
-            best_obj=best_obj,
+            best_obj=best_obj_gpu.detach(),
             hyperparams=hp,
             problem=problem,
             relaxation=relax,
@@ -575,32 +580,60 @@ def anneal(
             cb.on_epoch_end(state)
         completed_epochs = epoch + 1
 
+        observe_schedule = getattr(schedule, "observe", None)
+        if callable(observe_schedule) and (
+            (epoch + 1) % adaptive_interval == 0 or epoch == num_epochs - 1
+        ):
+            window_improved = torch.any(best_obj_gpu < adaptive_reference - 1e-12)
+            dimensions = max(
+                1, relax.num_variables(problem) * int(getattr(problem, "num_instance", 1) or 1)
+            )
+            diversity_ratio = diversity / dimensions
+            observe_schedule(
+                improved=bool(window_improved.item()),
+                diversity_ratio=float(diversity_ratio.item()),
+            )
+            adaptive_reference = best_obj_gpu.detach().clone()
+
         if verbose and (epoch % check_interval == 0 or epoch == num_epochs - 1):
-            _print_progress(epoch, best_obj, losses, penalties, diversity, bg, hp["div_param"])
+            display_best = (
+                best_obj_gpu.detach().cpu().numpy().astype(np.float64)
+                if is_batch
+                else float(best_obj_gpu.item())
+            )
+            _print_progress(epoch, display_best, losses, penalties, diversity, bg, hp["div_param"])
 
         if (
             restart_patience is not None
             and sol_size > 1
             and epoch < num_epochs - 1
-            and stagnant_epochs >= restart_patience
+            and restart_window_epochs >= restart_patience
         ):
-            restarted = _restart_replicas(
-                x=x,
-                best_sol=best_sol,
-                discrete_losses=loss_disc,
-                relaxation=relax,
-                optimizer=optimiser,
-                fraction=restart_fraction,
-                jitter=restart_jitter,
-                learning_rate=learning_rate,
-            )
-            if restarted:
-                restart_count += restarted
-                restart_epochs.append(epoch)
-                hp["restart_count"] = restart_count
-            stagnant_epochs = 0
+            improved_in_window = torch.any(best_obj_gpu < restart_reference - 1e-12)
+            if not bool(improved_in_window.item()):
+                restarted = _restart_replicas(
+                    x=x,
+                    best_sol=best_sol,
+                    discrete_losses=loss_disc,
+                    relaxation=relax,
+                    optimizer=optimiser,
+                    fraction=restart_fraction,
+                    jitter=restart_jitter,
+                    learning_rate=learning_rate,
+                )
+                if restarted:
+                    restart_count += restarted
+                    restart_epochs.append(epoch)
+                    hp["restart_count"] = restart_count
+            restart_reference = best_obj_gpu.detach().clone()
+            restart_window_epochs = 0
 
     runtime = perf_counter() - runtime_start
+    best_obj = (
+        best_obj_gpu.detach().cpu().numpy().astype(np.float64)
+        if is_batch
+        else float(best_obj_gpu.item())
+    )
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
         print(f"  BEST LOSS : {best_obj}")
@@ -664,6 +697,7 @@ def anneal(
             "completed_epochs": completed_epochs,
             "time_limit": time_limit,
             "deadline_reached": deadline_reached,
+            "compile_core": compile_core,
         },
     )
 

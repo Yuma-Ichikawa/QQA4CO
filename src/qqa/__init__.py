@@ -38,6 +38,7 @@ from qqa.algebraic import (
     VariableType,
 )
 from qqa.annealing import AnnealResult, anneal
+from qqa.api import inspect, plan, solve
 from qqa.applications import (
     APPLICATIONS,
     build_application,
@@ -61,6 +62,7 @@ from qqa.callbacks import (
     PopulationTracker,
     TrajectoryTracker,
 )
+from qqa.config import SolverConfig
 from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
 from qqa.mixed import (
     Binary,
@@ -77,6 +79,7 @@ from qqa.mixed import (
     repair_mixed_solution,
     solve_mixed,
 )
+from qqa.model import ModelIR
 from qqa.multiobjective import (
     MultiObjectiveProblem,
     Objective,
@@ -142,6 +145,7 @@ from qqa.relaxation import (
     SpinRelaxation,
 )
 from qqa.reporting import save_html_report
+from qqa.result import SolveResult
 from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
 from qqa.tex import (
@@ -260,6 +264,7 @@ __all__ = [
     "MaximumIndependentSetInstance",
     "MinimumDominatingSet",
     "MixedProblem",
+    "ModelIR",
     "MixedRelaxation",
     "ModelSpec",
     "MODEL_SYSTEM_PROMPT",
@@ -282,6 +287,8 @@ __all__ = [
     "RepairResult",
     "Relaxation",
     "SAResult",
+    "SolveResult",
+    "SolverConfig",
     "SherringtonKirkpatrick",
     "SpinProblem",
     "SpinRelaxation",
@@ -311,10 +318,12 @@ __all__ = [
     "fix_seed",
     "generate_graph",
     "isco_anneal",
+    "inspect",
     "load_problem_from_file",
     "polish",
     "population_annealing",
     "pareto_anneal",
+    "plan",
     "plan_spec",
     "plot_blackbox",
     "plot_pareto",
@@ -327,6 +336,7 @@ __all__ = [
     "repair_mixed_solution",
     "simulated_annealing",
     "save_html_report",
+    "solve",
     "solve_tex",
     "solve_mixed",
     "user_problem_from_source",

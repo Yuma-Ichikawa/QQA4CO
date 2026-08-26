@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +31,94 @@ def test_cli_help_describes_subcommands():
     assert out.returncode == 0
     for cmd in ("ask", "solve", "tex", "example", "doctor", "bench", "gui", "version"):
         assert cmd in out.stdout
+
+
+def test_positional_model_forwards_only_explicit_profile_overrides(tmp_path, monkeypatch):
+    import qqa
+    from qqa.cli import _cmd_solve, build_parser
+    from qqa.portfolio import ModelInspection, SolverPlan
+    from qqa.result import SolveStatus
+
+    model = tmp_path / "small.qubo"
+    model.write_text("2\n0 0 1\n1 1 -1\n", encoding="utf-8")
+    captured = {}
+    inspection = ModelInspection(
+        "small",
+        2,
+        2,
+        0,
+        {"binary": 2},
+        {},
+        2,
+        0.5,
+        1.0,
+        2,
+        "minimize",
+        ("sparse-qubo",),
+    )
+    plan = SolverPlan(inspection, "fast", "sparse-factor-qqa", (), None, 8, 64, ())
+
+    def fake_solve(path, **kwargs):
+        captured.update(path=path, **kwargs)
+        return SimpleNamespace(
+            status=SolveStatus.FEASIBLE,
+            plan=plan,
+            best_obj=0.0,
+            feasible=True,
+            runtime=0.0,
+            best_bound=None,
+            relative_gap=None,
+        )
+
+    monkeypatch.setattr(qqa, "solve", fake_solve)
+    args = build_parser().parse_args(
+        [
+            "solve",
+            str(model),
+            "--profile",
+            "fast",
+            "--sol-size",
+            "8",
+            "--epochs",
+            "5",
+            "--schedule",
+            "adaptive",
+            "--restart-patience",
+            "0",
+            "--gradient-clip",
+            "0",
+            "--no-polish",
+        ]
+    )
+    assert _cmd_solve(args) == 0
+    assert captured["replicas"] == 8
+    assert captured["epochs"] == 5
+    assert captured["schedule"] == "adaptive"
+    assert captured["restart_patience"] == 0
+    assert captured["gradient_clip_norm"] is None
+    assert captured["polish"] is False
+    assert "temperature" not in captured
+
+
+def test_legacy_catalogue_defaults_are_preserved(monkeypatch):
+    import qqa
+    from qqa.cli import _cmd_solve, build_parser
+
+    captured = {}
+
+    def fake_anneal(problem, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(best_obj=0.0, runtime=0.0, score={}, diagnostics={})
+
+    monkeypatch.setattr(qqa, "anneal", fake_anneal)
+    args = build_parser().parse_args(
+        ["solve", "--problem", "sk", "--size", "4", "--schedule", "linear", "--quiet"]
+    )
+    assert _cmd_solve(args) == 0
+    assert captured["sol_size"] == 100
+    assert captured["num_epochs"] == 1000
+    assert captured["schedule"](0, 2) == pytest.approx(-2.0)
+    assert captured["schedule"](1, 2) == pytest.approx(0.1)
 
 
 def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():

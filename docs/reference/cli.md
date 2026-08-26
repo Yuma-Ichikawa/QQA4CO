@@ -6,8 +6,8 @@ Installing QQA4CO registers a single console script:
 qqa <subcommand> [options]
 ```
 
-The CLI is a thin argparse layer over the public Python API and uses
-**no third-party packages**, so it works in minimal containers. For a
+The CLI is a thin argparse layer over the public Python API and does not add
+dependencies beyond those required by the selected backend. For a
 quick "what does this flag do?" prefer `qqa <subcommand> --help`; this
 page is the explanation of how the flags interact.
 
@@ -15,28 +15,43 @@ page is the explanation of how the flags interact.
 
 ```bash
 qqa version
-# 0.3.0
+# 0.6.0
 ```
 
 Prints the value of `qqa.__version__`, which is single-sourced from
 the wheel metadata via `importlib.metadata`. Use this to verify the
 installed version inside a Docker container or a CI job.
 
+## `qqa inspect` and `qqa plan`
+
+```bash
+qqa inspect model.mps
+qqa plan model.mps --profile quality --budget 60 --device auto
+```
+
+`inspect` emits solver-independent structure. `plan` previews the selected
+QQA route, repair, optional exact backend, replica count, memory estimate, and
+fallbacks without spending the solve budget.
+
 ## `qqa solve`
 
-The main subcommand. Solves a single problem and either prints the
-score or pickles the full `AnnealResult` to disk.
+The main subcommand. A positional model file uses the stable `qqa.solve` API;
+the legacy catalogue flags remain available for compatibility.
 
 ### Common flags
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--problem` | (required) | One of `mis`, `maxcut`, `maxclique`, `coloring`, `ising1d`, `ea`, `sk`, `perceptron`, `hopfield`, `knapsack`, `number_partition`, `vertex_cover`, `graph_bisection`, `maxsat3`, `tsp`, `qap`, `nqueens` |
+| positional `MODEL` | (none) | MPS, LP, QPLIB, JSON ModelIR, OPB, CNF/WCNF, QUBO, or Ising file |
+| `--profile` | `balanced` | `fast`, `balanced`, `quality`, `certify`, `diverse`, `pareto`, or `reproducible` |
+| `--budget` | (none) | Total wall-clock budget in seconds |
+| `--problem` | (none) | Built-in catalogue problem used when positional `MODEL` is omitted |
 | `--problem-file` | (none) | Path to a Python file defining `problem` or `make_problem()` — replaces `--problem` |
 | `--graph-file` | (none) | Pickled / GraphML / edgelist NetworkX graph (graph problems only) |
 | `--size` | `50` | Size for synthetic problem generators |
-| `--sol-size` | `100` | Parallel population size |
-| `--epochs` | `1000` | Number of gradient steps |
+| `--sol-size` | profile / `100` | Parallel population size; positional models use the profile, while the legacy catalogue defaults to 100 |
+| `--epochs` | profile / `1000` | Solver steps; positional models use the profile, while the legacy catalogue defaults to 1000 |
+| `--schedule` | profile / `linear` | QQA schedule; positional models use the profile and the legacy catalogue retains linear scheduling |
 | `--device` | `auto` | `auto` chooses CUDA → MPS → CPU; explicit `cpu`, `cuda`, `cuda:0`, `mps` also work |
 | `--seed` | `0` | Seed passed to `qqa.fix_seed` |
 | `--quiet` | off | Suppress per-epoch progress logs |
@@ -61,7 +76,8 @@ score or pickles the full `AnnealResult` to disk.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `--backend` | `qqa` | `qqa`, `scip` (QQA→exact QUBO refinement), `pignn`, `cpra`, or `sa` |
+| `--backend` | `qqa` | `qqa`, `sa`, `pa`, `isco`, `scip`, `pignn`, or `cpra` |
+| `--exact-backend` | `auto` | Positional models only: `none`, `scip`, `highs`, `cpsat`, or `cuopt`; execution remains opt-in |
 | `--scip-time-limit` / `--scip-gap` | `60` / `0` | Total QQA+SCIP wall-clock budget and target relative gap |
 | `--scip-warm-starts` / `--scip-threads` | `32` / `1` | Diverse QQA incumbents and exact-solver threads |
 | `--pignn-init-reg-param` | `-20.0` | CRA initial γ (only `--backend pignn`/`cpra`) |
@@ -93,6 +109,8 @@ and `qqa.pignn.train_cpra_pi_gnn` respectively. Pass an explicit
 | Backend | Supported `--problem` values |
 |---|---|
 | `qqa` | All problems exposed by the current built-in catalogue |
+| `sa`, `pa` | Flat binary/spin catalogue problems |
+| `isco` | QUBO catalogue problems |
 | `scip` | Single-instance `QUBOProblem` models |
 | `pignn` | `mis`, `maxcut`, `maxclique`, `vertex_cover`, `graph_bisection` |
 | `cpra` | Same as `pignn` (penalty diversification works for `mis`, `vertex_cover` only) |
@@ -100,6 +118,14 @@ and `qqa.pignn.train_cpra_pi_gnn` respectively. Pass an explicit
 ### Examples
 
 ```bash
+# Inspect and solve a portable model through the stable API.
+qqa inspect model.mps
+qqa plan model.mps --profile balanced --budget 60
+qqa solve model.mps --profile balanced --budget 60
+
+# Explicit QQA warm start followed by certification.
+qqa solve model.mps --profile certify --exact-backend scip --budget 60
+
 # Quickest check that the install works.
 qqa solve --problem sk --size 60 --sol-size 64 --epochs 500
 
@@ -206,10 +232,6 @@ after interruption. A mismatched instance list, solver list, seed set, time,
 thread count, reference name, or SG-CQQA configuration is rejected rather than
 mixed into an existing campaign. `--retry-failures` retries only the anonymous
 failure records during a resumed run.
-
-`benchmark merge` accepts plain JSON and gzip-compressed JSON shards. Add
-`--quiet` when merging large campaigns to write the validated result without
-also echoing the full payload to the terminal.
 
 `benchmark merge` can combine shards split by instances, seeds, or both. The
 requested `(instance, seed)` cells must be disjoint and form one complete
@@ -356,12 +378,11 @@ the repo's `app/` directory in editable installs.
 | Flag | Default | What it does |
 |---|---|---|
 | `--port` | `8501` | |
-| `--host` | `localhost` | |
-| `--headless` | off | Disable the local browser autostart (useful on remote servers) |
+| `--host` | loopback interface | Network interface accepted by Streamlit |
+| `--headless` | off | Disable automatic browser launch |
 
 ```bash
 qqa gui --port 8505 --headless
-# Open http://<your-server>:8505 in a browser
 ```
 
 ## Exit codes

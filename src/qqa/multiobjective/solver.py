@@ -161,22 +161,25 @@ class ParetoResult:
         return int(torch.argmin((normalised * weights).sum(dim=1)).item())
 
     def hypervolume(
-        self, reference_point: list[float] | tuple[float, float] | torch.Tensor
+        self,
+        reference_point: list[float] | tuple[float, ...] | torch.Tensor,
+        *,
+        samples: int = 131_072,
+        seed: int = 0,
     ) -> float:
-        """Return exact dominated hypervolume for a two-objective front.
+        """Return exact 2-D or deterministic Monte-Carlo many-objective HV.
 
         ``reference_point`` uses the original reported objective directions.
         It must be weakly worse than every point in the front.
         """
-        if self.objectives.shape[1] != 2:
-            raise ValueError("Exact hypervolume currently requires exactly two objectives.")
         reference = torch.as_tensor(
             reference_point,
             device=self.objectives.device,
             dtype=self.objectives.dtype,
         )
-        if reference.shape != (2,) or not torch.isfinite(reference).all():
-            raise ValueError("reference_point must contain two finite values.")
+        objective_count = self.objectives.shape[1]
+        if reference.shape != (objective_count,) or not torch.isfinite(reference).all():
+            raise ValueError(f"reference_point must contain {objective_count} finite values.")
         signs = reference.new_tensor(
             [1.0 if direction == "min" else -1.0 for direction in self.directions]
         )
@@ -184,6 +187,19 @@ class ParetoResult:
         values = self.minimize_objectives
         if torch.any(values > reference + 1e-8):
             raise ValueError("reference_point must be no better than every Pareto point.")
+        if objective_count > 2:
+            if isinstance(samples, bool) or not isinstance(samples, int) or samples < 1:
+                raise ValueError("samples must be a positive integer.")
+            lower = values.amin(dim=0)
+            span = reference - lower
+            engine = torch.quasirandom.SobolEngine(objective_count, scramble=True, seed=seed)
+            unit = engine.draw(samples).to(device=values.device, dtype=values.dtype)
+            points = lower + unit * span
+            dominated = torch.zeros(samples, dtype=torch.bool, device=values.device)
+            for start in range(0, len(values), 256):
+                block = values[start : start + 256]
+                dominated |= (block[:, None, :] <= points[None, :, :]).all(dim=-1).any(dim=0)
+            return float(span.prod().item() * dominated.float().mean().item())
         order = torch.argsort(values[:, 0])
         ordered = values[order]
         area = ordered.new_zeros(())
@@ -193,6 +209,48 @@ class ParetoResult:
             area = area + (reference[0] - point[0]).clamp_min(0) * height
             previous_y = torch.minimum(previous_y, point[1])
         return float(area.item())
+
+    def r2_indicator(self, *, directions: int = 256, seed: int = 0) -> float:
+        """Return the minimisation R2 indicator over Sobol reference directions."""
+        if isinstance(directions, bool) or not isinstance(directions, int) or directions < 1:
+            raise ValueError("directions must be a positive integer.")
+        values = self.minimize_objectives
+        ideal = values.amin(dim=0)
+        weights = _reference_directions(
+            directions,
+            values.shape[1],
+            seed,
+            device=values.device,
+            dtype=values.dtype,
+        )
+        utility = (weights[:, None, :] * (values[None, :, :] - ideal)).amax(dim=-1)
+        return float(utility.amin(dim=1).mean().item())
+
+    def igd(self, reference_front: torch.Tensor) -> float:
+        """Inverted generational distance to a supplied original-direction front."""
+        reference = torch.as_tensor(
+            reference_front, device=self.objectives.device, dtype=self.objectives.dtype
+        )
+        if reference.ndim != 2 or reference.shape[1] != self.objectives.shape[1]:
+            raise ValueError("reference_front must have shape (points, objectives).")
+        signs = reference.new_tensor(
+            [1.0 if direction == "min" else -1.0 for direction in self.directions]
+        )
+        distance = torch.cdist(reference * signs, self.minimize_objectives)
+        return float(distance.amin(dim=1).mean().item())
+
+    def epsilon_indicator(self, reference_front: torch.Tensor) -> float:
+        """Unary additive epsilon indicator against a reference front."""
+        reference = torch.as_tensor(
+            reference_front, device=self.objectives.device, dtype=self.objectives.dtype
+        )
+        if reference.ndim != 2 or reference.shape[1] != self.objectives.shape[1]:
+            raise ValueError("reference_front must have shape (points, objectives).")
+        signs = reference.new_tensor(
+            [1.0 if direction == "min" else -1.0 for direction in self.directions]
+        )
+        differences = self.minimize_objectives[:, None, :] - reference[None, :, :] * signs
+        return float(differences.amax(dim=-1).amin(dim=0).amax().item())
 
     def to_frame(self, problem: MultiObjectiveProblem | None = None):
         """Return objectives and, optionally, named decision variables."""
@@ -335,6 +393,48 @@ def _crowding_distance(values: torch.Tensor) -> torch.Tensor:
     return distance
 
 
+def scalarize_objectives(
+    normalised: torch.Tensor,
+    weights: torch.Tensor,
+    *,
+    method: str = "augmented-tchebycheff",
+    augmentation: float = 0.05,
+) -> torch.Tensor:
+    """Apply one row-aligned Pareto scalarisation to each replica."""
+    if normalised.shape != weights.shape or normalised.ndim != 2:
+        raise ValueError("normalised and weights must have the same rank-two shape.")
+    weighted = weights * normalised
+    if method == "weighted-sum":
+        return weighted.sum(dim=1)
+    if method == "augmented-tchebycheff":
+        return weighted.amax(dim=1) + augmentation * weighted.sum(dim=1)
+    if method == "achievement":
+        inverse = normalised / weights.clamp_min(1e-6)
+        return inverse.amax(dim=1) + augmentation * inverse.sum(dim=1)
+    if method == "pbi":
+        direction = weights / weights.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        along = (normalised * direction).sum(dim=1)
+        perpendicular = (normalised - along.unsqueeze(1) * direction).norm(dim=1)
+        return along + max(augmentation, 1e-6) * perpendicular
+    if method == "epsilon-constraint":
+        primary = torch.argmax(weights, dim=1)
+        rows = torch.arange(len(weights), device=weights.device)
+        primary_value = normalised[rows, primary]
+        epsilon = (1.0 - weights).clamp(0.05, 0.95)
+        violation = (normalised - epsilon).clamp_min(0.0)
+        violation[rows, primary] = 0.0
+        return primary_value + (1.0 + augmentation) * violation.sum(dim=1)
+    if method == "normal-boundary":
+        direction = weights / weights.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        projection = (normalised * direction).sum(dim=1)
+        boundary = (normalised - projection.unsqueeze(1) * direction).norm(dim=1)
+        return boundary - augmentation * projection
+    raise ValueError(
+        "method must be weighted-sum, augmented-tchebycheff, achievement, "
+        "pbi, epsilon-constraint, or normal-boundary."
+    )
+
+
 def _update_archive(
     problem: MultiObjectiveProblem,
     solutions: torch.Tensor,
@@ -411,6 +511,7 @@ def pareto_anneal(
     min_bg: float = -0.5,
     max_bg: float = 1.0,
     curve_rate: int = 2,
+    scalarization: str = "augmented-tchebycheff",
     augmentation: float = 0.05,
     div_param: float = 0.01,
     archive_interval: int = 25,
@@ -489,6 +590,15 @@ def pareto_anneal(
             raise ValueError(f"{name} must be a positive integer.")
     if constraint_strategy not in {"adaptive", "fixed"}:
         raise ValueError("constraint_strategy must be 'adaptive' or 'fixed'.")
+    if scalarization not in {
+        "weighted-sum",
+        "augmented-tchebycheff",
+        "achievement",
+        "pbi",
+        "epsilon-constraint",
+        "normal-boundary",
+    }:
+        raise ValueError("Unsupported scalarization method.")
     if (
         isinstance(penalty_growth, bool)
         or not isinstance(penalty_growth, Real)
@@ -590,8 +700,12 @@ def pareto_anneal(
         ideal = detached.amin(dim=0)
         nadir = detached.amax(dim=0)
         normalised = (objective_min - ideal) / (nadir - ideal).clamp_min(1e-8)
-        weighted = weights * normalised
-        scalar = weighted.amax(dim=1) + augmentation * weighted.sum(dim=1)
+        scalar = scalarize_objectives(
+            normalised,
+            weights,
+            method=scalarization,
+            augmentation=augmentation,
+        )
         if problem.constraints:
             residual_matrix, violation_matrix, equality = _constraint_matrices(problem, values)
             tolerances = values.new_tensor(
@@ -769,4 +883,4 @@ def pareto_anneal(
     )
 
 
-__all__ = ["ParetoResult", "nondominated_mask", "pareto_anneal"]
+__all__ = ["ParetoResult", "nondominated_mask", "pareto_anneal", "scalarize_objectives"]

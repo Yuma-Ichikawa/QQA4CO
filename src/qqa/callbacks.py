@@ -58,10 +58,10 @@ class HistoryRecorder(Callback):
     each epoch and dominates the wall-clock when the kernels themselves are
     cheap (small problems / GPU). To avoid that:
 
-    * Per-epoch scalars are kept as **GPU 0-dim tensors** and appended to a
-      Python list. There is no ``.item()`` call inside :meth:`on_epoch_end`.
-    * :meth:`on_train_end` performs a **single** ``torch.stack(...).cpu()``
-      per metric, which costs one sync regardless of ``num_epochs``.
+    * Per-epoch scalars are written into preallocated device tensors. There
+      is no ``.item()`` call inside :meth:`on_epoch_end`.
+    * :meth:`on_train_end` slices and transfers each buffer once, which costs
+      one synchronisation regardless of ``num_epochs``.
     * ``stride`` skips intermediate epochs entirely (the last epoch is always
       recorded so that final-state observers see a non-empty history).
 
@@ -85,18 +85,28 @@ class HistoryRecorder(Callback):
             "bg": [],
             "best_obj": [],
         }
-        # Per-epoch GPU scalars accumulated until ``on_train_end``.
-        self._loss_mean_buf: list[torch.Tensor] = []
-        self._loss_std_buf: list[torch.Tensor] = []
-        self._loss_min_buf: list[torch.Tensor] = []
-        self._penalty_mean_buf: list[torch.Tensor] = []
-        self._penalty_std_buf: list[torch.Tensor] = []
-        self._diversity_buf: list[torch.Tensor] = []
-        # ``bg`` is a Python float and ``best_obj`` is already host-side
-        # (or a numpy array for batched problems), so they cost nothing to
-        # append directly.
-        self._bg_buf: list[float] = []
-        self._best_obj_buf: list = []
+        # A preallocated device ring avoids one Python tensor object per
+        # metric per epoch. Columns are loss mean/std/min, penalty mean/std,
+        # diversity, and BG.
+        self._device_history: torch.Tensor | None = None
+        self._best_device_history: torch.Tensor | None = None
+        self._records = 0
+
+    def on_train_begin(self, state: CallbackState) -> None:
+        records = max(1, (state.num_epochs + self.stride - 1) // self.stride + 1)
+        dtype = state.x.dtype if state.x.is_floating_point() else torch.float32
+        self._device_history = torch.empty(
+            (records, 7),
+            device=state.x.device,
+            dtype=dtype,
+        )
+        best = torch.as_tensor(state.best_obj, device=state.x.device, dtype=dtype)
+        self._best_device_history = torch.empty(
+            (records, *best.shape),
+            device=state.x.device,
+            dtype=dtype,
+        )
+        self._records = 0
 
     def _should_record(self, state: CallbackState) -> bool:
         # Always record the final epoch so post-hoc consumers see the
@@ -109,56 +119,50 @@ class HistoryRecorder(Callback):
         losses = state.losses.detach()
         penalties = state.penalties.detach()
 
-        # Keep all reductions on the device. ``losses.std()`` of a 1-element
-        # tensor returns NaN; mirror the legacy behaviour (0.0) by using a
-        # zero-valued GPU scalar instead of forcing a device sync to branch.
-        self._loss_mean_buf.append(losses.mean())
-        if losses.numel() > 1:
-            self._loss_std_buf.append(losses.std())
-        else:
-            self._loss_std_buf.append(torch.zeros((), device=losses.device, dtype=losses.dtype))
-        self._loss_min_buf.append(losses.min())
-
-        self._penalty_mean_buf.append(penalties.mean())
-        if penalties.numel() > 1:
-            self._penalty_std_buf.append(penalties.std())
-        else:
-            self._penalty_std_buf.append(
-                torch.zeros((), device=penalties.device, dtype=penalties.dtype)
-            )
-
+        if self._device_history is None:
+            self.on_train_begin(state)
+        assert self._device_history is not None
+        loss_std = losses.std() if losses.numel() > 1 else losses.new_zeros(())
+        penalty_std = penalties.std() if penalties.numel() > 1 else penalties.new_zeros(())
         div = state.diversity
-        if torch.is_tensor(div):
-            self._diversity_buf.append(div.detach())
-        else:
-            # Float diversity (e.g. sol_size == 1 path) — wrap as a CPU scalar
-            # so the final ``stack`` works without a device transfer.
-            self._diversity_buf.append(torch.tensor(float(div)))
-
-        self._bg_buf.append(state.bg)
-        bo = state.best_obj
-        if hasattr(bo, "tolist"):
-            self._best_obj_buf.append(bo.tolist())
-        else:
-            self._best_obj_buf.append(float(bo))
+        div = div.detach() if torch.is_tensor(div) else losses.new_tensor(float(div))
+        self._device_history[self._records] = torch.stack(
+            (
+                losses.mean(),
+                loss_std,
+                losses.min(),
+                penalties.mean(),
+                penalty_std,
+                div.to(losses),
+                losses.new_tensor(state.bg),
+            )
+        ).to(self._device_history)
+        assert self._best_device_history is not None
+        self._best_device_history[self._records] = torch.as_tensor(
+            state.best_obj,
+            device=self._best_device_history.device,
+            dtype=self._best_device_history.dtype,
+        )
+        self._records += 1
 
     def on_train_end(self, state: CallbackState) -> None:  # noqa: ARG002 - state unused
-        # Bulk device->host transfer: one sync per metric instead of per epoch.
-        def _flush(buf: list[torch.Tensor]) -> list[float]:
-            if not buf:
-                return []
-            # Tensors may live on different devices if a custom callback added
-            # entries; promote to CPU first to keep ``stack`` happy.
-            return [float(t) for t in torch.stack([t.detach().to("cpu") for t in buf]).tolist()]
-
-        self.history["loss_mean"] = _flush(self._loss_mean_buf)
-        self.history["loss_std"] = _flush(self._loss_std_buf)
-        self.history["loss_min"] = _flush(self._loss_min_buf)
-        self.history["penalty_mean"] = _flush(self._penalty_mean_buf)
-        self.history["penalty_std"] = _flush(self._penalty_std_buf)
-        self.history["diversity"] = _flush(self._diversity_buf)
-        self.history["bg"] = list(self._bg_buf)
-        self.history["best_obj"] = list(self._best_obj_buf)
+        matrix = (
+            torch.empty((0, 7))
+            if self._device_history is None
+            else self._device_history[: self._records].detach().cpu()
+        )
+        for index, name in enumerate(
+            ("loss_mean", "loss_std", "loss_min", "penalty_mean", "penalty_std", "diversity", "bg")
+        ):
+            self.history[name] = [float(value) for value in matrix[:, index].tolist()]
+        best = (
+            []
+            if self._best_device_history is None
+            else self._best_device_history[: self._records].detach().cpu().tolist()
+        )
+        self.history["best_obj"] = [
+            float(value) if not isinstance(value, list) else value for value in best
+        ]
 
 
 class AutoDivTuner(Callback):

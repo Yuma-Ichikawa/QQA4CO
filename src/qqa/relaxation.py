@@ -275,3 +275,99 @@ class CategoricalRelaxation:
 
     def num_variables(self, problem):
         return problem.num_node
+
+
+class SoftmaxCategoricalRelaxation(CategoricalRelaxation):
+    """Logit/softmax categorical relaxation with temperature annealing support."""
+
+    def __init__(self, temperature: float = 1.0, *, gumbel: bool = False) -> None:
+        if temperature <= 0:
+            raise ValueError("temperature must be > 0.")
+        self.temperature = float(temperature)
+        self.gumbel = bool(gumbel)
+
+    def init(self, sol_size, problem, device):
+        categories = getattr(problem, "num_category", None)
+        if categories is None or categories < 2:
+            raise ValueError("Softmax relaxation requires num_category >= 2.")
+        return torch.zeros(
+            (sol_size, problem.num_node, categories),
+            device=device,
+            dtype=torch.float32,
+            requires_grad=True,
+        )
+
+    def forward(self, x):
+        logits = x
+        if self.gumbel:
+            uniform = torch.rand_like(logits).clamp_(1e-7, 1 - 1e-7)
+            logits = logits - torch.log(-torch.log(uniform))
+        return torch.softmax(logits / self.temperature, dim=-1)
+
+    def encode(self, values):
+        probabilities = values.clamp_min(1e-8)
+        return probabilities.log() - probabilities.log().mean(dim=-1, keepdim=True)
+
+    def perturb_(self, x, learning_rate, temp):
+        with torch.no_grad():
+            if temp > 0:
+                x.add_(torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5))
+            x.sub_(x.mean(dim=-1, keepdim=True)).clamp_(-30.0, 30.0)
+
+
+class SinkhornRelaxation(SoftmaxCategoricalRelaxation):
+    """Doubly-stochastic permutation relaxation.
+
+    ``project`` intentionally stays device-local and uses a row-wise hard
+    projection.  Exact assignment repair belongs at the explicit repair
+    boundary after optimisation; running a CPU Hungarian solver in every
+    annealing epoch would otherwise dominate the hot loop and synchronise a
+    CUDA device repeatedly.
+    """
+
+    def __init__(
+        self,
+        temperature: float = 1.0,
+        *,
+        iterations: int = 12,
+        gumbel: bool = False,
+    ) -> None:
+        super().__init__(temperature, gumbel=gumbel)
+        if isinstance(iterations, bool) or iterations < 1:
+            raise ValueError("iterations must be a positive integer.")
+        self.iterations = int(iterations)
+
+    def init(self, sol_size, problem, device):
+        if getattr(problem, "num_node", None) != getattr(problem, "num_category", None):
+            raise ValueError("SinkhornRelaxation requires a square assignment problem.")
+        return super().init(sol_size, problem, device)
+
+    def forward(self, x):
+        logits = x
+        if self.gumbel:
+            uniform = torch.rand_like(logits).clamp_(1e-7, 1 - 1e-7)
+            logits = logits - torch.log(-torch.log(uniform))
+        log_matrix = logits / self.temperature
+        for _ in range(self.iterations):
+            log_matrix = log_matrix - torch.logsumexp(log_matrix, dim=-1, keepdim=True)
+            log_matrix = log_matrix - torch.logsumexp(log_matrix, dim=-2, keepdim=True)
+        return log_matrix.exp()
+
+    def project(self, x):
+        return super().project(x)
+
+    def penalty_from_forward(self, x, x_fwd, curve_rate):  # noqa: ARG002
+        row = self._penalty_from_norm(x_fwd, curve_rate)
+        column_residual = (x_fwd.sum(dim=-2) - 1.0).square().sum(dim=-1)
+        return row + column_residual
+
+
+__all__ = [
+    "BinaryInstanceRelaxation",
+    "BinaryRelaxation",
+    "CategoricalRelaxation",
+    "Relaxation",
+    "SinkhornRelaxation",
+    "SoftmaxCategoricalRelaxation",
+    "SpinRelaxation",
+]

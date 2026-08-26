@@ -5,16 +5,21 @@ mirrors the surface of :func:`qqa.anneal` so SA can be benchmarked head-to-
 head against QQA / CRA-PI-GNN / CPRA on the *same*
 :class:`~qqa.problems.COProblem` instances.
 
-Two execution paths are dispatched automatically:
+Three execution paths are dispatched automatically:
 
-1. **QUBO fast path** (``problem.Q_mat`` present) — :func:`_qubo_seq_glauber_sweep`
+1. **Sparse QUBO path** (``problem.sparse_qubo`` present) — a deterministic
+   graph colouring groups independent variables, then each colour is updated
+   in one device operation. This preserves valid conditional moves without
+   allocating a dense matrix or launching one kernel per variable.
+2. **Dense QUBO compatibility path** (``problem.Q_mat`` present) —
+   :func:`_qubo_seq_glauber_sweep`
    runs *sequential* single-bit Glauber/Metropolis updates inside one
    sweep, but every replica is updated in parallel on GPU. The per-bit
    ΔE is computed from the relevant column of ``Q`` in O(N) per bit, so a
    full sweep is O(N²) flops per replica with **zero host round-trips**.
    This is the textbook-correct sampler that Boltzmann-equilibrates for
    any symmetric QUBO.
-2. **Generic single-spin sequential MH** — for non-QUBO problems
+3. **Generic single-spin sequential MH** — for non-QUBO problems
    (``Knapsack``, ``MaxSAT3``, ``MaximumIndependentSet``'s edge-list
    variants when used through ``UserProblem``, ...). Calls
    ``problem.loss_fn`` ``N`` times per sweep; correct, slower, but works
@@ -179,6 +184,82 @@ def _qubo_parallel_metropolis_sweep(
     return torch.where(u < accept_p, 1.0 - x, x)
 
 
+def _interaction_color_classes(
+    edge_index: torch.Tensor,
+    num_vars: int,
+    *,
+    device: torch.device,
+) -> tuple[torch.Tensor, ...]:
+    """Greedily colour a sparse interaction graph into independent sets.
+
+    Colouring is deterministic and happens once before sampling. Variables in
+    one returned class share no factor, so their conditional Metropolis moves
+    can be evaluated and committed in one vectorised device operation.
+    """
+    edges = torch.as_tensor(edge_index, dtype=torch.long).detach().cpu()
+    if edges.ndim != 2 or edges.shape[0] != 2:
+        raise ValueError("edge_index must have shape (2, E).")
+    adjacency = [set() for _ in range(num_vars)]
+    for left, right in edges.T.tolist():
+        if not 0 <= left < num_vars or not 0 <= right < num_vars:
+            raise ValueError("edge_index contains an out-of-range variable.")
+        if left != right:
+            adjacency[left].add(right)
+            adjacency[right].add(left)
+    colours = [-1] * num_vars
+    order = sorted(range(num_vars), key=lambda index: (-len(adjacency[index]), index))
+    for vertex in order:
+        forbidden = {colours[neighbour] for neighbour in adjacency[vertex]}
+        colour = 0
+        while colour in forbidden:
+            colour += 1
+        colours[vertex] = colour
+    return tuple(
+        torch.tensor(
+            [index for index, assigned in enumerate(colours) if assigned == colour],
+            dtype=torch.long,
+            device=device,
+        )
+        for colour in range(max(colours, default=-1) + 1)
+    )
+
+
+def _sparse_colored_metropolis_sweep(
+    x: torch.Tensor,
+    sparse_qubo,
+    color_classes: tuple[torch.Tensor, ...],
+    beta: float | torch.Tensor,
+    rng: torch.Generator,
+) -> torch.Tensor:
+    """One exact colour-block sweep for a sparse binary QUBO.
+
+    The update is sequential across graph colours and parallel across every
+    independent variable within a colour and every replica. It avoids the
+    invalid all-variable Jacobi move while replacing an ``N``-iteration
+    Python loop with a loop over the usually much smaller chromatic count.
+    """
+    result = x.clone()
+    for indices in color_classes:
+        if indices.numel() == 0:
+            continue
+        gradient = sparse_qubo.gradient(result)
+        selected = result[:, indices]
+        delta = (1.0 - 2.0 * selected) * gradient[:, indices]
+        accept_probability = torch.exp(torch.clamp(-beta * delta, max=0.0))
+        uniform = torch.rand(
+            selected.shape,
+            device=result.device,
+            dtype=result.dtype,
+            generator=rng,
+        )
+        result[:, indices] = torch.where(
+            uniform < accept_probability,
+            1.0 - selected,
+            selected,
+        )
+    return result
+
+
 def _seq_mh_sweep(
     x: torch.Tensor,
     problem,
@@ -229,9 +310,9 @@ def _validate_chain_problem(problem) -> tuple[bool, bool, int]:
             f"problems ({type(problem).__name__}); iterate over instances or "
             "use qqa.anneal which handles batched instances natively."
         )
-    # Some binary problems (TSP's penalty-method formulation) override the
-    # latent shape via ``BinaryRelaxation(shape_fn=...)`` to lift a flat
-    # ``(B, N*N)`` latent into a position×city grid. ``loss_fn`` then uses
+    # Some opt-in structured binary formulations override the latent shape via
+    # ``BinaryRelaxation(shape_fn=...)`` to lift a flat latent into a matrix.
+    # ``loss_fn`` then uses
     # einsum / masked sums that only accept the multi-axis layout, so the
     # chain primitives (which sample a flat ``(B, N)`` state) would blow up
     # inside ``loss_fn`` with an opaque einsum error. Reject at the API
@@ -346,11 +427,27 @@ def simulated_annealing(
 
     betas = _build_beta_schedule(beta_schedule, beta_start, beta_end, num_sweeps).to(device)
 
-    # Pull QUBO fast-path matrix when available. Q_mat is the canonical
-    # attribute on every QUBOProblem subclass shipped by qqa.
-    q_mat = getattr(problem, "Q_mat", None)
+    # Prefer the edge-factor path. Accessing a compatibility ``Q_mat``
+    # property can itself allocate O(N²), so only inspect it when no sparse
+    # representation is available.
+    sparse_qubo = getattr(problem, "sparse_qubo", None)
+    use_sparse_fast = bool(
+        is_binary
+        and sparse_qubo is not None
+        and getattr(sparse_qubo, "num_variables", None) == num_vars
+        and callable(getattr(sparse_qubo, "gradient", None))
+    )
+    color_classes = (
+        _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
+        if use_sparse_fast
+        else ()
+    )
+    q_mat = None if use_sparse_fast else getattr(problem, "Q_mat", None)
     use_qubo_fast = (
-        is_binary and isinstance(q_mat, torch.Tensor) and q_mat.shape == (num_vars, num_vars)
+        not use_sparse_fast
+        and is_binary
+        and isinstance(q_mat, torch.Tensor)
+        and q_mat.shape == (num_vars, num_vars)
     )
     if use_qubo_fast:
         q_mat = q_mat.to(device)
@@ -378,13 +475,21 @@ def simulated_annealing(
 
     runtime_start = time()
     for sweep in range(num_sweeps):
-        beta = float(betas[sweep].item())
+        beta_tensor = betas[sweep]
 
         with torch.no_grad():
-            if use_qubo_fast:
-                x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta, rng)
+            if use_sparse_fast:
+                x = _sparse_colored_metropolis_sweep(
+                    x,
+                    sparse_qubo,
+                    color_classes,
+                    beta_tensor,
+                    rng,
+                )
+            elif use_qubo_fast:
+                x = _qubo_seq_glauber_sweep(x, q_sym, q_diag, beta_tensor, rng)
             else:
-                x = _seq_mh_sweep(x, problem, beta, num_vars, is_spin, rng)
+                x = _seq_mh_sweep(x, problem, beta_tensor, num_vars, is_spin, rng)
 
         with torch.no_grad():
             loss_curr = problem.loss_fn(x)
@@ -398,6 +503,7 @@ def simulated_annealing(
                 best_sol = x[int(min_idx.item())].detach().clone()
 
         if record_history and (sweep % history_stride == 0 or sweep == num_sweeps - 1):
+            beta = float(beta_tensor.item())
             history["loss_mean"].append(float(loss_curr.mean().item()))
             history["loss_min"].append(float(loss_curr.min().item()))
             history["best_obj"].append(best_obj)
@@ -407,6 +513,7 @@ def simulated_annealing(
             callback(sweep, float(loss_curr.mean().item()), best_obj)
 
         if verbose and (sweep % check_interval == 0 or sweep == num_sweeps - 1):
+            beta = float(beta_tensor.item())
             mean_l = float(loss_curr.mean().item())
             print(
                 f"[SA] sweep {sweep:>6d}  beta={beta:.4f}  "

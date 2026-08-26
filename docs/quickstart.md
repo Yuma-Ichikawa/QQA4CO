@@ -32,25 +32,44 @@ import qqa
 qqa.fix_seed(0)
 g = nx.random_regular_graph(d=3, n=100, seed=0)
 problem = qqa.MaximumIndependentSet(g, penalty=2)
-result = qqa.anneal(problem, sol_size=100, num_epochs=1500)
+result = qqa.solve(problem, profile="balanced", device="auto")
 print(f"MIS size: {-int(result.best_obj)}  in {result.runtime:.2f}s")
 ```
 
-The same `qqa.anneal(...)` call works for every problem in the
-[catalog](problems.md).
+`qqa.solve(...)` is the stable entry point. `qqa.anneal(...)` remains
+available when direct control of the QQA loop is useful.
+
+Inspect the route before spending a budget:
+
+```python
+print(qqa.inspect(problem).to_dict())
+print(qqa.plan(problem, profile="quality", device="auto").to_dict())
+```
+
+Solve a public MPS/QPLIB file with the same API:
+
+```python
+result = qqa.solve("instance.mps", profile="balanced", budget=60)
+# Explicit opt-in certification; install the selected backend extra first.
+certified = qqa.solve("instance.mps", profile="certify", budget=60)
+```
 
 ## Run the CLI
 
 ```bash
 qqa version
+qqa inspect model.mps
+qqa plan model.mps --profile balanced
+qqa solve model.mps --profile balanced --budget 60
 qqa solve --problem sk --size 100 --sol-size 128 --epochs 1000
-qqa bench --preset er-small --epochs 500
+qqa benchmark fetch miplib --output benchmarks/miplib
+qqa benchmark fetch qplib --output benchmarks/qplib
 ```
 
 ## Launch the GUI
 
 ```bash
-qqa gui              # opens http://localhost:8501
+qqa gui
 ```
 
 ## Browse example notebooks

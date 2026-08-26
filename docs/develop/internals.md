@@ -17,9 +17,8 @@ QQA4CO/
 ├── examples/            # Auto-generated per-problem notebooks
 ├── scripts/             # Demos, benchmarks, gallery / verification regen
 ├── docs/                # MkDocs-Material source (this site)
-├── data/                # Bundled MIS-ER datasets, gallery assets
+├── data/                # Tiny smoke data and public dataset manifests
 ├── deploy/              # Streamlit Cloud config
-├── tasks/               # Maintainer-only journal: todo.md + lessons.md
 ├── pyproject.toml       # PEP 621, hatchling, ruff, pytest, extras
 ├── mkdocs.yml           # Site nav (this site is built from docs/)
 ├── CHANGELOG.md         # Keep-a-Changelog
@@ -28,77 +27,44 @@ QQA4CO/
 ├── CODE_OF_CONDUCT.md   # Contributor Covenant
 ├── SECURITY.md          # Vulnerability reporting
 ├── Makefile             # `make test / lint / format / docs / serve`
-└── README.md            # The 30-second pitch and the long sales page
+└── README.md            # Short landing page; details live in this site
 ```
 
-`tasks/` is a maintainer journal that we keep in git so future-us can
-re-derive design decisions; it is not part of the public surface.
+Large public datasets and generated campaign trajectories are fetched on
+demand and are not part of the source distribution.
 
 ## `src/qqa/` — module map
 
 ```
 src/qqa/
-├── __init__.py          # Public API surface, __version__ via importlib.metadata
-├── annealing.py         # The single anneal() loop and AnnealResult
-├── relaxation.py        # Binary / Spin / Categorical / Instance relaxations + Protocol
-├── schedule.py          # LinearBGSchedule (callable contract)
-├── callbacks.py         # Callback ABC, CallbackState, History/AutoDiv/Population/Trajectory
-├── utils.py             # fix_seed, generate_graph, MIS / MaxCut analytics
-├── datasets.py          # Bundled MIS-ER loaders + benchmark constants
-├── visualization.py     # Plot helpers (matplotlib + optional plotly)
-├── reporting.py         # Self-contained HTML result export
-├── cli.py               # The qqa command (argparse, no third-party deps)
-├── legacy.py            # Deprecated 0.2.x batch_annealing_* shims
-├── problems/
-│   ├── __init__.py
-│   ├── base.py          # COProblem / QUBOProblem ABCs + normalize_graph
-│   ├── qubo.py          # MIS / MaxClique / MaxCut (+ batched instance variants)
-│   ├── categorical.py   # Coloring, BalancedGraphPartition
-│   ├── spin.py          # SpinProblem, Ising1D, EA, SK, Perceptron, Hopfield
-│   ├── extras.py        # Knapsack, NumberPartitioning, VertexCover, GraphBisection,
-│   │                    # MaxSAT3, TSP, QAP, NQueens
-│   └── user.py          # UserProblem + load_problem_from_file (--problem-file CLI hook)
-├── mixed/               # Typed binary/integer/real modelling
-│   ├── variables.py     # Declarations, bounds, pack/unpack layout
-│   ├── relaxation.py    # Normalised mixed-domain relaxation
-│   ├── problem.py       # Objective + constraint model
-│   ├── augmented_lagrangian.py # Constraint-wise PHR + split archives
-│   ├── encoding.py      # Node-local adaptive integer encodings
-│   ├── repair.py        # Elastic continuous repair
-│   └── solve.py         # Mixed-friendly high-level entry point
-├── algebraic/           # Sparse linear/quadratic benchmark IR
-├── io/                  # MPS and QPLIB importers
-├── presolve/            # Scaling and original/transformed SCIP state
-├── decomposition/       # Independent sub-SCIP continuous completion
-├── benchmarking/        # Public snapshot fetch, metrics, MIPLIB/QPLIB runners
-├── multiobjective/      # Reference directions, Pareto archive, front plots
-│   ├── problem.py       # Objective directions + mixed-variable model
-│   ├── solver.py        # One-run augmented-Tchebycheff optimiser
-│   └── visualization.py # 2-D, 3-D, and parallel-coordinate views
-├── blackbox/            # Gradient-free expensive-function optimisation
-│   ├── problem.py       # Plain-Python objective/constraint contract
-│   ├── solver.py        # RBF surrogate + adaptive batch trust region
-│   └── visualization.py # Convergence/feasibility/trust diagnostics
-├── hybrid/
-│   ├── scip.py          # Optional QQA population → SCIP exact refinement
-│   ├── scip_heuristic.py # Iterative conditional QQA plugin
-│   ├── core_selector.py # RENS/RINS uncertain integer core
-│   ├── neighborhood.py  # Local branching descriptions
-│   └── nonconvex.py     # Sparse DC convexification helpers
-├── tex/                 # TeX → audited declarative model → QQA
-│   ├── client.py        # Credential-safe Responses/Messages transport
-│   ├── schema.py        # Exact JSON model schema and validation
-│   ├── expressions.py   # Restricted AST interpreter (no eval/exec)
-│   └── compiler.py      # Translation, repair, compilation, solve API
-├── visuals/             # Advanced visualisation internals
-│   ├── _data.py         # Backend-neutral diagnostics extraction
-│   └── dashboard.py     # Plotly / Matplotlib result dashboards
-└── pignn/               # Optional CRA-PI-GNN / CPRA backends (PyG)
-    ├── __init__.py      # Re-exports train_cra_pi_gnn / train_cpra_pi_gnn
-    ├── _import.py       # require_pyg() with an actionable ImportError
-    ├── graph.py         # extract_nx_graph + nx_to_edge_index helpers
-    ├── model.py         # GCNNet (2-layer GCNConv, multi-head for CPRA)
-    └── trainer.py       # The two trainer functions (returning AnnealResult)
+├── __init__.py          # Small stable public surface and legacy exports
+├── api.py              # Stable solve / plan / inspect entry points
+├── config.py           # Strict SolverConfig and named profiles
+├── result.py           # Backend-neutral SolveResult contract
+├── annealing.py        # Pure QQA loop; extensions are explicit options
+├── relaxation.py       # Binary, spin, simplex, Gumbel and Sinkhorn maps
+├── schedule.py         # Fixed, cyclic, reheat and adaptive schedules
+├── model/              # Immutable ModelIR, factors, constraints and adapters
+├── compile/            # Sparse QUBO compilation
+├── engines/            # Sparse/component QQA and independent islands
+├── portfolio/          # Inspector, deterministic planner and mini-probes
+├── local/              # Sparse delta search and diverse elite archive
+├── repair/             # Structure-aware repair registry
+├── problems/           # Compatibility problem catalogue
+├── mixed/              # Binary/integer/real augmented-Lagrangian path
+├── algebraic/          # Compatibility sparse linear/quadratic IR
+├── io/                 # MPS/QPLIB/JSON/OPB/DIMACS/QUBO/Ising adapters
+├── presolve/           # Reversible scaling and transformed state
+├── decomposition/      # Continuous completion
+├── benchmarking/       # Public fetch, paired metrics and campaign runner
+├── multiobjective/     # Scalarisations, archive and indicators
+├── blackbox/           # Persistent asynchronous trust-region search
+├── hybrid/             # QQA LNS plus isolated optional exact adapters
+├── uncertainty.py      # Scenario, robust and CVaR evaluation
+├── rolling.py          # Rolling-horizon warm-state hand-off
+├── tex/                # Audited TeX compiler (no eval/exec)
+├── visuals/            # Advanced diagnostics
+└── pignn/              # Optional experimental PyG backends
 ```
 
 ### Hard rules for changes inside `src/qqa/`
@@ -107,9 +73,9 @@ src/qqa/
    that does not live under `qqa/pignn/`.** It pulls in heavy transitive
    deps that core users do not need; a stray `import` here is enough to
    break `pip install qqa` for everyone without `qqa[pignn]`.
-2. **Public API additions go in `src/qqa/__init__.py` *and* its
-   `__all__`** so they show up in `dir(qqa)` and the auto-generated
-   API reference.
+2. **Keep the top-level API small.** Stable capabilities converge on
+   `solve`, `plan`, `inspect`, `ModelIR`, `SolverConfig`, and `SolveResult`;
+   specialised building blocks stay in their feature packages.
 3. **Bug fixes that touch `anneal()` need a regression test.** That
    loop is the central nervous system of the package; every previous
    bug there shipped because the diff "looked obvious".
@@ -130,7 +96,8 @@ app/
 └── pages/
     ├── 1_Solve.py       # Build a problem + run anneal + show progress
     ├── 2_Visualize.py   # Re-render an AnnealResult pickle
-    └── 3_Compare.py     # Hyperparameter sweeps
+    ├── 3_Compare.py     # Matched-budget, multi-seed comparisons
+    └── 4_Universal.py   # Model-file inspect / plan / solve workflow
 ```
 
 The wheel ships this directory under `qqa/_app/` (see
@@ -183,14 +150,16 @@ The categories:
 .github/workflows/ci.yml
         │
         ├── ruff check + ruff format --check
+        ├── mypy stable API
         ├── pytest -q                  ← uses tests/
-        └── mkdocs build --strict      ← uses docs/ and mkdocs.yml
+        ├── deterministic performance guard
+        ├── mkdocs build --strict      ← uses docs/ and mkdocs.yml
+        └── wheel + source build
 ```
 
-A PR that breaks any of those three steps is automatically blocked.
-There is also a Pages workflow that publishes the same `mkdocs build`
-output to <https://yuma-ichikawa.github.io/QQA4CO/> on every push to
-`main`.
+Nightly CUDA checks cover device parity, mixed precision, compilation and
+memory behaviour. A scheduled public-benchmark workflow exercises a pinned,
+small MIPLIB/QPLIB subset without committing machine-specific trajectories.
 
 ## Where to start a typical PR
 

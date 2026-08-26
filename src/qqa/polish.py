@@ -22,6 +22,8 @@ import torch
 
 def _polish_solution(problem, best_sol: torch.Tensor) -> torch.Tensor | None:
     """Dispatch to the strongest safe local neighbourhood for the domain."""
+    if getattr(problem, "sparse_qubo", None) is not None:
+        return greedy_one_flip(problem, best_sol)
     if getattr(problem, "Q_mat", None) is not None:
         return greedy_one_flip(problem, best_sol)
 
@@ -99,6 +101,17 @@ def greedy_one_flip(
     (Spin / Categorical / batched-instance problems) — making the routine
     safe to invoke unconditionally as a post-processing step.
     """
+    sparse = getattr(problem, "sparse_qubo", None)
+    if sparse is not None and bits.ndim == 1 and bits.numel():
+        from qqa.compile import SparseQUBO
+        from qqa.local import sparse_qubo_descent
+
+        if isinstance(sparse, SparseQUBO):
+            return sparse_qubo_descent(
+                sparse,
+                bits,
+                max_flips=max_iters,
+            ).solution.to(device=bits.device, dtype=bits.dtype)
     Q = getattr(problem, "Q_mat", None)
     if Q is None or bits.numel() == 0 or bits.dim() != 1 or Q.dim() != 2:
         return bits

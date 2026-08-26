@@ -25,8 +25,14 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from qqa.compile import SparseQUBO
 from qqa.problems.base import COProblem, normalize_graph
-from qqa.relaxation import BinaryRelaxation, CategoricalRelaxation, SpinRelaxation
+from qqa.relaxation import (
+    BinaryRelaxation,
+    CategoricalRelaxation,
+    SinkhornRelaxation,
+    SpinRelaxation,
+)
 
 __all__ = [
     "Knapsack",
@@ -159,6 +165,11 @@ class Knapsack(COProblem):
         overflow = torch.clamp(weight - self.capacity, min=0.0)
         return -value + self.penalty * overflow * overflow
 
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        from qqa.repair import knapsack_repair
+
+        return knapsack_repair(x_disc, self.weights, self.values, self.capacity)
+
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x_disc = _ensure_batched(x_disc, 1)
         with torch.no_grad():
@@ -216,6 +227,16 @@ class VertexCover(COProblem):
         self.edge_u = edge_idx[:, 0]
         self.edge_v = edge_idx[:, 1]
         self.num_edges = edge_idx.shape[0]
+        degree = torch.zeros(self.num_nodes, dtype=torch.float32, device=device)
+        if self.num_edges:
+            degree.scatter_add_(0, self.edge_u, torch.ones_like(self.edge_u, dtype=torch.float32))
+            degree.scatter_add_(0, self.edge_v, torch.ones_like(self.edge_v, dtype=torch.float32))
+        self.sparse_qubo = SparseQUBO(
+            linear=torch.ones(self.num_nodes, device=device) - float(self.penalty) * degree,
+            edge_index=edge_idx.T,
+            edge_weight=torch.full((self.num_edges,), float(self.penalty), device=device),
+            constant=float(self.penalty) * self.num_edges,
+        )
         self.relaxation = BinaryRelaxation()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
@@ -226,6 +247,26 @@ class VertexCover(COProblem):
         xv = x[:, self.edge_v]
         uncovered = (1 - xu) * (1 - xv)
         return cover_size + self.penalty * uncovered.sum(dim=-1)
+
+    @torch.no_grad()
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        if x_disc.ndim != 1:
+            raise ValueError("VertexCover repair expects one flat candidate.")
+        result = x_disc.round().clamp(0, 1).clone()
+        degree = torch.bincount(torch.cat((self.edge_u, self.edge_v)), minlength=self.num_nodes)
+        for left, right in zip(self.edge_u.tolist(), self.edge_v.tolist(), strict=True):
+            if result[left] < 0.5 and result[right] < 0.5:
+                result[left if degree[left] >= degree[right] else right] = 1.0
+        # Remove redundant selected vertices while preserving edge coverage.
+        for vertex in torch.argsort(degree).tolist():
+            if result[vertex] < 0.5:
+                continue
+            result[vertex] = 0.0
+            if self.num_edges and torch.any(
+                (result[self.edge_u] < 0.5) & (result[self.edge_v] < 0.5)
+            ):
+                result[vertex] = 1.0
+        return result
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x_disc = _ensure_batched(x_disc, 1)
@@ -538,7 +579,7 @@ class MaxSAT3(COProblem):
 
 
 class TSP(COProblem):
-    r"""Symmetric travelling salesperson — solved with the **penalty method**.
+    r"""Symmetric travelling salesperson with permutation-aware relaxation.
 
     Variable encoding follows Lucas (2014) "Ising formulations of many NP
     problems": ``x ∈ {0, 1}^{N×N}`` with ``x[t, i] = 1`` iff city ``i``
@@ -552,11 +593,9 @@ class TSP(COProblem):
     * **column penalty** — :math:`\lambda_c \sum_i (\sum_t x_{t,i} - 1)^2`
       so every city appears exactly once.
 
-    Unlike the previous CategoricalRelaxation-based formulation (where the
-    row constraint was enforced by softmax inside the relaxation, hiding
-    it from the loss), this version uses :class:`BinaryRelaxation` so QQA
-    sees both penalties as gradients and the user can tune their weights
-    from the Streamlit sidebar — a textbook penalty-method setup.
+    Sinkhorn is the default because its continuous state respects assignment
+    structure.  The explicit binary penalty formulation remains available as
+    ``relaxation="binary"`` for controlled comparisons.
     """
 
     def __init__(
@@ -567,6 +606,7 @@ class TSP(COProblem):
         col_penalty: float = 5.0,
         column_penalty: float | None = None,  # legacy alias for col_penalty
         penalty_weights: dict[str, float] | None = None,
+        relaxation: str = "sinkhorn",
         device: str | torch.device = "cpu",
     ):
         super().__init__()
@@ -611,10 +651,13 @@ class TSP(COProblem):
         self.coords = torch.as_tensor(rng.random((N, 2)), dtype=torch.float32, device=device)
         diff = self.coords.unsqueeze(0) - self.coords.unsqueeze(1)
         self.distance = torch.sqrt((diff * diff).sum(dim=-1) + 1e-12)
-        # Two penalty terms ⇒ both constraints are *gradients*, not hard
-        # constraints embedded in a softmax.  The shape_fn lifts the
-        # default (sol_size, num_nodes) latent into a position×city grid.
-        self.relaxation = BinaryRelaxation(shape_fn=lambda sol_size, p: (sol_size, p.N, p.N))
+        if relaxation == "binary":
+            self.relaxation = BinaryRelaxation(shape_fn=lambda sol_size, p: (sol_size, p.N, p.N))
+        elif relaxation in {"sinkhorn", "gumbel-sinkhorn"}:
+            self.relaxation = SinkhornRelaxation(gumbel=relaxation == "gumbel-sinkhorn")
+        else:
+            raise ValueError("relaxation must be binary, sinkhorn, or gumbel-sinkhorn.")
+        self.relaxation_name = relaxation
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, T, C) ∈ [0, 1]
@@ -623,6 +666,60 @@ class TSP(COProblem):
         row_pen = ((x.sum(dim=2) - 1.0) ** 2).sum(dim=1)
         col_pen = ((x.sum(dim=1) - 1.0) ** 2).sum(dim=1)
         return tour + self.row_penalty * row_pen + self.col_penalty * col_pen
+
+    def objective_values(self, x: torch.Tensor) -> torch.Tensor:
+        """Return only the original tour-length objective, without penalties."""
+        values = x.unsqueeze(0) if x.ndim == 2 else x
+        return torch.einsum(
+            "bti,ij,btj->b",
+            values,
+            self.distance.to(values),
+            torch.roll(values, shifts=-1, dims=1),
+        )
+
+    @torch.no_grad()
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        """Return the closest permutation without mutating the candidate.
+
+        Repair and scoring are deliberately separate: callers can retain the
+        raw QQA state for diagnostics while explicitly selecting the repaired
+        tour for reporting or local search.
+        """
+        values = x_disc.unsqueeze(0) if x_disc.ndim == 2 else x_disc
+        if values.ndim != 3 or values.shape[1:] != (self.N, self.N):
+            raise ValueError(f"Expected shape ({self.N}, {self.N}) or (B, {self.N}, {self.N}).")
+        from qqa.repair import assignment_projection  # noqa: PLC0415
+
+        projected = assignment_projection(x_disc)
+        unbatched = projected.ndim == 2
+        tours = projected.unsqueeze(0) if unbatched else projected
+        refined = torch.zeros_like(tours)
+        distance = self.distance.detach().cpu()
+        for batch, matrix in enumerate(tours):
+            order = torch.argmax(matrix, dim=1).detach().cpu().tolist()
+            improved = True
+            passes = 0
+            while improved and passes < self.N:
+                improved = False
+                passes += 1
+                for left in range(self.N - 1):
+                    a = order[left - 1]
+                    b = order[left]
+                    for right in range(left + 1, self.N):
+                        c = order[right]
+                        d = order[(right + 1) % self.N]
+                        change = distance[a, c] + distance[b, d] - distance[a, b] - distance[c, d]
+                        if float(change.item()) < -1e-12:
+                            order[left : right + 1] = reversed(order[left : right + 1])
+                            improved = True
+                if not improved:
+                    break
+            refined[
+                batch,
+                torch.arange(self.N, device=tours.device),
+                torch.as_tensor(order, device=tours.device),
+            ] = 1.0
+        return refined[0] if unbatched else refined
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x_disc = _ensure_batched(x_disc, 2)
@@ -633,31 +730,17 @@ class TSP(COProblem):
             # snap each replica to its closest permutation via the
             # Hungarian algorithm so the dashboard can always show a real
             # tour.
-            idx_raw = torch.argmax(x_disc, dim=2)  # (B, T)
             row_counts = x_disc.sum(dim=2)  # (B, T)
-            col_counts = torch.zeros(x_disc.shape[0], self.N, device=x_disc.device)
-            col_counts.scatter_add_(1, idx_raw, torch.ones_like(idx_raw, dtype=torch.float32))
+            col_counts = x_disc.sum(dim=1)  # (B, C)
             row_violation = ((row_counts - 1.0) ** 2).sum(dim=1)
             col_violation = ((col_counts - 1.0) ** 2).sum(dim=1)
             total_violation = row_violation + col_violation
 
-            # Snap each replica's continuous matrix to a permutation:
-            # max trace assignment ≡ ``linear_sum_assignment(-x)``.
-            from scipy.optimize import linear_sum_assignment as _lsa  # noqa: PLC0415
-
-            x_np = x_disc.detach().cpu().numpy().astype(np.float32)
-            B = x_np.shape[0]
-            snapped_lens = torch.empty(B)
-            snapped_idx = torch.empty(B, self.N, dtype=torch.long)
-            for b in range(B):
-                row_ind, col_ind = _lsa(-x_np[b])
-                # ``row_ind`` is just 0..N-1 already; ``col_ind[t]`` is the
-                # city assigned to position ``t``.
-                snapped_idx[b] = torch.as_tensor(col_ind, dtype=torch.long)
-                coords = self.coords.detach().cpu()[col_ind]
-                coords_next = torch.roll(coords, shifts=-1, dims=0)
-                seg = torch.sqrt(((coords - coords_next) ** 2).sum(dim=-1) + 1e-12)
-                snapped_lens[b] = seg.sum()
+            repaired = self.repair_solution(x_disc)
+            repaired_next = torch.roll(repaired, shifts=-1, dims=1)
+            snapped_lens = torch.einsum(
+                "bti,ij,btj->b", repaired, self.distance.to(repaired), repaired_next
+            )
 
             # Pick the replica with the shortest *snapped* tour, breaking
             # ties by preferring those with the smallest raw violation so
@@ -665,15 +748,6 @@ class TSP(COProblem):
             # converged.
             best = int(torch.argmin(snapped_lens).item())
             raw_feasible = bool(total_violation[best].item() < 0.5)
-
-            # Replace ``best_sol`` in-place with a clean one-hot tour so
-            # downstream visualisation (TSP solution renderer) sees a
-            # valid permutation matrix.  Mutation is intentional — the
-            # caller passes ``best_sol`` directly and wants the cleaned
-            # version surfaced via ``result.best_sol``.
-            cleaned = torch.zeros_like(x_disc[best])
-            cleaned[torch.arange(self.N), snapped_idx[best]] = 1.0
-            x_disc[best] = cleaned
 
         return {
             # The displayed tour is *always* a valid permutation thanks to
@@ -685,7 +759,7 @@ class TSP(COProblem):
             "unit": "",
             "feasible": True,
             "extra": {
-                "unique_cities": int((col_counts[best] > 0).sum().item()),
+                "unique_cities": int((torch.argmax(x_disc[best], dim=1).unique()).numel()),
                 "row_violation": float(row_violation[best].item()),
                 "col_violation": float(col_violation[best].item()),
                 "raw_feasible": raw_feasible,
@@ -708,6 +782,7 @@ class QAP(COProblem):
         seed: int | None = 0,
         column_penalty: float = 5.0,
         penalty_weights: dict[str, float] | None = None,
+        relaxation: str = "sinkhorn",
         device: str | torch.device = "cpu",
     ):
         super().__init__()
@@ -739,7 +814,13 @@ class QAP(COProblem):
         D = (D + D.T) / 2
         self.F = torch.as_tensor(F, device=device)
         self.D = torch.as_tensor(D, device=device)
-        self.relaxation = CategoricalRelaxation()
+        if relaxation == "categorical":
+            self.relaxation = CategoricalRelaxation()
+        elif relaxation in {"sinkhorn", "gumbel-sinkhorn"}:
+            self.relaxation = SinkhornRelaxation(gumbel=relaxation == "gumbel-sinkhorn")
+        else:
+            raise ValueError("relaxation must be categorical, sinkhorn, or gumbel-sinkhorn.")
+        self.relaxation_name = relaxation
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
         # cost = Σ_{ij} F_ij D_kl x[i,k] x[j,l]
@@ -748,6 +829,48 @@ class QAP(COProblem):
         col_sum = x.sum(dim=1)
         col_pen = ((col_sum - 1.0) ** 2).sum(dim=1)
         return cost_per_fac + self.column_penalty * col_pen
+
+    @torch.no_grad()
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        from qqa.repair import assignment_projection
+
+        projected = assignment_projection(x_disc)
+        unbatched = projected.ndim == 2
+        matrices = projected.unsqueeze(0) if unbatched else projected
+        refined = matrices.clone()
+        for batch in range(matrices.shape[0]):
+            assignment = torch.argmax(matrices[batch], dim=1)
+
+            def cost(order: torch.Tensor) -> torch.Tensor:
+                permuted = self.D[order[:, None], order[None, :]]
+                return (self.F * permuted).sum()
+
+            current = cost(assignment)
+            for _ in range(self.N):
+                best = current
+                best_pair = None
+                for left in range(self.N - 1):
+                    for right in range(left + 1, self.N):
+                        candidate = assignment.clone()
+                        candidate[left], candidate[right] = (
+                            assignment[right].clone(),
+                            assignment[left].clone(),
+                        )
+                        value = cost(candidate)
+                        if value < best - 1e-12:
+                            best = value
+                            best_pair = (left, right)
+                if best_pair is None:
+                    break
+                left, right = best_pair
+                assignment[left], assignment[right] = (
+                    assignment[right].clone(),
+                    assignment[left].clone(),
+                )
+                current = best
+            refined[batch].zero_()
+            refined[batch, torch.arange(self.N, device=refined.device), assignment] = 1.0
+        return refined[0] if unbatched else refined
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x_disc = _ensure_batched(x_disc, 2)

@@ -7,6 +7,8 @@ optimum.
 
 from __future__ import annotations
 
+import math
+
 import networkx as nx
 import pytest
 import torch
@@ -286,6 +288,37 @@ def test_qubo_seq_glauber_sweep_does_not_mutate_input():
         "_qubo_seq_glauber_sweep must not mutate its input tensor; "
         "callers and downstream genealogy code rely on pure value semantics."
     )
+
+
+def test_sparse_colored_sa_avoids_dense_compatibility_matrix():
+    graph = nx.path_graph(12)
+    problem = qqa.MaximumIndependentSet(graph, penalty=2.0)
+    assert problem._Q_mat is None
+    result = qqa.simulated_annealing(
+        problem,
+        sol_size=16,
+        num_sweeps=10,
+        seed=0,
+        verbose=False,
+        polish=False,
+    )
+    assert problem._Q_mat is None
+    assert math.isfinite(result.best_obj)
+
+
+def test_sparse_interaction_colours_contain_no_adjacent_variables():
+    from qqa.sa import _interaction_color_classes
+
+    graph = nx.random_regular_graph(3, 20, seed=0)
+    problem = qqa.MaximumIndependentSet(graph)
+    classes = _interaction_color_classes(
+        problem.sparse_qubo.edge_index,
+        problem.num_nodes,
+        device=torch.device("cpu"),
+    )
+    for colour in classes:
+        members = set(colour.tolist())
+        assert all(not ({left, right} <= members) for left, right in graph.edges())
 
 
 def test_qubo_seq_glauber_sweep_solves_3regular_mis():

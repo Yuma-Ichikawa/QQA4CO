@@ -207,7 +207,7 @@ with ask_tab:
                 key="ask_api_key",
             )
             if configured_key and not api_key:
-                st.caption("Using the QQA LLM API key from the server environment.")
+                st.caption("Using the configured QQA LLM API key.")
             api_base = st.text_input(
                 "Compatible base URL",
                 value=qqa.tex.DEFAULT_BASE_URL,
@@ -226,7 +226,7 @@ with ask_tab:
                 and not api_base
                 and not model_name
             ):
-                st.caption("Using the endpoint profile from the server environment.")
+                st.caption("Using the configured endpoint profile.")
             insecure = st.checkbox(
                 "Trusted private gateway uses a non-standard certificate",
                 key="ask_insecure",

@@ -1,13 +1,12 @@
-"""Dataset loaders for benchmark instances shipped with the repository.
+"""Dataset loaders for local copies of public benchmark instances.
 
 All loaders resolve paths relative to the repository root (the directory that
 contains ``data/``). You can override the base directory with the
 ``QQA_DATA_DIR`` environment variable, or pass an explicit ``path=`` argument.
 
-Only ``data/mis/er-small`` and ``data/mis/er-large`` are shipped in this
-repository. The other loaders (SAT, Twitter, RB, BA, OptSicom) are provided
-for completeness; obtain those datasets separately and point ``QQA_DATA_DIR``
-(or the ``path`` argument) at them.
+The source repository contains only small smoke data.  Download full public
+datasets with ``scripts/setup_benchmarks.sh`` and point ``QQA_DATA_DIR`` (or a
+loader's ``path`` argument) at the resulting data root.
 """
 
 from __future__ import annotations
@@ -58,7 +57,7 @@ def _default_data_dir() -> Path:
     if env:
         return Path(env).expanduser().resolve()
     # When installed in editable / source mode, ``parents[2]`` is the
-    # repository root and ``parents[2] / "data"`` ships ``mis/er-small``.
+    # repository root and ``parents[2] / "data"`` may contain smoke data.
     repo_data = _THIS.parents[2] / "data"
     if repo_data.is_dir():
         return repo_data

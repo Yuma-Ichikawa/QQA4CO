@@ -6,6 +6,36 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Canonical QQA runtime and sparse portfolio
+
+- Add strict `qqa.solve`, `qqa.plan`, and `qqa.inspect` entry points, a
+  factor-based `ModelIR`, reversible presolve ledger, and unified
+  `SolveResult` semantics for raw/repaired solutions, objectives, merit,
+  violations, timing, resources, bounds, and proof.
+- Move sparse graph objectives to edge-factor evaluation; add component
+  decomposition, incremental local search, diverse archives, automatic
+  repair, adaptive schedules, replica islands, and optional compiled QQA.
+- Add structured categorical/permutation execution with softmax, Gumbel, and
+  Sinkhorn relaxations. TSP binary penalties are explicit opt-in, and
+  score/repair operations no longer mutate their input.
+- Add portable JSON/OPB/CNF/WCNF/QUBO/Ising inputs, native scheduling/logical/
+  network factors, integer encoding selection, uncertainty aggregation, and
+  rolling-horizon warm-state transfer.
+- Add deterministic portfolio planning, multiple SCIP neighbourhoods with UCB
+  allocation, and process-isolated optional SCIP, HiGHS, CP-SAT, and cuOpt
+  adapters. The default route remains pure QQA.
+- Extend black-box search with persistent evaluation states, asynchronous
+  scheduling, multiple trust regions, scalable random-feature surrogates, and
+  optional QQA acquisition optimisation; extend Pareto search with additional
+  scalarisations and many-objective indicators.
+- Correct NormalizedCut empty partitions, maximize-direction hybrid selection,
+  mixed result semantics, exact schedule endpoints, strict UI option handling,
+  and single-run comparison claims. Add semantic, parser, exact-adapter, CUDA,
+  type, package, performance, and scheduled public-benchmark CI checks.
+- Remove generated large datasets and per-run campaign trajectories from the
+  source tree; retain public fetch/checksum instructions and compact,
+  machine-neutral benchmark summaries.
+
 ### MIPLIB/QPLIB and SCIP-guided conditional QQA
 
 - Fix SG-CQQA device propagation so `device="auto"`, CPU, CUDA, and MPS

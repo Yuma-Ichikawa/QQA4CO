@@ -22,6 +22,7 @@ import networkx as nx
 import numpy as np
 import torch
 
+from qqa.compile import SparseQUBO
 from qqa.problems.base import COProblem, QUBOProblem, normalize_graph
 from qqa.relaxation import BinaryInstanceRelaxation, BinaryRelaxation
 
@@ -58,30 +59,43 @@ class MaximumIndependentSet(QUBOProblem):
         self.penalty = penalty
         self.device = device
         self.num_nodes = self.nx_graph.number_of_nodes()
-        self.Q_mat = self.generate_qubo_matrix()
+        edges = torch.as_tensor(
+            list(self.nx_graph.edges()), dtype=torch.long, device=device
+        ).reshape(-1, 2)
+        self.sparse_qubo = SparseQUBO(
+            linear=-torch.ones(self.num_nodes, device=device),
+            edge_index=edges.T,
+            # Preserve the historical x.T @ Q @ x convention, where the
+            # symmetric off-diagonal entries contribute twice per edge.
+            edge_weight=torch.full((edges.shape[0],), 2.0 * float(self.penalty), device=device),
+        )
+        self._Q_mat: torch.Tensor | None = None
         self.relaxation = BinaryRelaxation()
 
+    @property
+    def Q_mat(self) -> torch.Tensor:
+        if self._Q_mat is None:
+            self._Q_mat = self.sparse_qubo.to_dense()
+        return self._Q_mat
+
     def generate_qubo_matrix(self) -> torch.Tensor:
-        Q = torch.zeros((self.num_nodes, self.num_nodes))
-        for u, v in self.nx_graph.edges:
-            Q[u, v] = self.penalty
-            Q[v, u] = self.penalty
-        for u in self.nx_graph.nodes:
-            Q[u, u] = -1.0
-        return Q.to(self.device)
+        return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
+        return self.sparse_qubo.energy(x)
+
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        from qqa.repair import independent_set_repair
+
+        return independent_set_repair(x_disc, self.sparse_qubo.edge_index)
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
         with torch.no_grad():
             xd = x.float()
             size = xd.sum(dim=-1)
-            # Count violated edges directly from the graph to avoid double-counting.
-            adj = self.Q_mat.clone()
-            adj.fill_diagonal_(0.0)
-            violations = 0.5 * torch.einsum("bi,ij,bj->b", xd, (adj > 0).float(), xd)
+            source, target = self.sparse_qubo.edge_index
+            violations = (xd[:, source] * xd[:, target]).sum(dim=-1)
         feas = violations <= 0.5
         if feas.any():
             s = size.clone()
@@ -217,30 +231,41 @@ class MaxClique(QUBOProblem):
         self.penalty = penalty
         self.device = device
         self.num_nodes = self.nx_graph.number_of_nodes()
-        self.Q_mat = self.generate_qubo_matrix()
+        non_edges = torch.as_tensor(
+            list(nx.non_edges(self.nx_graph)), dtype=torch.long, device=device
+        ).reshape(-1, 2)
+        self.sparse_qubo = SparseQUBO(
+            linear=-torch.ones(self.num_nodes, device=device),
+            edge_index=non_edges.T,
+            edge_weight=torch.full((non_edges.shape[0],), 2.0 * float(self.penalty), device=device),
+        )
+        self._Q_mat: torch.Tensor | None = None
         self.relaxation = BinaryRelaxation()
 
+    @property
+    def Q_mat(self) -> torch.Tensor:
+        if self._Q_mat is None:
+            self._Q_mat = self.sparse_qubo.to_dense()
+        return self._Q_mat
+
     def generate_qubo_matrix(self) -> torch.Tensor:
-        Q = torch.full((self.num_nodes, self.num_nodes), float(self.penalty))
-        for u, v in self.nx_graph.edges:
-            Q[u, v] = 0.0
-            Q[v, u] = 0.0
-        for u in self.nx_graph.nodes:
-            Q[u, u] = -1.0
-        return Q.to(self.device)
+        return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
+        return self.sparse_qubo.energy(x)
+
+    def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
+        from qqa.repair import independent_set_repair
+
+        return independent_set_repair(x_disc, self.sparse_qubo.edge_index)
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
         with torch.no_grad():
             xd = x.float()
             size = xd.sum(dim=-1)
-            # Missing edges inside the chosen set (i.e. non-clique pairs).
-            non_edge = self.Q_mat.clone()
-            non_edge.fill_diagonal_(0.0)
-            violations = 0.5 * torch.einsum("bi,ij,bj->b", xd, (non_edge > 0).float(), xd)
+            source, target = self.sparse_qubo.edge_index
+            violations = (xd[:, source] * xd[:, target]).sum(dim=-1)
         feas = violations <= 0.5
         if feas.any():
             s = size.clone()
@@ -343,34 +368,46 @@ class MaxCut(QUBOProblem):
         self.nx_graph = normalize_graph(nx_graph)
         self.device = device
         self.num_nodes = self.nx_graph.number_of_nodes()
-        self.Q_mat = self.generate_qubo_matrix()
+        raw_edges = list(self.nx_graph.edges(data=True))
+        edges = torch.as_tensor(
+            [(u, v) for u, v, _ in raw_edges], dtype=torch.long, device=device
+        ).reshape(-1, 2)
+        weights = torch.as_tensor(
+            [float(data.get("weight", 1.0)) for _, _, data in raw_edges],
+            dtype=torch.float32,
+            device=device,
+        )
+        degree = torch.zeros(self.num_nodes, dtype=torch.float32, device=device)
+        if edges.shape[0]:
+            degree.scatter_add_(0, edges[:, 0], weights)
+            degree.scatter_add_(0, edges[:, 1], weights)
+        self.sparse_qubo = SparseQUBO(
+            linear=-degree,
+            edge_index=edges.T,
+            edge_weight=2.0 * weights,
+        )
+        self._Q_mat: torch.Tensor | None = None
         self.relaxation = BinaryRelaxation()
 
+    @property
+    def Q_mat(self) -> torch.Tensor:
+        if self._Q_mat is None:
+            self._Q_mat = self.sparse_qubo.to_dense()
+        return self._Q_mat
+
     def generate_qubo_matrix(self) -> torch.Tensor:
-        Q = torch.zeros((self.num_nodes, self.num_nodes))
-        for u, v, data in self.nx_graph.edges(data=True):
-            w = float(data.get("weight", 1.0))
-            Q[u, v] = w
-            Q[v, u] = w
-        wsum = Q.sum(dim=1)
-        for u in self.nx_graph.nodes:
-            Q[u, u] = -wsum[u].item()
-        return Q.to(self.device)
+        return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.einsum("bi,ij,bj->b", x, self.Q_mat, x)
+        return self.sparse_qubo.energy(x)
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)
         with torch.no_grad():
             xd = x.float()
-            # Cut size = sum of edge weights w_{uv} [x_u != x_v].
-            W = self.Q_mat.clone()
-            W.fill_diagonal_(0.0)
-            cut = 0.5 * torch.einsum("bi,ij,bj->b", xd, W, 1 - xd) + 0.5 * torch.einsum(
-                "bi,ij,bj->b", 1 - xd, W, xd
-            )
-            # (two terms equal; using the average for symmetry)
+            source, target = self.sparse_qubo.edge_index
+            weights = self.sparse_qubo.edge_weight / 2.0
+            cut = (weights.to(xd) * (xd[:, source] - xd[:, target]).abs()).sum(dim=-1)
         idx = int(torch.argmax(cut).item())
         return {
             "label": "cut size",

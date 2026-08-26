@@ -4,6 +4,10 @@ QQA4CO ships a core gradient solver, optional GNN variants, an exact SCIP
 hybrid, and sampling baselines. The high-level optimisation layer additionally
 provides dedicated Pareto and black-box solvers.
 
+The stable `qqa.solve` adapter returns `SolveResult` for QQA, SA, population
+annealing, iSCO, and supported exact routes. Backend-native result classes
+remain available from their low-level functions for compatibility.
+
 ## At a glance
 
 | | **PQQA** | **QQA→SCIP** | **SG-CQQA** | **CRA-PI-GNN** | **CPRA** |
@@ -11,7 +15,7 @@ provides dedicated Pareto and black-box solvers.
 | **Module** | `qqa.anneal` | `qqa.hybrid.solve_qqa_scip` | `qqa.benchmarking.run_miplib` / `run_qplib` | `qqa.pignn.train_cra_pi_gnn` | `qqa.pignn.train_cpra_pi_gnn` |
 | **CLI flag** | `--backend qqa` | `--backend scip` | `benchmark run --solver sg-cqqa` | `--backend pignn` | `--backend cpra` |
 | **Install** | `pip install qqa` | `pip install "qqa[scip]"` | `pip install "qqa[benchmark]"` | `pip install "qqa[pignn]"` | `pip install "qqa[pignn]"` |
-| **Returns** | `AnnealResult` | `SCIPHybridResult` | `BenchmarkResult` | `AnnealResult` | `AnnealResult` |
+| **Low-level return** | `AnnealResult` | `SCIPHybridResult` | `BenchmarkResult` | `AnnealResult` | `AnnealResult` |
 | **Variables** | binary, integer, real, mixed, spin, categorical | binary QUBO | sparse MIP/QP/QCQP | graph QUBO | graph QUBO |
 | **Role** | massively parallel heuristic | one-shot warm start and certify | iterative SCIP primal heuristic | graph inductive bias | diverse GNN heads |
 | **GPU** | CUDA, MPS | QQA on GPU; SCIP on CPU | QQA on configured Torch device; SCIP on CPU | CUDA | CUDA |
@@ -34,6 +38,16 @@ provides dedicated Pareto and black-box solvers.
   can afford a long training run.
 * **CPRA** when you need *diverse* solutions (penalty portfolio, mode
   coverage). Returns R solutions in one training run.
+
+Optional exact adapters are selected only through an explicit certificate
+profile or `exact_backend` setting:
+
+| Adapter | Intended model | Install | Guarantee |
+| --- | --- | --- | --- |
+| SCIP | LP/MIP/QP/QCQP and QUBO hybrid | `qqa[scip]` | backend-dependent primal/dual result |
+| HiGHS | sparse linear LP/MIP | `qqa[highs]` | backend status and bound when available |
+| CP-SAT | bounded integral linear model | `qqa[cpsat]` | integer-feasible result and proof status |
+| cuOpt | reserved optional capability probe | vendor package | fails explicitly when the installed API is unsupported |
 
 ## Knob translation between backends
 
@@ -75,20 +89,13 @@ forcing non-scalar optimisation into `AnnealResult`.
 
 ## Performance picture
 
-For a fair head-to-head on a representative graph problem (MIS on
-ER-small, N=200), see the table reproduced from
-`scripts/bench_qqa_vs_pignn.py` in
-[`docs/verification.md`](../verification.md). Headline:
-
-* QQA reaches the same MIS size as CRA-PI-GNN in *roughly an
-  order-of-magnitude less wall-time* on this problem class, because
-  the parallel population effectively replaces the GCN's smoothing
-  with raw exploration.
-* CRA-PI-GNN is occasionally a hair better on very dense graphs where
-  the GCN's locality prior helps; the gap is small.
-* CPRA's diversity is real — its 4 heads land on different solutions
-  with `vari_param > 0`, which neither QQA nor CRA can do without
-  multiple runs.
+The historical smoke comparison in
+[`docs/verification.md`](../verification.md) is useful for checking that each
+backend executes, but it is not a speed claim. Hardware, warm-up, stopping
+rules, and stochastic seeds materially affect the ranking. Use paired seeds,
+equal wall-clock limits, separated compilation/warm-up, feasibility-first
+quality, and confidence intervals for a reportable comparison. The public
+MIPLIB/QPLIB runner implements those matched-budget campaign mechanics.
 
 ## Adding another backend
 

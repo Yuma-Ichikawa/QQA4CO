@@ -259,33 +259,27 @@ elif mode == "PQQA vs SA vs PA shootout":
             delta_color="off",
         )
 
-        # "How much faster did PQQA reach the best baseline's best?"
+        # A single run cannot support a speedup claim.  We show only the
+        # observed matched-run outcome and direct users to the paired,
+        # multi-seed benchmark command for publishable comparisons.
         baseline_best = min(sa_best, pa_best)
         baseline_label = "SA" if sa_best <= pa_best else "PA"
-        baseline_res = res_sa if sa_best <= pa_best else res_pa
-        baseline_history = baseline_res.history.get("best_obj", []) or [baseline_best]
-        baseline_dt = float(baseline_res.runtime) / max(1, len(baseline_history))
-        baseline_reach = next(
-            (i for i, v in enumerate(baseline_history) if float(v) <= pqqa_best),
-            None,
-        )
-
-        if baseline_reach is None:
+        if pqqa_best < baseline_best:
             st.warning(
                 f"Neither SA nor PA matched PQQA's best ({pqqa_best:.4f}). "
                 f"Best baseline = {baseline_label} at {baseline_best:.4f} "
-                "after the chosen budget. Increase the baseline's compute or "
-                "tune β to give it more room."
+                "after the selected run."
             )
         else:
-            baseline_t = baseline_dt * (baseline_reach + 1)
-            speedup = baseline_t / max(res_pqqa.runtime, 1e-6)
-            st.success(
-                f"PQQA reached `best_obj = {pqqa_best:.4f}` in "
-                f"**{res_pqqa.runtime:.2f}s**, while {baseline_label} "
-                f"(the stronger baseline) needed ~**{baseline_t:.2f}s** to "
-                f"match it (speedup ≈ **{speedup:.1f}×**)."
+            st.info(
+                f"Best observed baseline = {baseline_label} at {baseline_best:.4f}; "
+                f"PQQA = {pqqa_best:.4f}."
             )
+        st.caption(
+            "Exploratory result: one run per method. Use `qqa benchmark compare` "
+            "with paired seeds, equal wall-clock limits, warm-up separation, and "
+            "confidence intervals before reporting speed or quality advantages."
+        )
 
         try:
             import plotly.graph_objects as go

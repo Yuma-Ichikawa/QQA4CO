@@ -1,17 +1,12 @@
 # Public benchmark artifacts
 
-This directory contains portable benchmark outputs produced from official
-MIPLIB and QPLIB snapshots. Each campaign directory contains:
+This directory contains compact, portable summaries produced from official
+MIPLIB and QPLIB snapshots. Full per-instance records, incumbent trajectories,
+and run manifests are generated artifacts published by CI, a release, or an
+external registry rather than committed source files.
 
-- `manifest.json`: source snapshot summary, implementation revision, campaign
-  configuration, aggregate metrics, and artifact SHA-256 hashes;
-- `*-results.json`: readable results without full incumbent trajectories;
-- `*-campaign.json.gz`: deterministic gzip containing the complete campaign,
-  including trajectories and anonymous failure records.
-
-The `2026-08-26` snapshot contains the full primary SG-CQQA comparison, a
-QQA-only ablation, a short CPU screening campaign, and a fixed two-instance,
-three-seed QPLIB diagnostic. See
+The `2026-08-26` summary covers the primary SG-CQQA comparison, a QQA-only
+ablation, and the conservative screening campaign. See
 [`docs/benchmark-results.md`](../docs/benchmark-results.md) for the conditions,
 aggregate results, and limitations.
 

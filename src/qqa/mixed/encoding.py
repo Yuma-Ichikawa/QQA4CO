@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import prod
+from math import ceil, log2, prod
 from typing import Literal
 
 import numpy as np
 
-EncodingKind = Literal["binary", "categorical", "order", "radix", "local"]
+EncodingKind = Literal["binary", "categorical", "order", "gray", "radix", "local"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +36,8 @@ class IntegerEncodingPlan:
             return self.cardinality
         if self.kind == "order":
             return self.cardinality - 1
+        if self.kind == "gray":
+            return max(1, ceil(log2(self.cardinality)))
         if self.kind == "radix":
             return sum(self.radices)
         return 1
@@ -50,6 +52,7 @@ def choose_integer_encoding(
     categorical_limit: int = 8,
     order_limit: int = 32,
     radix: int = 8,
+    gray_limit: int = 65_536,
 ) -> IntegerEncodingPlan:
     """Choose an encoding after applying SCIP's node-local domain."""
     effective_lower = max(lower, local_lower) if local_lower is not None else lower
@@ -63,12 +66,21 @@ def choose_integer_encoding(
         return IntegerEncodingPlan(effective_lower, effective_upper, "categorical")
     if cardinality <= order_limit:
         return IntegerEncodingPlan(effective_lower, effective_upper, "order")
+    if cardinality <= gray_limit:
+        return IntegerEncodingPlan(effective_lower, effective_upper, "gray")
+    # Exact-size mixed radix: the code space has exactly ``cardinality``
+    # states, so no invalid code needs to be clamped onto the upper bound.
     remaining = cardinality
     radices: list[int] = []
-    coverage = 1
-    while coverage < remaining:
-        radices.append(radix)
-        coverage *= radix
+    divisor = 2
+    while remaining > 1:
+        while remaining % divisor == 0 and divisor <= radix:
+            radices.append(divisor)
+            remaining //= divisor
+        divisor += 1
+        if divisor > radix and remaining > 1:
+            radices.append(remaining)
+            remaining = 1
     return IntegerEncodingPlan(effective_lower, effective_upper, "radix", tuple(radices))
 
 
@@ -86,6 +98,12 @@ def encode_integer(value: int, plan: IntegerEncodingPlan) -> np.ndarray:
         encoded = np.zeros(plan.cardinality - 1, dtype=np.float64)
         encoded[:offset] = 1.0
         return encoded
+    if plan.kind == "gray":
+        gray = offset ^ (offset >> 1)
+        return np.asarray(
+            [(gray >> bit) & 1 for bit in range(plan.encoded_size)],
+            dtype=np.float64,
+        )
     digits = []
     remaining = offset
     for radix in plan.radices:
@@ -107,6 +125,15 @@ def decode_integer(encoded: np.ndarray, plan: IntegerEncodingPlan) -> int:
         offset = int(np.argmax(values))
     elif plan.kind == "order":
         offset = int(np.count_nonzero(values >= 0.5))
+    elif plan.kind == "gray":
+        gray = sum((int(value >= 0.5) << bit) for bit, value in enumerate(values))
+        offset = 0
+        while gray:
+            offset ^= gray
+            gray >>= 1
+        # Balanced wrap avoids concentrating every unused bit pattern on the
+        # upper bound while keeping decode total for noisy relaxed states.
+        offset %= plan.cardinality
     else:
         offset = 0
         multiplier = 1
@@ -115,7 +142,7 @@ def decode_integer(encoded: np.ndarray, plan: IntegerEncodingPlan) -> int:
             offset += int(np.argmax(values[start : start + radix])) * multiplier
             multiplier *= radix
             start += radix
-    return min(plan.upper, plan.lower + offset)
+    return plan.lower + (offset % plan.cardinality)
 
 
 __all__ = [

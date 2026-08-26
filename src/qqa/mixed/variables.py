@@ -155,7 +155,13 @@ class VariableSpace:
         """Map user-unit values into normalised solver coordinates."""
         self._check_last_dimension(values)
         lower, upper = self._bounds_like(values)
-        return ((values - lower) / (upper - lower)).clamp(0.0, 1.0)
+        span = upper - lower
+        # Fixed variables are valid in algebraic benchmark models. Their
+        # latent coordinate is defined as zero and decode() always restores
+        # the bound, avoiding division by zero without removing model columns.
+        safe_span = torch.where(span == 0, torch.ones_like(span), span)
+        encoded = (values - lower) / safe_span
+        return torch.where(span == 0, torch.zeros_like(encoded), encoded).clamp(0.0, 1.0)
 
     def project(self, latent: torch.Tensor) -> torch.Tensor:
         """Decode a latent tensor and enforce every declared variable domain."""

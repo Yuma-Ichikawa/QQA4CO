@@ -209,18 +209,18 @@ def test_anneal_zero_epochs_returns_initial_sample():
 # ---------------------------------------------------------------------------
 
 
-def test_tsp_uses_binary_relaxation_with_two_penalties():
-    """v0.4 reformulated TSP as a true penalty method: BinaryRelaxation +
-    explicit row + column penalties (instead of CategoricalRelaxation +
-    one column penalty). This regression test pins both invariants."""
-    from qqa.relaxation import BinaryRelaxation
+def test_tsp_uses_sinkhorn_by_default_and_keeps_binary_opt_in():
+    """Permutation structure is the default; the legacy penalty path remains opt-in."""
+    from qqa.relaxation import BinaryRelaxation, SinkhornRelaxation
 
     p = qqa.TSP(N=4, seed=0, row_penalty=7.0, col_penalty=11.0)
-    assert isinstance(p.relaxation, BinaryRelaxation), "TSP must use BinaryRelaxation"
+    assert isinstance(p.relaxation, SinkhornRelaxation)
     assert p.row_penalty == 7.0
     assert p.col_penalty == 11.0
-    # Latent shape is (sol_size, N, N) thanks to the shape_fn.
     assert p.relaxation.init(2, p, "cpu").shape == (2, 4, 4)
+    binary = qqa.TSP(N=4, seed=0, relaxation="binary")
+    assert isinstance(binary.relaxation, BinaryRelaxation)
+    assert binary.relaxation.init(2, binary, "cpu").shape == (2, 4, 4)
 
 
 def test_tsp_loss_decomposes_into_three_additive_terms():
@@ -260,12 +260,14 @@ def test_tsp_score_summary_always_returns_a_valid_tour():
             ]
         ]
     )
+    original = x_disc.clone()
     summary = p.score_summary(x_disc)
     assert summary["feasible"] is True
     assert summary["extra"]["raw_feasible"] is False
     assert summary["extra"]["snapped"] is True
-    # ``best_sol`` must be left as a valid one-hot permutation in place.
-    cleaned = x_disc[0]
+    # Scoring is pure. Repair is explicit and returns a new valid assignment.
+    assert torch.equal(x_disc, original)
+    cleaned = p.repair_solution(x_disc)[0]
     assert (cleaned.sum(dim=0) == 1).all()
     assert (cleaned.sum(dim=1) == 1).all()
 
@@ -317,10 +319,8 @@ def _ensure_app_on_path() -> None:
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[1] / "app"))
 
 
-def test_build_problem_drops_unknown_extra_kwargs(monkeypatch):
-    """Stale ``st.session_state['problem_config']['extra']`` keys must not
-    crash the page after a problem class evolves. The dispatcher filters
-    the kwargs against the constructor signature on the way in."""
+def test_build_problem_rejects_unknown_extra_kwargs(monkeypatch):
+    """Displayed options must never be silently omitted by the dispatcher."""
     _ensure_app_on_path()
     import _common as common
 
@@ -333,13 +333,32 @@ def test_build_problem_drops_unknown_extra_kwargs(monkeypatch):
         "device": "cpu",
         "extra": {
             "col_penalty": 4.0,
-            "mystery_kwarg": 999,  # ← unknown, must be dropped
+            "mystery_kwarg": 999,
             "another_stale_one": "x",
         },
     }
-    p = common.build_problem(cfg)
-    assert isinstance(p, qqa.TSP)
-    assert p.col_penalty == 4.0
+    with pytest.raises(TypeError, match="another_stale_one, mystery_kwarg"):
+        common.build_problem(cfg)
+
+
+def test_build_problem_forwards_tsp_relaxation(monkeypatch):
+    from qqa.relaxation import BinaryRelaxation
+
+    _ensure_app_on_path()
+    import _common as common
+
+    monkeypatch.setattr(common.st, "caption", lambda *a, **k: None)
+    cfg = {
+        "kind": "tsp",
+        "size": 4,
+        "seed": 0,
+        "device": "cpu",
+        "extra": {"relaxation": "binary", "row_penalty": 3.0, "col_penalty": 4.0},
+    }
+    problem = common.build_problem(cfg)
+    assert isinstance(problem.relaxation, BinaryRelaxation)
+    assert problem.row_penalty == 3.0
+    assert problem.col_penalty == 4.0
 
 
 def test_tsp_back_compat_column_penalty_alias():

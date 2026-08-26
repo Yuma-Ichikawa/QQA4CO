@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "campaign_date": "2026-08-26",
+  "time_limit_seconds": 30,
+  "seed_count": 1,
+  "comparison": "sg-cqqa_vs_scip-aggressive",
+  "screened_safe": {
+    "miplib": {
+      "requested": 240,
+      "successful_pairs": 240,
+      "final_wtl": [1, 239, 0],
+      "primal_integral_wtl": [1, 239, 0],
+      "qqa_executed_pairs": 1
+    },
+    "qplib": {
+      "requested": 453,
+      "successful_pairs": 437,
+      "final_wtl": [0, 437, 0],
+      "primal_integral_wtl": [1, 436, 0],
+      "qqa_executed_pairs": 1
+    }
+  },
+  "broad_hybrid": {
+    "miplib": {
+      "successful_pairs": 240,
+      "final_wtl": [6, 194, 40],
+      "primal_integral_wtl": [12, 116, 112],
+      "feasible_baseline": 177,
+      "feasible_qqa": 177
+    },
+    "qplib": {
+      "successful_pairs": 437,
+      "final_wtl": [43, 361, 33],
+      "primal_integral_wtl": [145, 133, 159],
+      "feasible_baseline": 348,
+      "feasible_qqa": 351
+    }
+  },
+  "qqa_only": {
+    "miplib": {
+      "final_wtl": [4, 191, 45],
+      "primal_integral_wtl": [6, 115, 119]
+    },
+    "qplib": {
+      "final_wtl": [23, 361, 53],
+      "primal_integral_wtl": [97, 135, 205]
+    }
+  },
+  "interpretation": "The screened profile is non-regressing mainly because most pairs reuse the baseline. The broad MIPLIB and QQA-only results do not establish dominance."
+}

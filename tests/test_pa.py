@@ -398,10 +398,8 @@ def test_sa_polish_is_symmetric_with_pqqa():
     assert res.polished_sol is not None
 
 
-def test_pa_rejects_structured_binary_relaxation_cleanly():
-    """PA must raise ``NotImplementedError`` with an actionable message on
-    TSP's penalty-method formulation (``BinaryRelaxation(shape_fn=...)`` with
-    a multi-axis latent).
+def test_pa_rejects_permutation_relaxation_cleanly():
+    """Chain backends must reject TSP's structured relaxation clearly.
 
     Before this guard, the chain backend happily sampled a flat
     ``(sol_size, N*N)`` state and then blew up inside ``problem.loss_fn``
@@ -411,7 +409,7 @@ def test_pa_rejects_structured_binary_relaxation_cleanly():
     if not hasattr(qqa, "TSP"):
         pytest.skip("qqa.TSP is not importable in this build")
     prob = qqa.TSP(N=5, seed=0)
-    with pytest.raises(NotImplementedError, match="structured BinaryRelaxation"):
+    with pytest.raises(NotImplementedError, match="CategoricalRelaxation"):
         qqa.population_annealing(
             prob,
             sol_size=4,
@@ -421,7 +419,7 @@ def test_pa_rejects_structured_binary_relaxation_cleanly():
             beta_end=2.0,
             verbose=False,
         )
-    with pytest.raises(NotImplementedError, match="structured BinaryRelaxation"):
+    with pytest.raises(NotImplementedError, match="CategoricalRelaxation"):
         qqa.simulated_annealing(
             prob,
             sol_size=4,

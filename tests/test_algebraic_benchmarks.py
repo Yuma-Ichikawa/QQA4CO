@@ -273,8 +273,10 @@ def test_rens_and_rins_core_selection_uses_local_integer_domains():
     assert selection.mode == "rens"
     assert set(selection.core_indices.tolist()) == {0, 1}
     position = selection.core_indices.tolist().index(1)
-    assert selection.local_lower[position] == 100
-    assert selection.local_upper[position] == 101
+    # General integers retain a real local-search neighbourhood rather than
+    # being collapsed to the LP point's floor/ceil pair.
+    assert selection.local_lower[position] == 98
+    assert selection.local_upper[position] == 103
     assert 2 in selection.fixed_indices
 
     rins_state = replace(

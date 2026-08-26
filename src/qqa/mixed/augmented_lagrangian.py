@@ -17,6 +17,9 @@ def normalised_residuals(problem, values: torch.Tensor) -> tuple[torch.Tensor, t
             values.new_zeros((values.shape[0], 0)),
             torch.zeros(0, dtype=torch.bool, device=values.device),
         )
+    custom = getattr(problem, "normalised_constraint_residuals", None)
+    if callable(custom):
+        return custom(values)
     lhs = problem.constraint_values(values)
     residuals = []
     equality = []
@@ -44,6 +47,11 @@ class ConstraintArchive:
     objective: float = math.inf
     observations: int = 0
 
+    @staticmethod
+    def _objective(problem, values: torch.Tensor) -> torch.Tensor:
+        ranking = getattr(problem, "ranking_objective", None)
+        return ranking(values) if callable(ranking) else problem.objective_values(values)
+
     def update(self, problem, values: torch.Tensor) -> None:
         if values.ndim == 1:
             values = values.unsqueeze(0)
@@ -57,7 +65,7 @@ class ConstraintArchive:
             )
             maximum = matrix.amax(dim=1)
             total = matrix.sum(dim=1)
-            objective = problem.objective_values(values)
+            objective = self._objective(problem, values)
             feasibility_index = min(
                 range(len(values)),
                 key=lambda index: (

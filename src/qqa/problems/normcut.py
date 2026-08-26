@@ -87,10 +87,24 @@ class NormalizedCut(COProblem):
         self.eps = float(eps)
         self.device = device
 
-        adj = nx.adjacency_matrix(nx_graph).toarray()
-        self.adj = torch.tensor(adj, device=device, dtype=torch.float32)
-        self.degrees = self.adj.sum(dim=1)
+        edges = torch.as_tensor(list(nx_graph.edges()), dtype=torch.long, device=device).reshape(
+            -1, 2
+        )
+        self.edge_u = edges[:, 0]
+        self.edge_v = edges[:, 1]
+        self.degrees = torch.bincount(edges.reshape(-1), minlength=n_nodes).to(torch.float32)
+        self._adj: torch.Tensor | None = None
         self.relaxation = CategoricalRelaxation()
+
+    @property
+    def adj(self) -> torch.Tensor:
+        if self._adj is None:
+            self._adj = torch.zeros(
+                (self.num_node, self.num_node), device=self.device, dtype=torch.float32
+            )
+            self._adj[self.edge_u, self.edge_v] = 1.0
+            self._adj[self.edge_v, self.edge_u] = 1.0
+        return self._adj
 
     def _cut_per_partition(self, x: torch.Tensor) -> torch.Tensor:
         """Return per-partition cut sizes ``(B, K)``.
@@ -99,14 +113,8 @@ class NormalizedCut(COProblem):
         equals the integer cut ``|{(u,v): x_u^k ≠ x_v^k}|`` on one-hot
         inputs and is a smooth surrogate on the simplex.
         """
-        # x: (B, N, K), adj: (N, N)
-        # diff[b, u, v, k] = x[b, u, k] - x[b, v, k]
-        # => cut[b, k] = 1/2 * Σ_{u, v} adj[u, v] * (x[b, u, k] - x[b, v, k])^2
-        # Using the identity (a - b)^2 = a^2 + b^2 - 2 a b and Σ adj[u,v]=2|E|:
-        x2 = x * x  # (B, N, K)
-        deg_x2 = torch.einsum("u,buk->bk", self.degrees, x2)
-        xax = torch.einsum("buk,uv,bvk->bk", x, self.adj, x)
-        return deg_x2 - xax
+        difference = x[:, self.edge_u] - x[:, self.edge_v]
+        return difference.square().sum(dim=1)
 
     def _volume_per_partition(self, x: torch.Tensor) -> torch.Tensor:
         """Per-partition volume ``Σ_{u} deg(u) * x[u,k]`` -> ``(B, K)``."""
@@ -125,8 +133,9 @@ class NormalizedCut(COProblem):
         vol = self._volume_per_partition(x_disc.float())
         # When a partition is empty (vol=0) Ncut is conventionally infinite;
         # we replace by a large finite value so torch.argmin still works.
-        vol = torch.where(vol > 0, vol, torch.full_like(vol, 1.0))
-        cut = torch.where(vol > 0, cut, torch.full_like(cut, float(self.num_edge)))
+        empty = vol <= 0
+        vol = torch.where(empty, torch.ones_like(vol), vol)
+        cut = torch.where(empty, torch.full_like(cut, float(self.num_edge)), cut)
         return torch.sum(cut / vol, dim=1)
 
     @torch.no_grad()

@@ -6,30 +6,33 @@ where to look in the code for any feature.
 
 ## The big picture
 
-QQA4CO is a thin set of orthogonal contracts plus one solver loop:
+QQA4CO has one canonical model/result boundary and several opt-in execution
+routes. QQA remains the default primal-search engine:
 
 ```
-                ┌────────────────────────────────────────────────┐
-                │                qqa.anneal()                    │
-                │  (the only solver loop in src/qqa/annealing.py) │
-                └─────────────────────────┬──────────────────────┘
-                                          │ delegates to
-        ┌─────────────────────────────────┼─────────────────────────────────┐
-        ▼                                 ▼                                 ▼
-┌──────────────────┐        ┌────────────────────────────┐      ┌────────────────────┐
-│  COProblem       │        │  Relaxation (Protocol)     │      │  Schedule (callable)│
-│  loss_fn(x)      │        │  init / forward / project  │      │  (epoch, T) -> bg   │
-│  score_summary() │        │  penalty / diversity       │      └────────────────────┘
-└──────────────────┘        │  perturb_ / num_variables  │
-                            └────────────────────────────┘
-                                          │
-                                          ▼
-                            ┌─────────────────────────────────────┐
-                            │  Callback (Callback ABC)            │
-                            │  on_train_begin / on_epoch_end /    │
-                            │  on_train_end (mutates hyperparams) │
-                            └─────────────────────────────────────┘
+Python / files / legacy models
+             │
+             ▼
+      Canonical ModelIR ── objective sense / sparse factors / constraints
+             │
+             ▼
+      inspect + presolve ─ reversible fixing / scaling / decomposition
+             │
+             ▼
+        solver planner ─── profile / budget / device / VRAM / certificate
+             │
+      ┌──────┼──────────┐
+      ▼      ▼          ▼
+ sparse QQA  repair/LNS exact adapters
+      └──────┼──────────┘
+             ▼
+        SolveResult ───── raw/repaired / objective/merit / bounds/gaps
 ```
+
+The catalogue `COProblem` and `AnnealResult` APIs remain supported. Adapters
+form the compatibility boundary; new model-facing functionality belongs in
+`model/`, `compile/`, `portfolio/`, `repair/`, or an optional backend rather
+than as another top-level solve function.
 
 The standard annealer remains the core engine. Specialised orchestrators are
 kept beside it rather than added as branches inside its hot loop:
@@ -48,8 +51,8 @@ kept beside it rather than added as branches inside its hot loop:
 * `tex/` is a modelling front-end: it emits `MixedProblem` or
   `MultiObjectiveProblem`, never executable model code.
 
-The CLI, Streamlit dashboard, visualisation modules, and optional backends are
-consumers of these public result contracts.
+The CLI, UI, visualisation modules, and optional backends consume only public
+planning and result contracts.
 
 The benchmark path therefore has a different data flow:
 
@@ -66,7 +69,22 @@ model, which prevents nonlinear objective epigraph slack from corrupting
 reported primal progress. QQA never owns the proof, and one wall-clock deadline
 covers all arrows.
 
-## Data flow for a single solve
+## Data flow for a stable solve
+
+1. `qqa.solve` loads or adapts the input into a canonical model when possible.
+2. `inspect` extracts size, domain, factor, constraint, sparsity, and memory
+   features without solving.
+3. Conservative presolve records every reduction in a transformation ledger.
+4. The rule-based planner selects replicas, QQA route, repair/local search,
+   and an exact backend only when requested.
+5. Sparse QQA generates diverse incumbents. Constraint models add scaled,
+   vector augmented-Lagrangian state and feasibility-first archiving.
+6. Repair is pure: it creates a separate candidate and never mutates the raw
+   incumbent. Optional exact adapters receive the QQA warm start.
+7. `SolveResult` restores original variable order and reports each semantic
+   quantity separately.
+
+## Legacy `anneal` data flow
 
 1. **User builds a problem.** `qqa.MaximumIndependentSet(g, penalty=2,
    device='cuda')` constructs a `COProblem` whose `Q_mat` lives on the

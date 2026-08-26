@@ -1,0 +1,45 @@
+name: Weekly representative benchmark
+
+on:
+  schedule:
+    - cron: "41 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  representative-suites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: uv python install 3.11
+      - name: Install benchmark environment
+        env:
+          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
+        run: uv sync --extra dev --extra benchmark
+      - name: Run graph, mixed, black-box, and multi-objective representatives
+        run: >-
+          uv run pytest -q tests/test_semantics.py tests/test_mixed.py
+          tests/test_portfolio_extensions.py tests/test_advanced_optimization.py
+          --junitxml=weekly-benchmark.xml
+      - name: Run paired public MIPLIB and QPLIB representatives
+        run: |
+          uv run qqa benchmark fetch miplib --instance air05 --output weekly-public/miplib
+          uv run qqa benchmark fetch qplib --instance QPLIB_0031 --output weekly-public/qplib
+          uv run qqa benchmark compare weekly-public/miplib/air05.mps.gz \
+            --format miplib --solvers scip-aggressive sg-cqqa --seeds 0 1 \
+            --time-limit 10 --continue-on-error --quiet \
+            --output weekly-public/miplib-result.json
+          uv run qqa benchmark compare weekly-public/qplib/QPLIB_0031.qplib \
+            --format qplib --solvers scip-aggressive sg-cqqa --seeds 0 1 \
+            --time-limit 10 --continue-on-error --quiet \
+            --output weekly-public/qplib-result.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: weekly-benchmark
+          path: |
+            weekly-benchmark.xml
+            weekly-public/*-result.json

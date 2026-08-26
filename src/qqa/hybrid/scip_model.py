@@ -336,13 +336,24 @@ def solve_spec_scip(
         # result extraction, but can perturb a tight nonlinear constraint.
         # Never replace a feasible incumbent with a projected infeasible point.
         with torch.no_grad():
-            qqa_solver_objective = float(problem.objective_values(qqa_sol)[0].item())
-            scip_solver_objective = float(problem.objective_values(scip_sol)[0].item())
+            qqa_original_objective = float(
+                torch.as_tensor(problem.raw_objective(problem.unpack(qqa_sol.unsqueeze(0))))
+                .reshape(-1)[0]
+                .item()
+            )
+            scip_original_objective = float(
+                torch.as_tensor(problem.raw_objective(problem.unpack(scip_sol.unsqueeze(0))))
+                .reshape(-1)[0]
+                .item()
+            )
         qqa_feasible = _exactly_feasible(problem, qqa_sol)
         scip_feasible = _exactly_feasible(problem, scip_sol)
-        if scip_feasible and (
-            not qqa_feasible or scip_solver_objective <= qqa_solver_objective + 1e-8
-        ):
+        scip_is_better = (
+            scip_original_objective <= qqa_original_objective + 1e-8
+            if objective.direction == "min"
+            else scip_original_objective >= qqa_original_objective - 1e-8
+        )
+        if scip_feasible and (not qqa_feasible or scip_is_better):
             best_sol = scip_sol
     solver_loss = float(problem.loss_fn(best_sol.unsqueeze(0))[0].item())
     score = problem.score_summary(best_sol)

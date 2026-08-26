@@ -46,12 +46,19 @@ def select_uncertain_integer_core(
     reduced_cost_weight: float = 0.2,
     entropy_weight: float = 0.2,
     conflict_weight: float = 0.2,
+    integer_radius: int = 2,
 ) -> CoreSelection:
     """Select a RENS/RINS-style integer neighbourhood from active SCIP state."""
     if isinstance(max_core_size, bool) or not isinstance(max_core_size, int) or max_core_size < 1:
         raise ValueError("max_core_size must be a positive integer.")
     if not 0 <= integrality_tolerance < 0.5:
         raise ValueError("integrality_tolerance must be in [0, 0.5).")
+    if (
+        isinstance(integer_radius, bool)
+        or not isinstance(integer_radius, int)
+        or integer_radius < 1
+    ):
+        raise ValueError("integer_radius must be a positive integer.")
     all_integer = state.integer_indices
     if all_integer.size == 0:
         empty = np.empty(0, dtype=np.int64)
@@ -128,9 +135,14 @@ def select_uncertain_integer_core(
             local_lower[position], local_upper[position] = 0.0, 1.0
             continue
         centre = state.lp_values[index]
-        # General integers are never exposed across a global wide domain.
-        local_lower[position] = max(local_lower[position], np.floor(centre))
-        local_upper[position] = min(local_upper[position], np.ceil(centre))
+        # Keep a genuine integer neighbourhood instead of collapsing every
+        # general integer to floor/ceil of the LP point.  In RINS mode include
+        # both LP and incumbent centres, then clip to active node bounds.
+        centres = [centre]
+        if state.incumbent_values is not None:
+            centres.append(state.incumbent_values[index])
+        local_lower[position] = max(local_lower[position], np.floor(min(centres)) - integer_radius)
+        local_upper[position] = min(local_upper[position], np.ceil(max(centres)) + integer_radius)
         if local_lower[position] >= local_upper[position] and state.incumbent_values is not None:
             incumbent = round(float(state.incumbent_values[index]))
             local_lower[position] = max(state.local_lower[index], incumbent - 1)

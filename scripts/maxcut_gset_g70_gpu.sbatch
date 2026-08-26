@@ -7,29 +7,16 @@
 # Watch with:     squeue -u $USER
 # Logs land in:   tasks/logs/<job-name>-<jobid>.{out,err}
 #
-# Notes
-# -----
-# * --exclude=kagura-gpu07: known broken cuInit on that node
-#   (see tasks/lessons.md "kagura-gpu07 is broken").
-# * Walltime budget: PQQA ~5 min, CRA ~60 min, CPRA ~75 min on a B200
-#   class GPU. 3 h gives headroom for slower nodes.
+# Supply site-specific partition/account/exclusion flags to ``sbatch`` rather
+# than committing them in this portable template. Runtime varies by hardware.
 
 #SBATCH --job-name=qqa-g70
-#SBATCH --partition=debug
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=06:00:00
-#SBATCH --exclude=kagura-gpu07
 #SBATCH --output=tasks/logs/%x-%j.out
 #SBATCH --error=tasks/logs/%x-%j.err
 #
-# Walltime budget on a B200-class GPU with the post-fix sweet-spot recipe:
-#   PQQA  single-shot (S=5000, div=0.5, BFS warm-start)        ~30 min
-#   CRA   5 seeds @ paper hyperparameters (γ(0)=-6, H0=N^0.8)  ~50 min
-#   CPRA  (16,1.0) + (32,2.0) replica/diversity sweep          ~70 min
-#   ---
-#   Total ≈ 150 min (3 h budget gives 1 h headroom for slower nodes)
-
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 mkdir -p tasks/logs data/gset
@@ -37,8 +24,7 @@ mkdir -p tasks/logs data/gset
 source .venv/bin/activate
 unset VIRTUAL_ENV_PROMPT
 
-echo "=== HOST / GPU ==="
-hostname
+echo "=== GPU RUNTIME ==="
 date
 nvidia-smi -L || true
 python -c "import torch; print('torch:', torch.__version__, 'cuda available:', torch.cuda.is_available())"

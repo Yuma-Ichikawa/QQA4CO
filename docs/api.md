@@ -1,5 +1,40 @@
 # API reference
 
+## Stable solver API
+
+New integrations should use the three top-level entry points and the shared
+result/config contracts:
+
+```python
+import qqa
+
+inspection = qqa.inspect("model.mps")
+plan = qqa.plan("model.mps", profile="balanced", device="auto")
+result = qqa.solve("model.mps", profile="balanced", budget=60)
+
+print(result.status, result.best_obj, result.feasible)
+print(result.violations.maximum_violation)
+```
+
+`qqa.solve` accepts an in-memory catalogue problem, `AlgebraicModel`,
+`ModelIR`, or a supported file (`MPS`, `LP`, `QPLIB`, JSON, OPB, CNF/WCNF,
+QUBO, or Ising). Configuration is strict: unknown options raise an error.
+The default route is pure QQA; exact completion is enabled explicitly with
+`profile="certify"` or `exact_backend=...`.
+
+`SolveResult` keeps raw and repaired solutions separate. Its
+`objective_value` is in the original objective direction,
+`internal_energy` is the canonical minimisation value, and `merit_value` is
+the quantity used by the search backend.
+
+::: qqa.api
+
+::: qqa.config
+
+::: qqa.result
+
+## Generated module reference
+
 Below is the auto-generated documentation for the public modules. The
 [Backends reference](reference/backends.md) page is a hand-curated
 comparison if you only need to pick one entry point.
@@ -10,6 +45,11 @@ comparison if you only need to pick one entry point.
     options:
       show_root_toc_entry: false
       members:
+        - solve
+        - plan
+        - inspect
+        - SolverConfig
+        - SolveResult
         - anneal
         - AnnealResult
         - fix_seed

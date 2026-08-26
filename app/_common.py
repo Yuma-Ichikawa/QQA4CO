@@ -1102,6 +1102,7 @@ def build_problem(cfg: dict) -> Any:
     extra = cfg.get("extra", {})
     kind = cfg["kind"]
     device = cfg["device"]
+    _validate_problem_extra(kind, extra)
 
     if kind == "custom":
         source = extra.get("source", DEFAULT_CUSTOM_SNIPPET)
@@ -1201,15 +1202,17 @@ def build_problem(cfg: dict) -> Any:
             device=device,
         )
     if kind == "tsp":
-        # Multi-penalty problem: forward every penalty-shaped key from
-        # ``extra`` so the dashboard can declare an arbitrary number of
-        # penalty terms without touching this dispatcher.
+        penalties = _extract_penalty_kwargs(
+            extra,
+            defaults={"row_penalty": 5.0, "col_penalty": 5.0},
+        )
         return _safe_call(
             qqa.TSP,
             N=size,
             seed=seed,
             device=device,
-            **_extract_penalty_kwargs(extra, defaults={"row_penalty": 5.0, "col_penalty": 5.0}),
+            relaxation=extra.get("relaxation", "sinkhorn"),
+            **penalties,
         )
     if kind == "qap":
         return _safe_call(
@@ -1217,7 +1220,11 @@ def build_problem(cfg: dict) -> Any:
             N=size,
             seed=seed,
             device=device,
-            **_extract_penalty_kwargs(extra, defaults={"column_penalty": 10.0}),
+            **_extract_penalty_kwargs(
+                extra,
+                defaults={"column_penalty": 10.0},
+                aliases={},
+            ),
         )
     if kind == "nqueens":
         return _safe_call(qqa.NQueens, N=size, device=device)
@@ -1267,6 +1274,45 @@ def _build_graph_problem(kind: str, size: int, seed: int, device: str, extra: di
 # format decoupled from individual class signatures.
 # ---------------------------------------------------------------------------
 
+_PROBLEM_EXTRA_KEYS: dict[str, frozenset[str]] = {
+    "custom": frozenset({"source", "num_vars", "variable_kind", "num_category", "name"}),
+    "mis": frozenset({"graph_d"}),
+    "maxcut": frozenset({"graph_d"}),
+    "maxclique": frozenset({"graph_d"}),
+    "vertex_cover": frozenset({"graph_d"}),
+    "min_dominating_set": frozenset({"graph_d"}),
+    "coloring": frozenset({"graph_d", "num_category"}),
+    "graph_bisection": frozenset({"graph_d", "balance_penalty"}),
+    "bgp": frozenset({"graph_d", "num_category", "balance_penalty"}),
+    "ising1d": frozenset(),
+    "ea": frozenset({"dim"}),
+    "sk": frozenset(),
+    "pspin": frozenset({"p_order"}),
+    "rfim": frozenset({"dim", "coupling_J", "h_std"}),
+    "perceptron": frozenset({"alpha"}),
+    "hopfield": frozenset({"patterns"}),
+    "knapsack": frozenset({"capacity_ratio"}),
+    "number_partition": frozenset({"max_value"}),
+    "maxsat3": frozenset({"ratio"}),
+    "tsp": frozenset(
+        {"relaxation", "row_penalty", "col_penalty", "column_penalty", "penalty_weights"}
+    ),
+    "qap": frozenset({"column_penalty", "penalty_weights"}),
+    "nqueens": frozenset(),
+}
+
+
+def _validate_problem_extra(kind: str, extra: dict) -> None:
+    """Reject displayed settings that are not consumed by the selected model."""
+    if not isinstance(extra, dict):
+        raise TypeError("problem_config.extra must be a mapping.")
+    allowed = _PROBLEM_EXTRA_KEYS.get(kind)
+    if allowed is None:
+        return
+    unknown = sorted(set(extra) - allowed)
+    if unknown:
+        raise TypeError(f"Unknown {kind} option(s): {', '.join(unknown)}")
+
 
 def _require(module: object, attr: str):
     """Return ``getattr(module, attr)`` or raise a friendly ``RuntimeError``.
@@ -1288,16 +1334,11 @@ def _require(module: object, attr: str):
 
 
 def _safe_call(cls, *args, **kwargs):
-    """Invoke ``cls(*args, **kwargs)`` but silently drop any keyword that
-    its ``__init__`` does not accept.
+    """Invoke a constructor after strict keyword-schema validation.
 
-    Why: the Streamlit ``problem_config`` dict is persisted across reruns
-    via ``st.session_state``. If a problem class evolves (e.g. TSP renames
-    ``column_penalty`` → ``row_penalty``/``col_penalty``) the next page
-    refresh would otherwise crash because the old key is still in
-    ``extra``. Filtering against the constructor signature on the
-    receiving end makes the call boundary forward- and backward-compatible
-    by construction.
+    Persisted UI state is still migrated by the explicit alias layer below,
+    but genuinely unknown options are errors. Silently discarding an option
+    makes the displayed configuration differ from the model that is solved.
     """
     import inspect  # noqa: PLC0415 - lazy: only needed here
 
@@ -1312,21 +1353,10 @@ def _safe_call(cls, *args, **kwargs):
 
     accepted = set(sig.parameters)
     accepted.discard("self")
-    safe = {k: v for k, v in kwargs.items() if k in accepted}
-    dropped = set(kwargs) - set(safe)
-    if dropped:
-        # Surface the drop in the UI without crashing the page. Streamlit
-        # may not be initialised in test contexts, so guard the call.
-        try:
-            import streamlit as _st  # noqa: PLC0415
-
-            _st.caption(
-                f"Note — dropped unknown {cls.__name__} kwargs from session "
-                f"state: {sorted(dropped)} (signature has changed)."
-            )
-        except Exception:
-            pass
-    return cls(*args, **safe)
+    unknown = sorted(set(kwargs) - accepted)
+    if unknown:
+        raise TypeError(f"Unknown {cls.__name__} option(s): {', '.join(unknown)}")
+    return cls(*args, **kwargs)
 
 
 # Recognised penalty-coefficient suffixes / aliases.  Adding a new
@@ -1343,7 +1373,12 @@ _PENALTY_ALIASES: dict[str, tuple[str, ...]] = {
 }
 
 
-def _extract_penalty_kwargs(extra: dict, *, defaults: dict[str, float]) -> dict[str, float]:
+def _extract_penalty_kwargs(
+    extra: dict,
+    *,
+    defaults: dict[str, float],
+    aliases: dict[str, tuple[str, ...]] | None = None,
+) -> dict[str, float]:
     """Return a dict of penalty-shaped kwargs, merging ``defaults``,
     explicit ``extra`` keys, dict-form ``penalty_weights``, and legacy
     aliases. Numeric values are coerced to ``float`` so torch is happy.
@@ -1359,13 +1394,14 @@ def _extract_penalty_kwargs(extra: dict, *, defaults: dict[str, float]) -> dict[
     alias itself is **never** propagated to the output dict; only its
     modern translations are.
     """
+    aliases = _PENALTY_ALIASES if aliases is None else aliases
     out: dict[str, float] = dict(defaults)
     legacy_targets: set[str] = set()
-    for modern_keys in _PENALTY_ALIASES.values():
+    for modern_keys in aliases.values():
         legacy_targets.update(modern_keys)
 
     # 2. legacy aliases (translate, do not propagate the legacy key itself).
-    for legacy, modern_keys in _PENALTY_ALIASES.items():
+    for legacy, modern_keys in aliases.items():
         if legacy in extra:
             try:
                 v = float(extra[legacy])
@@ -1376,7 +1412,7 @@ def _extract_penalty_kwargs(extra: dict, *, defaults: dict[str, float]) -> dict[
 
     # 3. explicit penalty-shaped keys override legacy translations.
     for k, v in extra.items():
-        if k in _PENALTY_ALIASES:
+        if k in aliases:
             continue  # already handled in step 2
         if any(k.endswith(suf) for suf in _PENALTY_SUFFIXES):
             try:

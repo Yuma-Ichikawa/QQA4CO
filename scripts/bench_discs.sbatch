@@ -1,12 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=qqa-discs-bench
-#SBATCH --partition=batch-1gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=4
 #SBATCH --time=04:00:00
-#SBATCH --exclude=kagura-gpu07
-#SBATCH --output=tasks/test/_slurm_logs/%x-%j.out
-#SBATCH --error=tasks/test/_slurm_logs/%x-%j.err
+#SBATCH --output=benchmark-output/logs/%x-%j.out
+#SBATCH --error=benchmark-output/logs/%x-%j.err
 #
 # DISCS combinatorial-optimization benchmark on a single GPU.
 #
@@ -21,22 +19,18 @@
 #        batched-instance ``qqa.anneal`` call; NormCut still runs sequentially
 #        because no batched class exists yet.)
 #
-# Output JSON files live under tasks/test/discs_bench_results/<jobid>/.
+# Output JSON files live under benchmark-output/discs/<jobid>/.
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$(pwd)}"
 
-# Project root is the parent of the QQA4CO/ checkout when this script is
-# invoked from inside QQA4CO/. We keep state under tasks/test/ at the
-# repo root (i.e. one level up from QQA4CO/) so it's not lost in `make clean`.
 QQA4CO_ROOT="$(pwd)"
-REPO_ROOT="$(cd "${QQA4CO_ROOT}/.." && pwd)"
-LOG_DIR="${REPO_ROOT}/tasks/test/_slurm_logs"
-RESULT_DIR="${REPO_ROOT}/tasks/test/discs_bench_results/${SLURM_JOB_ID:-local}"
+LOG_DIR="${QQA4CO_ROOT}/benchmark-output/logs"
+RESULT_DIR="${QQA4CO_ROOT}/benchmark-output/discs/${SLURM_JOB_ID:-manual}"
 mkdir -p "${LOG_DIR}" "${RESULT_DIR}"
 
 source "${QQA4CO_ROOT}/.venv/bin/activate"
-hostname; date; nvidia-smi -L || true
+date; nvidia-smi -L || true
 python -c "import torch, qqa; print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); print('qqa', qqa.__version__)"
 
 # Default to "the full DISCS sweep we actually have data for". The data is

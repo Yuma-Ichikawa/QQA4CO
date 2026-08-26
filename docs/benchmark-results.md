@@ -1,10 +1,11 @@
 # Public MIPLIB/QPLIB results
 
 This page reports the complete 2026-08-26 campaign without selecting only
-favourable instances. Machine-readable compact results, full incumbent
-trajectories, snapshot metadata, implementation revision, and SHA-256
-manifests are committed under
+favourable instances. A machine-readable compact summary is committed under
 [`benchmark-results/2026-08-26`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/benchmark-results/2026-08-26).
+Full per-instance results and incumbent trajectories are generated artifacts;
+new campaigns should publish them through a release, CI artifact, or external
+result registry.
 
 ## Protocol
 
@@ -31,10 +32,9 @@ manifests are committed under
 
 ## Screened non-regression profile
 
-A later conservative campaign adds explicit structural bypasses, a 0.1%
+A later conservative campaign added explicit structural bypasses, a 0.1%
 minimum completion improvement, core-coverage gates, in-place dive completion,
-and QPLIB `PROBTYPE` routing. Its complete artifacts are in
-[`screened-safe`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/benchmark-results/2026-08-26/screened-safe).
+and QPLIB `PROBTYPE` routing. Its aggregate is retained in `summary.json`.
 Both suites
 use one solver/LP/Torch thread, seed 0, a 30-second budget, balanced execution
 order, and `scip-aggressive` as the direct baseline.

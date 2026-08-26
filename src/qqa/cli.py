@@ -38,7 +38,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("version", help="Show the installed qqa version.")
 
+    inspect_command = sub.add_parser("inspect", help="Inspect a model without solving it.")
+    inspect_command.add_argument("model", help="Path to a supported model file.")
+
+    plan_command = sub.add_parser("plan", help="Preview the QQA-centred solver plan.")
+    plan_command.add_argument("model", help="Path to a supported model file.")
+    plan_command.add_argument(
+        "--profile",
+        choices=["fast", "balanced", "quality", "certify", "diverse", "pareto", "reproducible"],
+        default="balanced",
+    )
+    plan_command.add_argument("--budget", type=float, default=None)
+    plan_command.add_argument("--device", default="auto")
+
     solve = sub.add_parser("solve", help="Solve a single problem.")
+    solve.add_argument(
+        "model",
+        nargs="?",
+        help=(
+            "Portable model file (MPS, LP, QPLIB, JSON ModelIR, OPB, CNF/WCNF, "
+            "QUBO, or Ising). Omit to use the legacy --problem catalog."
+        ),
+    )
+    solve.add_argument(
+        "--profile",
+        choices=["fast", "balanced", "quality", "certify", "diverse", "pareto", "reproducible"],
+        default="balanced",
+    )
+    solve.add_argument(
+        "--budget", type=float, default=None, help="Total wall-clock budget in seconds."
+    )
     solve.add_argument(
         "--problem",
         required=False,
@@ -111,8 +140,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--patterns", type=int, default=1, help="Number of stored patterns (Hopfield)."
     )
     solve.add_argument("--num-category", type=int, default=3, help="Number of colours (coloring).")
-    solve.add_argument("--sol-size", type=int, default=100)
-    solve.add_argument("--epochs", type=int, default=1000)
+    solve.add_argument(
+        "--sol-size",
+        type=int,
+        default=None,
+        help=(
+            "Parallel population size. Positional model files use the selected "
+            "profile when omitted; the legacy problem catalogue defaults to 100."
+        ),
+    )
+    solve.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help=(
+            "Number of solver steps. Positional model files use the selected "
+            "profile when omitted; the legacy problem catalogue defaults to 1000."
+        ),
+    )
     solve.add_argument(
         "--learning-rate",
         type=float,
@@ -123,15 +168,33 @@ def build_parser() -> argparse.ArgumentParser:
             "to 1e-4 for the pignn / cpra backends (matching the CRA paper)."
         ),
     )
-    solve.add_argument("--temp", type=float, default=0.0)
-    solve.add_argument("--min-bg", type=float, default=-2.0)
-    solve.add_argument("--max-bg", type=float, default=0.1)
-    solve.add_argument("--curve-rate", type=int, default=2)
-    solve.add_argument("--div-param", type=float, default=0.0)
+    solve.add_argument("--temp", type=float, default=None)
+    solve.add_argument("--min-bg", type=float, default=None)
+    solve.add_argument("--max-bg", type=float, default=None)
+    solve.add_argument("--curve-rate", type=int, default=None)
+    solve.add_argument("--div-param", type=float, default=None)
+    solve.add_argument(
+        "--schedule",
+        choices=[
+            "linear",
+            "cosine",
+            "exponential",
+            "sigmoid",
+            "polynomial",
+            "cyclic",
+            "reheat",
+            "adaptive",
+        ],
+        default=None,
+        help=(
+            "QQA discretisation schedule. Positional models inherit the profile; "
+            "the legacy problem catalogue keeps its linear default."
+        ),
+    )
     solve.add_argument(
         "--restart-patience",
         type=int,
-        default=250,
+        default=None,
         help=(
             "Restart weak QQA replicas after this many stagnant epochs; "
             "0 disables adaptive basin recovery."
@@ -140,19 +203,19 @@ def build_parser() -> argparse.ArgumentParser:
     solve.add_argument(
         "--restart-fraction",
         type=float,
-        default=0.15,
+        default=None,
         help="Fraction of weak replicas restarted after stagnation.",
     )
     solve.add_argument(
         "--restart-jitter",
         type=float,
-        default=0.10,
+        default=None,
         help="Local latent-space jitter around the incumbent during restarts.",
     )
     solve.add_argument(
         "--gradient-clip",
         type=float,
-        default=100.0,
+        default=None,
         help="QQA latent-gradient norm cap; pass 0 to disable.",
     )
     solve.add_argument("--seed", type=int, default=0)
@@ -168,9 +231,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Disable the default greedy 1-flip polish applied to QUBO winners "
-            "(only affects --backend qqa). Polishing is a 'free improvement' "
-            "of +10 to +90 cut on hard MaxCut/MIS/VertexCover instances; "
-            "turn it off only if you want a strictly comparable raw-anneal score."
+            "(only affects compatible backends). Use this for a strictly raw "
+            "solver comparison."
         ),
     )
     solve.add_argument(
@@ -192,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     solve.add_argument(
         "--backend",
-        choices=["qqa", "scip", "pignn", "cpra", "sa"],
+        choices=["qqa", "scip", "pignn", "cpra", "sa", "pa", "isco"],
         default="qqa",
         help=(
             "Solver backend. 'qqa' (default) uses the parallel-replica "
@@ -203,7 +265,17 @@ def build_parser() -> argparse.ArgumentParser:
             "'cpra' uses the multi-head CPRA extension that produces "
             "diverse solutions in one run (same graph problems); "
             "'sa' is the GPU-parallel Simulated Annealing baseline used in "
-            "the QQA papers — no learning, pure Metropolis on the same problem."
+            "the QQA papers — no learning, pure Metropolis on the same problem; "
+            "'pa' and 'isco' expose the other sampling baselines."
+        ),
+    )
+    solve.add_argument(
+        "--exact-backend",
+        choices=["auto", "none", "scip", "highs", "cpsat", "cuopt"],
+        default="auto",
+        help=(
+            "Optional certification/completion backend for positional model files. "
+            "The default remains pure QQA unless profile=certify."
         ),
     )
     solve.add_argument(
@@ -783,10 +855,90 @@ def _build_replica_problems(args: argparse.Namespace, base_problem) -> list | No
 def _cmd_solve(args: argparse.Namespace) -> int:
     import qqa
 
+    if args.model is not None:
+        backend = getattr(args, "backend", "qqa")
+        if backend in {"pignn", "cpra"}:
+            raise SystemExit(f"[qqa solve] --backend {backend} does not accept model files.")
+        exact_backend = args.exact_backend
+        if backend == "scip":
+            if exact_backend not in {"auto", "scip"}:
+                raise SystemExit("[qqa solve] --backend scip conflicts with --exact-backend.")
+            exact_backend = "scip"
+            backend = "qqa"
+        option_map = {
+            "sol_size": "replicas",
+            "epochs": "epochs",
+            "learning_rate": "learning_rate",
+            "temp": "temperature",
+            "schedule": "schedule",
+            "min_bg": "min_bg",
+            "max_bg": "max_bg",
+            "curve_rate": "curve_rate",
+            "div_param": "diversity",
+            "restart_patience": "restart_patience",
+            "restart_fraction": "restart_fraction",
+            "restart_jitter": "restart_jitter",
+        }
+        overrides = {
+            config_name: value
+            for argument_name, config_name in option_map.items()
+            if (value := getattr(args, argument_name, None)) is not None
+        }
+        if args.gradient_clip is not None:
+            overrides["gradient_clip_norm"] = args.gradient_clip or None
+        if args.no_polish:
+            overrides["polish"] = False
+        result = qqa.solve(
+            args.model,
+            profile=args.profile,
+            budget=args.budget,
+            device=args.device,
+            seed=args.seed,
+            backend=backend,
+            exact_backend=exact_backend,
+            **overrides,
+        )
+        print(result.plan.explain())
+        print(f"status: {result.status.value}")
+        print(f"objective: {result.best_obj}")
+        print(f"feasible: {result.feasible}")
+        print(f"runtime: {result.runtime:.6g} s")
+        if result.best_bound is not None:
+            print(f"best bound: {result.best_bound}")
+        if result.relative_gap is not None:
+            print(f"relative gap: {result.relative_gap}")
+        return 0
+
+    # The built-in catalogue predates profiles. Preserve its public defaults
+    # while allowing positional model files to inherit profile settings.
+    legacy_defaults = {
+        "sol_size": 100,
+        "epochs": 1000,
+        "temp": 0.0,
+        "min_bg": -2.0,
+        "max_bg": 0.1,
+        "curve_rate": 2,
+        "div_param": 0.0,
+        "restart_patience": 250,
+        "restart_fraction": 0.15,
+        "restart_jitter": 0.10,
+        "gradient_clip": 100.0,
+    }
+    for name, default in legacy_defaults.items():
+        if getattr(args, name, None) is None:
+            setattr(args, name, default)
+
     args.device = _resolve_device(args.device)
     problem = _build_problem(args)
+    qqa_schedule = None
+    if args.schedule is not None:
+        from qqa.schedule import make_schedule
+
+        qqa_schedule = make_schedule(args.schedule, minimum=args.min_bg, maximum=args.max_bg)
 
     backend = getattr(args, "backend", "qqa")
+    if args.exact_backend not in {"auto", "none"} and backend != "scip":
+        raise SystemExit("[qqa solve] --exact-backend is supported for positional model files.")
     if backend == "scip":
         from qqa.hybrid import solve_qqa_scip
 
@@ -810,6 +962,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                     "restart_jitter": args.restart_jitter,
                     "gradient_clip_norm": args.gradient_clip or None,
                     "verbose": not args.quiet,
+                    **({"schedule": qqa_schedule} if qqa_schedule is not None else {}),
                 },
                 time_limit=args.scip_time_limit,
                 relative_gap=args.scip_gap,
@@ -893,6 +1046,29 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             device=args.device,
             verbose=not args.quiet,
         )
+    elif backend == "pa":
+        temperatures = max(2, int(args.epochs**0.5))
+        sweeps = max(1, (args.epochs + temperatures - 1) // temperatures)
+        result = qqa.population_annealing(
+            problem,
+            sol_size=args.sol_size,
+            num_temps=temperatures,
+            sweeps_per_temp=sweeps,
+            seed=args.seed,
+            device=args.device,
+            polish=not args.no_polish,
+            verbose=not args.quiet,
+        )
+    elif backend == "isco":
+        result = qqa.discrete_langevin(
+            problem,
+            sol_size=args.sol_size,
+            num_steps=args.epochs,
+            seed=args.seed,
+            device=args.device,
+            polish=not args.no_polish,
+            verbose=not args.quiet,
+        )
     else:
         default_lr = 0.05 if isinstance(problem, qqa.MixedProblem) else 1.0
         qqa_lr = args.learning_rate if args.learning_rate is not None else default_lr
@@ -913,6 +1089,8 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             "gradient_clip_norm": args.gradient_clip or None,
             "verbose": not args.quiet,
         }
+        if qqa_schedule is not None:
+            solver_kwargs["schedule"] = qqa_schedule
         if isinstance(problem, qqa.MixedProblem):
             result = problem.solve(**solver_kwargs)
         else:
@@ -1666,6 +1844,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "version":
         return _cmd_version()
+    if args.command == "inspect":
+        import qqa
+
+        print(json.dumps(qqa.inspect(args.model).to_dict(), indent=2, sort_keys=True))
+        return 0
+    if args.command == "plan":
+        import qqa
+
+        print(
+            qqa.plan(
+                args.model,
+                profile=args.profile,
+                budget=args.budget,
+                device=args.device,
+            ).explain()
+        )
+        return 0
     if args.command == "solve":
         return _cmd_solve(args)
     if args.command == "bench":
