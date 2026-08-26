@@ -1137,6 +1137,7 @@ def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
 
 
 def test_sg_cqqa_continuous_model_uses_matched_aggressive_scip_fallback(tmp_path, monkeypatch):
+    pytest.importorskip("pyscipopt")
     path = tmp_path / "continuous.qplib"
     path.write_text("synthetic continuous fixture\n", encoding="utf-8")
     continuous = AlgebraicModel(
