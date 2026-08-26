@@ -38,11 +38,15 @@ class CoreRowProblem(MixedProblem):
             upper = float(surrogate.row_upper[row])
             scale = float(surrogate.row_scale[row])
             tolerance = 1e-7 * scale
-            if math.isfinite(lower) and math.isfinite(upper) and math.isclose(
-                lower,
-                upper,
-                rel_tol=1e-12,
-                abs_tol=1e-12 * scale,
+            if (
+                math.isfinite(lower)
+                and math.isfinite(upper)
+                and math.isclose(
+                    lower,
+                    upper,
+                    rel_tol=1e-12,
+                    abs_tol=1e-12 * scale,
+                )
             ):
                 constraints.append(
                     Constraint(
@@ -219,10 +223,7 @@ def build_core_problem(
             violation = torch.relu(local_row_lower - activity) + torch.relu(
                 activity - local_row_upper
             )
-            row_loss = (
-                config.row_penalty
-                * (violation / local_row_scale).square().mean(dim=1)
-            )
+            row_loss = config.row_penalty * (violation / local_row_scale).square().mean(dim=1)
         return original + proximity + direction + row_loss
 
     if adaptive_rows:
@@ -241,5 +242,6 @@ def build_core_problem(
             dtype=torch.float64,
         )
     return problem, names
+
 
 __all__ = ["CoreRowProblem", "build_core_problem"]

@@ -12,7 +12,7 @@ repos:
     # Keep in sync with the ``ruff`` version resolved by ``uv.lock`` (and
     # therefore by CI). Bumping one without the other is the fastest way to
     # get pre-commit vs CI drift.
-    rev: v0.15.11
+    rev: v0.16.0
     hooks:
       - id: ruff-check
         args: [--fix]

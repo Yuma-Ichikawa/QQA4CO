@@ -57,6 +57,10 @@ qqa benchmark run benchmarks/miplib/pk1.mps.gz \
   --minimum-relative-improvement 0.001 \
   --seed 0 --output pk1-sgcqqa.json
 
+# Let QQA select CUDA, MPS, or CPU; SCIP itself remains CPU-based
+qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+  --solver sg-cqqa --time-limit 60 --device auto --output pk1-auto.json
+
 # A screened QPLIB profile may open a longer early window and select PROBTYPEs
 qqa benchmark run benchmarks/qplib/QPLIB_0031.qplib \
   --solver sg-cqqa --time-limit 60 \
@@ -169,10 +173,11 @@ as a structural bypass, not silently counted as a QQA result.
 
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
 for SCIP, and caps calls, candidates, nodes, completion time, and total plugin
-overhead. By default fast completion and QQA together may consume at most 10%
-of SCIP's allotted time. If the first QQA call does not improve the original
-incumbent, later QQA calls in that run are suppressed while fast LNS and SCIP
-continue. This safeguard can be disabled explicitly for an ablation with
+overhead. The Python configuration caps fast completion and QQA at 10% of
+SCIP's allotted time; the conservative `qqa benchmark` CLI uses 5%. If the
+first QQA call does not improve the original incumbent, later QQA calls in that
+run are suppressed while fast LNS and SCIP continue. This safeguard can be
+disabled explicitly for an ablation with
 `--continue-qqa-without-improvement`. See the official [PySCIPOpt heuristic
 tutorial](https://pyscipopt.readthedocs.io/en/latest/tutorials/heuristic.html)
 and [model API](https://pyscipopt.readthedocs.io/en/latest/api/model.html).

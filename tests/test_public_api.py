@@ -248,3 +248,60 @@ print(json.dumps(loaded))
         env=environment,
     )
     assert json.loads(completed.stdout) == []
+
+
+def test_benchmark_facade_is_lazy() -> None:
+    code = """
+import json
+import sys
+import qqa.benchmarking
+
+loaded = sorted(
+    name for name in sys.modules
+    if name.startswith(("qqa.benchmarking.algebraic_runner", "qqa.benchmarking.metrics"))
+    or name.startswith(("pyscipopt", "pyqplib"))
+)
+print(json.dumps(loaded))
+"""
+    environment = dict(os.environ)
+    source = str((Path(__file__).parents[1] / "src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source, environment.get("PYTHONPATH", "")) if item
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert json.loads(completed.stdout) == []
+
+
+def test_benchmark_cli_registration_does_not_load_solver_integrations() -> None:
+    code = """
+import json
+import sys
+from qqa.cli import build_parser
+
+build_parser().parse_args(["benchmark", "fetch", "miplib", "--output", "public-data"])
+loaded = sorted(
+    name for name in sys.modules
+    if name.startswith(("qqa.benchmarking.algebraic_runner", "qqa.hybrid"))
+    or name.startswith(("pyscipopt", "pyqplib"))
+)
+print(json.dumps(loaded))
+"""
+    environment = dict(os.environ)
+    source = str((Path(__file__).parents[1] / "src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source, environment.get("PYTHONPATH", "")) if item
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert json.loads(completed.stdout) == []

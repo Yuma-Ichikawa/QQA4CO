@@ -203,6 +203,7 @@ def __getattr__(name: str):
 def __dir__() -> list[str]:
     return sorted({*globals(), *_OPTIONAL_EXPORTS})
 
+
 # Single-source the version from the wheel metadata so ``__version__`` is
 # always whatever ``pip install qqa`` actually installed. The fallback covers
 # editable installs where the metadata is occasionally absent (e.g. a

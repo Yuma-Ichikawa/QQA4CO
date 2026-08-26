@@ -155,12 +155,15 @@ def test_benchmark_thread_limit_includes_the_lp_solver():
 
 def test_paired_benchmark_balances_solver_execution_order():
     solvers = ("scip-aggressive", "sg-cqqa")
-    assert _comparison_solver_order(
-        solvers,
-        execution_order="balanced",
-        seed=0,
-        instance_index=0,
-    ) == solvers
+    assert (
+        _comparison_solver_order(
+            solvers,
+            execution_order="balanced",
+            seed=0,
+            instance_index=0,
+        )
+        == solvers
+    )
     assert _comparison_solver_order(
         solvers,
         execution_order="balanced",

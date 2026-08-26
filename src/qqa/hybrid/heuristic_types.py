@@ -99,8 +99,7 @@ class QQAHeuristicConfig:
                 for problem_type in normalised_problem_types
             ):
                 raise ValueError(
-                    "allowed_qplib_problem_types must contain valid three-character "
-                    "PROBTYPEs."
+                    "allowed_qplib_problem_types must contain valid three-character PROBTYPEs."
                 )
             object.__setattr__(
                 self,
@@ -183,9 +182,7 @@ class QQAHeuristicConfig:
         if self.minimum_core_size > self.core_size:
             raise ValueError("minimum_core_size must not exceed core_size.")
         if self.minimum_core_size / self.core_size > self.maximum_core_saturation:
-            raise ValueError(
-                "minimum_core_size/core_size must not exceed maximum_core_saturation."
-            )
+            raise ValueError("minimum_core_size/core_size must not exceed maximum_core_saturation.")
         for name in (
             "completion_time",
             "minimum_call_time",
@@ -323,9 +320,7 @@ class QQAHeuristicStats:
             "partial_lns_attempts": self.partial_lns_attempts,
             "partial_lns_feasible": self.partial_lns_feasible,
             "partial_lns_accepted": self.partial_lns_accepted,
-            "partial_lns_incumbent_improvements": (
-                self.partial_lns_incumbent_improvements
-            ),
+            "partial_lns_incumbent_improvements": (self.partial_lns_incumbent_improvements),
             "qqa_stopped_after_nonimprovement": self.qqa_stopped_after_nonimprovement,
             "filtered_candidates": self.filtered_candidates,
             "core_sizes": list(self.core_sizes),
@@ -337,9 +332,7 @@ class QQAHeuristicStats:
             "call_times": list(self.call_times),
             "completion_objectives": list(self.completion_objectives),
             "completion_incumbents_before": list(self.completion_incumbents_before),
-            "completion_relative_improvements": list(
-                self.completion_relative_improvements
-            ),
+            "completion_relative_improvements": list(self.completion_relative_improvements),
             "reference_pool_sizes": list(self.reference_pool_sizes),
             "multi_reference_calls": self.multi_reference_calls,
             "completion_rate": (
@@ -381,5 +374,6 @@ class QQAHeuristicStats:
                 else 0.0
             ),
         }
+
 
 __all__ = ["QQAHeuristicConfig", "QQAHeuristicStats"]

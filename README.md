@@ -369,7 +369,7 @@ qqa benchmark fetch miplib --instance pk1 --output benchmarks/miplib
 qqa benchmark fetch qplib --instance 31 --output benchmarks/qplib
 qqa benchmark inspect benchmarks/miplib/pk1.mps.gz
 qqa benchmark run benchmarks/miplib/pk1.mps.gz \
-  --solver sg-cqqa --time-limit 60 --output pk1.json
+  --solver sg-cqqa --time-limit 60 --device auto --output pk1.json
 qqa benchmark compare benchmarks/miplib/pk1.mps.gz \
   --baseline-solver scip-aggressive --seeds 0 1 2 \
   --time-limit 60 --output comparison.json

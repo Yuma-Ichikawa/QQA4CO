@@ -8,6 +8,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### MIPLIB/QPLIB and SCIP-guided conditional QQA
 
+- Fix SG-CQQA device propagation so `device="auto"`, CPU, CUDA, and MPS
+  selections reach the actual QQA core solve instead of only its RNG context.
+  Move bounded core execution into the PySCIPOpt-independent numerical runtime
+  and add a regression test for the device contract.
+- Move the complete MIPLIB/QPLIB CLI adapter out of the core CLI module and
+  make `qqa.benchmarking` a lazy facade. Benchmark parsing, SCIP-facing code,
+  and result modules now load independently on first use.
+- Make Plotly, pandas, and Streamlit genuine `plotly`/`gui` extras instead of
+  duplicated core dependencies, while retaining the deployment-specific GUI
+  requirements file. Align the local Ruff pre-commit hook with the CI lock.
 - Add a sparse algebraic IR with infinite bounds, linear/quadratic objectives
   and constraints, original-space evaluation, reversible scaling, and
   path-free portable provenance.
@@ -44,9 +54,10 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   crashes, bounded worker timeouts, and retained allocator state cannot
   terminate or progressively exhaust a resumable campaign; support the same
   safe path from scripts, notebooks, interactive Python, and the CLI.
-- Bound conditional heuristic overhead to 10% of the shared SCIP budget by
-  default, evaluate two fast candidates, and stop fast completion immediately
-  after a true original-objective improvement.
+- Bound conditional heuristic overhead to 10% of the shared SCIP budget in
+  the Python configuration (5% in the conservative benchmark CLI), evaluate
+  two fast candidates, and stop fast completion immediately after a true
+  original-objective improvement.
 - Add a bounded second-stage LNS repair: when fixing the rounded integer
   complement is infeasible, retain the QQA core assignment and release the
   complement, then retain only the highest-scored quarter if needed, inside

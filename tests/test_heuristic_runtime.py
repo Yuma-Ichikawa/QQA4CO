@@ -6,7 +6,10 @@ import torch
 from qqa.hybrid.heuristic_runtime import (
     build_initial_population,
     rank_repair_candidates,
+    solve_core_problem,
 )
+from qqa.hybrid.heuristic_types import QQAHeuristicConfig
+from qqa.utils import resolve_device
 
 
 def test_initial_population_is_bounded_deduplicated_and_deterministic():
@@ -73,3 +76,33 @@ def test_repair_candidate_losses_are_evaluated_as_one_batch():
     assert problem.calls == 1
     assert np.array_equal(reordered[0], ranked[0])
     assert plans[np.array([1, 0], dtype=np.int64).tobytes()] == [4]
+
+
+def test_core_solve_resolves_and_forwards_requested_device():
+    class RecordingProblem:
+        constraints = ()
+
+        def __init__(self):
+            self.options = None
+
+        def solve(self, **options):
+            self.options = options
+            return "result"
+
+    problem = RecordingProblem()
+    config = QQAHeuristicConfig(
+        device="auto",
+        sol_size=2,
+        epochs=4,
+        threads=torch.get_num_threads(),
+    )
+    initial = np.zeros((2, 3), dtype=np.float64)
+
+    result = solve_core_problem(problem, initial, config, seed=11, time_limit=0.5)
+
+    assert result == "result"
+    assert problem.options is not None
+    assert problem.options["device"] == resolve_device("auto")
+    assert problem.options["time_limit"] == 0.5
+    assert problem.options["initial_state"].shape == (2, 3)
+    assert problem.options["initial_state"].dtype == torch.float64

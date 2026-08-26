@@ -76,10 +76,7 @@ def complete_integer_assignment(
         raise ValueError("node_limit must be a positive integer.")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("seed must be a non-negative integer.")
-    if (
-        not math.isfinite(minimum_relative_improvement)
-        or not 0 <= minimum_relative_improvement < 1
-    ):
+    if not math.isfinite(minimum_relative_improvement) or not 0 <= minimum_relative_improvement < 1:
         raise ValueError("minimum_relative_improvement must be in [0, 1).")
     started = perf_counter()
     try:
@@ -142,9 +139,7 @@ def complete_integer_assignment(
             raw_primal_before = float(main_model.getPrimalbound())
             if math.isfinite(raw_primal_before) and abs(raw_primal_before) < 0.99 * infinity:
                 primal_before = raw_primal_before
-                tolerance = max(1e-9, minimum_relative_improvement) * max(
-                    1.0, abs(primal_before)
-                )
+                tolerance = max(1e-9, minimum_relative_improvement) * max(1.0, abs(primal_before))
                 objective_limit = (
                     primal_before + tolerance
                     if str(main_model.getObjectiveSense()) == "maximize"
@@ -203,9 +198,7 @@ def complete_integer_assignment(
     except Exception:
         candidate_objective = None
     if primal_before is not None and candidate_objective is not None:
-        tolerance = max(1e-9, minimum_relative_improvement) * max(
-            1.0, abs(primal_before)
-        )
+        tolerance = max(1e-9, minimum_relative_improvement) * max(1.0, abs(primal_before))
         improves = (
             candidate_objective > primal_before + tolerance
             if str(main_model.getObjectiveSense()) == "maximize"
@@ -340,10 +333,7 @@ def complete_integer_assignment_dive(
         or max_repair_changes < 0
     ):
         raise ValueError("max_repair_changes must be a non-negative integer.")
-    if (
-        not math.isfinite(minimum_relative_improvement)
-        or not 0 <= minimum_relative_improvement < 1
-    ):
+    if not math.isfinite(minimum_relative_improvement) or not 0 <= minimum_relative_improvement < 1:
         raise ValueError("minimum_relative_improvement must be in [0, 1).")
     started = perf_counter()
     candidate = None

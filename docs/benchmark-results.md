@@ -12,9 +12,13 @@ manifests are committed under
   `scip-aggressive` ablation. Both use one SCIP/LP thread, seed 0, the same
   public instance, reference snapshot, and a 30-second total solver budget.
 - MIPLIB contains all 240 benchmark-set instances. QPLIB contains all 453
-  public instances. MIPLIB SG-CQQA used the generic `cuda` device class;
-  QPLIB used `cpu`. No machine, scheduler, host, or private path metadata is
-  retained.
+  public instances. The campaign configuration recorded `cuda` for MIPLIB and
+  `cpu` for QPLIB. The pre-fix MIPLIB implementation did not forward that
+  device field into the inner QQA solve, so its QQA calls actually used CPU;
+  device forwarding is fixed for subsequent runs. This does not alter the
+  recorded solution comparisons, but the campaign must not be used as a GPU
+  runtime measurement. No machine, scheduler, host, or private path metadata
+  is retained.
 - Final-quality W/T/L first compares feasibility and then directional
   reference error (or the original objective when no reference is available).
   Primal-integral W/T/L uses a common 30-second horizon; lower is better.

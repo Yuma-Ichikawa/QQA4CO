@@ -27,8 +27,7 @@ from qqa.hybrid.heuristic_runtime import (
     build_initial_population,
     rank_repair_candidates,
     select_repair_positions,
-    torch_seed,
-    torch_thread_budget,
+    solve_core_problem,
 )
 from qqa.hybrid.heuristic_types import QQAHeuristicConfig, QQAHeuristicStats
 from qqa.hybrid.neighborhood import build_neighborhood, within_local_branching
@@ -76,8 +75,7 @@ class QQAHeuristic(_HeurBase):
     def _reference_disagreement(self, state) -> np.ndarray:
         """Return node-aligned disagreement across recent LP references."""
         current = {
-            state.names[index]: float(state.lp_values[index])
-            for index in state.integer_indices
+            state.names[index]: float(state.lp_values[index]) for index in state.integer_indices
         }
         references = [*self._reference_pool, current]
         disagreement = np.zeros(len(state.names), dtype=np.float64)
@@ -94,8 +92,7 @@ class QQAHeuristic(_HeurBase):
 
     def _remember_reference(self, state) -> None:
         reference = {
-            state.names[index]: float(state.lp_values[index])
-            for index in state.integer_indices
+            state.names[index]: float(state.lp_values[index]) for index in state.integer_indices
         }
         if self._reference_pool:
             previous = self._reference_pool[-1]
@@ -285,9 +282,7 @@ class QQAHeuristic(_HeurBase):
         repair_plans: dict[bytes, list[int]] = {}
         if source == "qqa" and self.config.qqa_fix_fraction > 0:
             reference_values = (
-                state.incumbent_values
-                if state.incumbent_values is not None
-                else state.lp_values
+                state.incumbent_values if state.incumbent_values is not None else state.lp_values
             )
             reference_core = np.minimum(
                 np.maximum(
@@ -366,8 +361,7 @@ class QQAHeuristic(_HeurBase):
                         max_changes=max(
                             1,
                             math.ceil(
-                                self.config.qqa_fix_fraction
-                                * len(neighborhood.core_indices)
+                                self.config.qqa_fix_fraction * len(neighborhood.core_indices)
                             ),
                         ),
                         beam_width=self.config.repair_beam_width,
@@ -405,9 +399,7 @@ class QQAHeuristic(_HeurBase):
                     anchor_values=anchor_assignments,
                     change_order=change_order,
                     max_repair_changes=self.config.dive_max_repair_changes,
-                    minimum_relative_improvement=(
-                        self.config.minimum_relative_improvement
-                    ),
+                    minimum_relative_improvement=(self.config.minimum_relative_improvement),
                 )
                 self.stats.dive_feasible += int(completed.feasible)
                 self.stats.dive_accepted += int(completed.accepted)
@@ -499,8 +491,7 @@ class QQAHeuristic(_HeurBase):
                 scale = max(1.0, abs(completed.objective), abs(external_before))
                 relative_improvement = (
                     (completed.objective - external_before) / scale
-                    if self.algebraic is not None
-                    and self.algebraic.objective_sense == "maximize"
+                    if self.algebraic is not None and self.algebraic.objective_sense == "maximize"
                     else (external_before - completed.objective) / scale
                 )
             self.stats.completion_relative_improvements.append(relative_improvement)
@@ -520,15 +511,11 @@ class QQAHeuristic(_HeurBase):
                 if partial_repair:
                     self.stats.partial_lns_feasible += int(completed.feasible)
                     self.stats.partial_lns_accepted += int(completed.accepted)
-                    self.stats.partial_lns_incumbent_improvements += int(
-                        original_improvement
-                    )
+                    self.stats.partial_lns_incumbent_improvements += int(original_improvement)
                 else:
                     self.stats.lns_repair_feasible += int(completed.feasible)
                     self.stats.lns_repair_accepted += int(completed.accepted)
-                    self.stats.lns_repair_incumbent_improvements += int(
-                        original_improvement
-                    )
+                    self.stats.lns_repair_incumbent_improvements += int(original_improvement)
             if source == "qqa":
                 self.stats.qqa_completion_feasible += int(completed.feasible)
                 self.stats.qqa_accepted += int(completed.accepted)
@@ -598,10 +585,7 @@ class QQAHeuristic(_HeurBase):
             if lp_candidate_count < self.config.minimum_core_size:
                 self.stats.small_core_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
-            if (
-                lp_candidate_count / self.config.core_size
-                > self.config.maximum_core_saturation
-            ):
+            if lp_candidate_count / self.config.core_size > self.config.maximum_core_saturation:
                 self.stats.saturation_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
         inspection_started = perf_counter()
@@ -634,10 +618,7 @@ class QQAHeuristic(_HeurBase):
             if len(selected_indices) < self.config.minimum_core_size:
                 self.stats.small_core_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
-            if (
-                len(selected_indices) / self.config.core_size
-                > self.config.maximum_core_saturation
-            ):
+            if len(selected_indices) / self.config.core_size > self.config.maximum_core_saturation:
                 self.stats.saturation_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
             self.stats.calls += 1
@@ -666,10 +647,7 @@ class QQAHeuristic(_HeurBase):
                     self.config.adaptive_row_lagrangian
                     and (
                         state.incumbent_values is None
-                        or (
-                            self.algebraic is not None
-                            and self.algebraic.problem_type is not None
-                        )
+                        or (self.algebraic is not None and self.algebraic.problem_type is not None)
                     )
                 ),
             )
@@ -754,42 +732,14 @@ class QQAHeuristic(_HeurBase):
                     sol_size=self.config.sol_size,
                     seed=self.config.seed + self.stats.calls - 1,
                 )
-                initial = torch.as_tensor(initial_population, dtype=torch.float64)
                 qqa_started = perf_counter()
-                with (
-                    torch_thread_budget(self.config.threads),
-                    torch_seed(
-                        self.config.seed + self.stats.calls - 1,
-                        self.config.device,
-                    ),
-                ):
-                    result = problem.solve(
-                        sol_size=self.config.sol_size,
-                        num_epochs=self.config.epochs,
-                        learning_rate=self.config.learning_rate,
-                        div_param=self.config.diversity,
-                        initial_state=initial,
-                        return_population=True,
-                        calibrate_penalty=False,
-                        adaptive_augmented_lagrangian=bool(
-                            self.config.adaptive_row_lagrangian
-                            and problem.constraints
-                            and (
-                                state.incumbent_values is None
-                                or (
-                                    self.algebraic is not None
-                                    and self.algebraic.problem_type is not None
-                                )
-                            )
-                        ),
-                        al_update_interval=max(1, min(25, self.config.epochs // 4)),
-                        repair=False,
-                        polish=False,
-                        restart_patience=max(20, self.config.epochs // 2),
-                        optimizer="lightweight-adamw",
-                        time_limit=qqa_budget,
-                        verbose=self.config.verbose,
-                    )
+                result = solve_core_problem(
+                    problem,
+                    initial_population,
+                    self.config,
+                    seed=self.config.seed + self.stats.calls - 1,
+                    time_limit=qqa_budget,
+                )
                 self.stats.qqa_calls += 1
                 self.stats.qqa_runtime += perf_counter() - qqa_started
                 al_diagnostics = result.diagnostics.get("adaptive_augmented_lagrangian")

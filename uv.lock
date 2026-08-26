@@ -3905,12 +3905,8 @@ dependencies = [
     { name = "networkx", version = "3.6.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "pandas", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "plotly" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "streamlit" },
     { name = "torch" },
     { name = "tqdm" },
 ]
@@ -3938,6 +3934,10 @@ all = [
     { name = "ruff" },
     { name = "streamlit" },
     { name = "torch-geometric" },
+]
+benchmark = [
+    { name = "pyqplib" },
+    { name = "pyscipopt" },
 ]
 dev = [
     { name = "nbval" },
@@ -4005,10 +4005,8 @@ requires-dist = [
     { name = "nbval", marker = "extra == 'dev'", specifier = ">=0.11" },
     { name = "networkx", specifier = ">=3.1" },
     { name = "numpy", specifier = ">=1.24" },
-    { name = "pandas", specifier = ">=2.0" },
     { name = "pandas", marker = "extra == 'gui'", specifier = ">=2.0" },
     { name = "pandas", marker = "extra == 'plotly'", specifier = ">=2.0" },
-    { name = "plotly", specifier = ">=5.17" },
     { name = "plotly", marker = "extra == 'gui'", specifier = ">=5.17" },
     { name = "plotly", marker = "extra == 'plotly'", specifier = ">=5.17" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.6" },
@@ -4017,17 +4015,17 @@ requires-dist = [
     { name = "pyscipopt", marker = "extra == 'scip'", specifier = ">=6.1" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "python-sat", marker = "extra == 'discs'", specifier = ">=0.1.7" },
-    { name = "qqa", extras = ["plotly", "gui", "docs", "notebook", "dev", "pignn", "discs", "scip", "qplib"], marker = "extra == 'all'" },
+    { name = "qqa", extras = ["plotly", "gui", "docs", "notebook", "dev", "pignn", "discs", "benchmark"], marker = "extra == 'all'" },
+    { name = "qqa", extras = ["scip", "qplib"], marker = "extra == 'benchmark'" },
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.31" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "scipy", specifier = ">=1.11" },
-    { name = "streamlit", specifier = ">=1.30" },
     { name = "streamlit", marker = "extra == 'gui'", specifier = ">=1.30" },
     { name = "torch", specifier = ">=2.2" },
     { name = "torch-geometric", marker = "extra == 'pignn'", specifier = ">=2.6" },
     { name = "tqdm", specifier = ">=4.66" },
 ]
-provides-extras = ["plotly", "gui", "docs", "notebook", "pignn", "scip", "qplib", "discs", "dev", "all"]
+provides-extras = ["plotly", "gui", "docs", "notebook", "pignn", "scip", "qplib", "benchmark", "discs", "dev", "all"]
 
 [package.metadata.requires-dev]
 dev = [

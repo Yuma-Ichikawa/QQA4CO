@@ -60,12 +60,9 @@ dependencies = [
     "scipy>=1.11",
     "matplotlib>=3.8",
     "tqdm>=4.66",
-    # The Streamlit dashboard is a first-class feature of this package and
-    # lives in app/. Keeping plotly/pandas/streamlit in core deps means the
-    # uv.lock consumed by Streamlit Community Cloud resolves them too.
-    "plotly>=5.17",
-    "pandas>=2.0",
-    "streamlit>=1.30",
+    # Interactive plotting and the dashboard are explicit extras below.
+    # Deployment targets install them through requirements.txt; keeping them
+    # out of core makes `pip install qqa` a lightweight pure-solver install.
 ]
 
 [project.optional-dependencies]
@@ -127,9 +124,9 @@ Paper = "https://openreview.net/forum?id=9EfBeXaXf0"
 packages = ["src/qqa"]
 
 # Ship the Streamlit dashboard inside the wheel so ``qqa gui`` works after
-# ``pip install qqa`` (without a repo checkout). At runtime the CLI resolves
-# the app via ``importlib.resources.files("qqa")`` and falls back to the
-# repo-root ``app/`` directory for editable / source installs.
+# ``pip install qqa[gui]`` (without a repo checkout). At runtime the CLI
+# resolves the app via ``importlib.resources.files("qqa")`` and falls back to
+# the repo-root ``app/`` directory for editable / source installs.
 [tool.hatch.build.targets.wheel.force-include]
 "app" = "qqa/_app"
 

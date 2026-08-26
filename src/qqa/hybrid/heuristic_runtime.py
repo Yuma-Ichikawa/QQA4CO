@@ -13,7 +13,9 @@ from contextlib import contextmanager
 import numpy as np
 import torch
 
+from qqa.hybrid.heuristic_types import QQAHeuristicConfig
 from qqa.mixed import MixedProblem
+from qqa.utils import resolve_device
 
 
 @contextmanager
@@ -33,7 +35,7 @@ def torch_thread_budget(threads: int):
 
 
 @contextmanager
-def torch_seed(seed: int, device: str):
+def torch_seed(seed: int, device: str | torch.device):
     """Isolate QQA RNG state, including the selected CUDA device when used."""
     target = torch.device(device)
     devices: list[int] = []
@@ -42,6 +44,48 @@ def torch_seed(seed: int, device: str):
     with torch.random.fork_rng(devices=devices):
         torch.manual_seed(seed)
         yield
+
+
+def solve_core_problem(
+    problem: MixedProblem,
+    initial_population: np.ndarray,
+    config: QQAHeuristicConfig,
+    *,
+    seed: int,
+    time_limit: float,
+):
+    """Run one bounded QQA core solve on the requested compute device.
+
+    Keeping this numerical execution outside the SCIP callback makes the
+    device contract independently testable. In particular, ``device='auto'``
+    is resolved consistently with every other QQA solver entry point.
+    """
+    resolved_device = resolve_device(config.device)
+    initial = torch.as_tensor(initial_population, dtype=torch.float64)
+    with (
+        torch_thread_budget(config.threads),
+        torch_seed(seed, resolved_device),
+    ):
+        return problem.solve(
+            sol_size=config.sol_size,
+            num_epochs=config.epochs,
+            learning_rate=config.learning_rate,
+            div_param=config.diversity,
+            initial_state=initial,
+            return_population=True,
+            calibrate_penalty=False,
+            adaptive_augmented_lagrangian=bool(
+                config.adaptive_row_lagrangian and problem.constraints
+            ),
+            al_update_interval=max(1, min(25, config.epochs // 4)),
+            repair=False,
+            polish=False,
+            restart_patience=max(20, config.epochs // 2),
+            optimizer="lightweight-adamw",
+            time_limit=time_limit,
+            device=resolved_device,
+            verbose=config.verbose,
+        )
 
 
 def build_initial_population(
@@ -174,8 +218,7 @@ def rank_repair_candidates(
     if not ranked:
         return [], {}
     by_full_position = {
-        int(full_position): local_position
-        for local_position, full_position in enumerate(positions)
+        int(full_position): local_position for local_position, full_position in enumerate(positions)
     }
     plans: dict[bytes, list[int]] = {}
     evaluation_points: list[np.ndarray] = []
@@ -194,9 +237,7 @@ def rank_repair_candidates(
         if fixes:
             partial = reference.copy()
             for full_position in fixes:
-                partial[by_full_position[full_position]] = rounded[
-                    by_full_position[full_position]
-                ]
+                partial[by_full_position[full_position]] = rounded[by_full_position[full_position]]
             evaluation_points.append(partial)
             classes.append(0)
         else:
@@ -218,6 +259,7 @@ __all__ = [
     "build_initial_population",
     "rank_repair_candidates",
     "select_repair_positions",
+    "solve_core_problem",
     "torch_seed",
     "torch_thread_budget",
 ]
