@@ -53,6 +53,8 @@ class SolverConfig:
     require_certificate: bool = False
     deterministic: bool = False
     compile_core: bool = False
+    sparse_kernel: Literal["auto", "torch", "triton"] = "auto"
+    cuda_graphs: bool = False
 
     def __post_init__(self) -> None:
         if self.profile not in _PROFILE_DEFAULTS:
@@ -111,6 +113,11 @@ class SolverConfig:
             raise ValueError("mixed_precision must be 'fp32' or 'bf16'.")
         if self.exact_backend not in {"auto", "none", "scip", "highs", "cpsat", "cuopt"}:
             raise ValueError("Unsupported exact_backend.")
+        if self.sparse_kernel not in {"auto", "torch", "triton"}:
+            raise ValueError("sparse_kernel must be auto, torch, or triton.")
+        for name in ("deterministic", "compile_core", "cuda_graphs"):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be boolean.")
         if self.backend != "qqa" and (
             self.require_certificate or self.exact_backend not in {"auto", "none"}
         ):
@@ -174,6 +181,7 @@ class SolverConfig:
             "restart_jitter": resolved.restart_jitter,
             "gradient_clip_norm": resolved.gradient_clip_norm,
             "mixed_precision": resolved.mixed_precision,
+            "cuda_graphs": resolved.cuda_graphs,
             "verbose": False,
         }
 

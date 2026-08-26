@@ -6,6 +6,30 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-27
+
+### GPU runtime, search, and reliability
+
+- Add analytic sparse-QUBO energy/gradient primitives, an optional Triton path,
+  a dispatcher-registered custom operation with autograd checks, packed binary
+  Hamming operations, and opt-in state-preserving CUDA Graph replay.
+- Add real distributed QQA islands over NCCL/Gloo with diverse elite migration.
+  Single-process pure QQA remains the default.
+- Add tabu, k-flip, path-relinking, iterated, 2-opt/3-opt, FM, MIS-swap,
+  Kempe-chain, and WalkSAT local searches behind explicit APIs.
+- Add safe QUBO dominance/persistency/symmetry reductions, graph-cut
+  persistency, and singleton-constraint bound tightening with reversible
+  original-space restoration.
+- Add opt-in factor-graph GNN warm starts, a LinUCB solver selector, and
+  energy-guided discrete diffusion without changing default solver selection.
+- Harden parsers with portable million-variable guards and ModelIR schema
+  checks; add Hypothesis fuzzing, solver-result contracts, GPU operation checks,
+  CUDA Graph tests, and distributed execution tests.
+- Split GPU, distributed, learned, local-search, presolve, CLI command, and UI
+  theme responsibilities into focused modules.
+- Add a prominent live Streamlit route, CRA/CPRA paper links and BibTeX, an
+  original project visual, and CPython/PyPy support guidance.
+
 ### Canonical QQA runtime and sparse portfolio
 
 - Add strict `qqa.solve`, `qqa.plan`, and `qqa.inspect` entry points, a

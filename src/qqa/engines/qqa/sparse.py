@@ -12,8 +12,17 @@ from qqa.relaxation import BinaryRelaxation
 class SparseQUBOProblem(QUBOProblem):
     """Binary problem whose hot objective path scales with nonzero edges."""
 
-    def __init__(self, qubo: SparseQUBO, *, name: str = "sparse-qubo") -> None:
+    def __init__(
+        self,
+        qubo: SparseQUBO,
+        *,
+        name: str = "sparse-qubo",
+        sparse_kernel: str = "auto",
+    ) -> None:
+        if sparse_kernel not in {"auto", "torch", "triton"}:
+            raise ValueError("sparse_kernel must be auto, torch, or triton.")
         self.sparse_qubo = qubo
+        self.sparse_kernel = sparse_kernel
         self.name = name
         self.num_nodes = qubo.num_variables
         self.device = qubo.linear.device
@@ -28,7 +37,7 @@ class SparseQUBOProblem(QUBOProblem):
         return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return self.sparse_qubo.energy(x)
+        return self.sparse_qubo.accelerated_energy(x, implementation=self.sparse_kernel)
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         values = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)

@@ -4,14 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.6.0"
+version = "0.7.0"
 description = "Quasi-Quantum Annealing: a GPU solver for combinatorial, spin-glass, integer, real, and mixed-variable optimization."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [
     { name = "Yuma Ichikawa" },
-    { name = "Yamato Arai" },
 ]
 keywords = [
     "optimization",
@@ -42,6 +41,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Mathematics",
@@ -80,6 +80,9 @@ notebook = ["jupyterlab>=4", "ipykernel>=6", "nbformat>=5"]
 # of the default ``qqa.anneal`` solver. See ``qqa.pignn`` and the
 # "Optional CRA-PI-GNN backend" section in README.md.
 pignn = ["torch-geometric>=2.6"]
+# Optional fused sparse kernels. Kept out of core and all because Triton
+# currently targets Linux CUDA environments only.
+triton = ["triton>=3.0; sys_platform == 'linux' and platform_machine == 'x86_64'"]
 # Exact MIP/MIQP refinement. PySCIPOpt wheels bundle a compatible SCIP build,
 # but the dependency stays optional because QQA itself remains pure PyTorch.
 scip = ["pyscipopt>=6.1"]
@@ -101,6 +104,7 @@ discs = [
 ]
 dev = [
     "pytest>=8",
+    "hypothesis>=6",
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.6",
@@ -121,6 +125,8 @@ Documentation = "https://yuma-ichikawa.github.io/QQA4CO/"
 Issues = "https://github.com/Yuma-Ichikawa/QQA4CO/issues"
 Changelog = "https://github.com/Yuma-Ichikawa/QQA4CO/blob/main/CHANGELOG.md"
 Paper = "https://openreview.net/forum?id=9EfBeXaXf0"
+"CRA paper" = "https://proceedings.neurips.cc/paper_files/paper/2024/hash/54191f424e9013fc1d7b923f6e45dff4-Abstract-Conference.html"
+"CPRA paper" = "https://openreview.net/forum?id=ix33zd5zCw"
 "Live Demo" = "https://parallelquasiquantum4co.streamlit.app/"
 
 [tool.hatch.build.targets.wheel]
@@ -150,6 +156,7 @@ include = [
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "hypothesis>=6",
     "pytest-cov>=5",
     "ruff>=0.6",
     "mypy>=1.11",

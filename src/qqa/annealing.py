@@ -238,6 +238,7 @@ def anneal(
     restart_fraction: float = 0.15,
     restart_jitter: float = 0.10,
     compile_core: bool = False,
+    cuda_graphs: bool = False,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -372,6 +373,10 @@ def anneal(
         raise ValueError("restart_jitter must be finite and in [0, 1].")
     if not isinstance(compile_core, bool):
         raise TypeError("compile_core must be boolean.")
+    if not isinstance(cuda_graphs, bool):
+        raise TypeError("cuda_graphs must be boolean.")
+    if cuda_graphs and optimizer != "adamw":
+        raise ValueError("cuda_graphs requires optimizer='adamw'.")
     # Mirror the validation that the pignn / cpra trainers already enforce:
     # the binary / spin penalty 1 - (1 - 2p)^c is asymmetric for odd c and
     # silently breaks the discrete attractor at γ > 0. CategoricalRelaxation
@@ -397,6 +402,8 @@ def anneal(
     _is_cuda = (isinstance(device, str) and device.startswith("cuda")) or (
         isinstance(device, torch.device) and device.type == "cuda"
     )
+    if cuda_graphs and not _is_cuda:
+        raise ValueError("cuda_graphs requires a CUDA device.")
     use_amp = mixed_precision == "bf16" and _is_cuda
     amp_ctx = (
         torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16) if use_amp else nullcontext()
@@ -454,15 +461,28 @@ def anneal(
         # seed inside the [0, 1] cube even when the user passes raw {0,1} bits.
         x = (seed + 0.05 * torch.randn_like(seed)).clamp_(0.0, 1.0)
         x.requires_grad_(True)
-    optimiser = (
-        torch.optim.AdamW([x], lr=learning_rate, weight_decay=weight_decay)
-        if optimizer == "adamw"
-        else _LightweightAdamW(
+    if optimizer == "adamw":
+        adamw_options: dict[str, Any] = {}
+        if cuda_graphs:
+            adamw_options.update(capturable=True, foreach=False)
+        optimiser = torch.optim.AdamW(
+            [x],
+            lr=learning_rate,
+            weight_decay=weight_decay,
+            **adamw_options,
+        )
+    else:
+        optimiser = _LightweightAdamW(
             x,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
         )
-    )
+    if cuda_graphs:
+        x.grad = torch.zeros_like(x)
+        optimiser_state = optimiser.state[x]
+        optimiser_state["step"] = torch.zeros((), device=x.device)
+        optimiser_state["exp_avg"] = torch.zeros_like(x)
+        optimiser_state["exp_avg_sq"] = torch.zeros_like(x)
 
     hp = {"div_param": float(div_param), "restart_count": 0}
     restart_epochs: list[int] = []
@@ -510,41 +530,82 @@ def anneal(
     for cb in cb_list:
         cb.on_train_begin(state)
 
+    def loss_terms(
+        bg_value: float | torch.Tensor,
+        diversity_weight: float | torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        with amp_ctx:
+            x_fwd = relax.forward(x)
+            losses_value = loss_function(x_fwd)
+            penalty_from_forward = getattr(relax, "penalty_from_forward", None)
+            if penalty_from_forward is None:
+                penalties_value = _default_penalty_from_forward(relax, x, x_fwd, curve_rate)
+            else:
+                penalties_value = penalty_from_forward(x, x_fwd, curve_rate)
+            diversity_value = (
+                relax.diversity(x) if sol_size > 1 else torch.zeros((), device=x.device)
+            )
+            diversity_term = -diversity_value * sol_size
+            total_value = (losses_value.sum() + (penalties_value * bg_value).sum()) * (
+                1 - diversity_weight
+            ) + diversity_term * diversity_weight
+        return losses_value, penalties_value, diversity_value, total_value
+
+    captured_step = None
+    if cuda_graphs:
+        from qqa.gpu import CUDAGraphStep
+
+        def graph_optimizer_step(
+            bg_value: torch.Tensor,
+            diversity_weight: torch.Tensor,
+        ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+            optimiser.zero_grad(set_to_none=False)
+            losses_value, penalties_value, diversity_value, total_value = loss_terms(
+                bg_value, diversity_weight
+            )
+            total_value.backward()
+            if gradient_clip_norm is not None:
+                gradient_scale = (
+                    gradient_clip_norm / (torch.linalg.vector_norm(x.grad) + 1e-12)
+                ).clamp(max=1.0)
+                x.grad.mul_(gradient_scale)
+            optimiser.step()
+            relax.perturb_(x, learning_rate, temp)
+            return losses_value, penalties_value, diversity_value
+
+        optimiser_tensors = tuple(
+            value for value in optimiser.state[x].values() if torch.is_tensor(value)
+        )
+        captured_step = CUDAGraphStep(
+            graph_optimizer_step,
+            (
+                x.new_tensor(float(schedule(0, num_epochs))),
+                x.new_tensor(float(hp["div_param"])),
+            ),
+            state_tensors=(x, x.grad, *optimiser_tensors),
+        )
+
     completed_epochs = 0
     deadline_reached = False
     for epoch in range(num_epochs):
         if time_limit is not None and perf_counter() - runtime_start >= time_limit:
             deadline_reached = True
             break
-        optimiser.zero_grad(set_to_none=True)
         bg = float(schedule(epoch, num_epochs))
-
-        with amp_ctx:
-            x_fwd = relax.forward(x)
-            losses = loss_function(x_fwd)  # (B,) or (B, I)
-            # Reuse the cached forward output for relaxations that would
-            # otherwise re-run their forward inside ``penalty`` (notably
-            # CategoricalRelaxation, which does a simplex normalisation per call).
-            pfwd = getattr(relax, "penalty_from_forward", None)
-            if pfwd is None:
-                penalties = _default_penalty_from_forward(relax, x, x_fwd, curve_rate)
-            else:
-                penalties = pfwd(x, x_fwd, curve_rate)  # matching shape
-            diversity = relax.diversity(x) if sol_size > 1 else torch.tensor(0.0, device=x.device)
-            div_term = -diversity * sol_size
-
-            # Unified weighted objective: uses sums so that (B, I) problems
-            # contribute each instance equally.
-            dp = hp["div_param"]
-            total = (losses.sum() + (penalties * bg).sum()) * (1 - dp) + div_term * dp
-        # backward()/step() must run outside autocast so AdamW updates the
-        # float32 master weights with full precision.
-        total.backward()
-        if gradient_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
-        optimiser.step()
-
-        relax.perturb_(x, learning_rate, temp)
+        if captured_step is not None:
+            losses, penalties, diversity = captured_step.replay(
+                x.new_tensor(bg),
+                x.new_tensor(float(hp["div_param"])),
+            )
+        else:
+            optimiser.zero_grad(set_to_none=True)
+            losses, penalties, diversity, total = loss_terms(bg, hp["div_param"])
+            # Backward and AdamW remain full precision outside autocast.
+            total.backward()
+            if gradient_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
+            optimiser.step()
+            relax.perturb_(x, learning_rate, temp)
 
         with torch.no_grad():
             x_disc = relax.project(x)
@@ -698,6 +759,7 @@ def anneal(
             "time_limit": time_limit,
             "deadline_reached": deadline_reached,
             "compile_core": compile_core,
+            "cuda_graphs": cuda_graphs,
         },
     )
 

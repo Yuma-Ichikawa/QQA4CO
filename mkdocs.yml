@@ -40,6 +40,7 @@ nav:
   - Universal optimisation: universal-optimization.md
   - How-to:
     - Run on GPU: how-to/gpu.md
+    - Advanced opt-in runtime: how-to/advanced-runtime.md
     - Tune hyper-parameters: how-to/tuning.md
     - Integrate into a pipeline: how-to/integrate.md
     - Benchmark your method: how-to/benchmark.md

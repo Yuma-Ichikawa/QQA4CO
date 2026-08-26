@@ -16,15 +16,22 @@ extra runtime dependency.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
-import os
 import pickle
-import platform
-import shutil
-import subprocess
 import sys
 from pathlib import Path
+
+from qqa.commands.runtime import (
+    command_version as _cmd_version,
+)
+from qqa.commands.runtime import (
+    print_score as _print_score,
+)
+from qqa.commands.runtime import (
+    resolve_device as _resolve_device,
+)
+from qqa.commands.system import command_doctor as _cmd_doctor
+from qqa.commands.system import command_gui as _cmd_gui
 
 __all__ = ["main", "build_parser"]
 
@@ -664,48 +671,6 @@ def build_parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 
 
-def _cmd_version() -> int:
-    import qqa
-
-    print(qqa.__version__)
-    return 0
-
-
-def _resolve_device(device: str) -> str:
-    from qqa.utils import resolve_device
-
-    return resolve_device(device)
-
-
-def _print_score(score: dict) -> None:
-    """Print a compact human summary; complete nested data belongs in JSON."""
-    label = score.get("label", "objective")
-    value = score.get("value")
-    unit = score.get("unit", "")
-    rendered_value = f"{value:.8g}" if isinstance(value, (int, float)) else str(value)
-    suffix = f" {unit}" if unit else ""
-    feasible = str(bool(score.get("feasible", False))).lower()
-    print(f"score      : {label}={rendered_value}{suffix}; feasible={feasible}")
-
-    extra = score.get("extra", {})
-    variables = extra.get("variables", {}) if isinstance(extra, dict) else {}
-    if isinstance(variables, dict) and variables:
-        rendered_variables = json.dumps(variables, ensure_ascii=False)
-        if len(rendered_variables) > 500:
-            rendered_variables = rendered_variables[:497] + "..."
-        print(f"solution   : {rendered_variables}")
-    constraints = extra.get("constraints", {}) if isinstance(extra, dict) else {}
-    if isinstance(constraints, dict) and constraints:
-        violations = [
-            (name, float(row.get("violation", 0.0)), bool(row.get("feasible", False)))
-            for name, row in constraints.items()
-            if isinstance(row, dict)
-        ]
-        failed = [name for name, _, feasible_row in violations if not feasible_row]
-        maximum = max((violation for _, violation, _ in violations), default=0.0)
-        print(f"constraints: {len(failed)}/{len(violations)} failed; max_violation={maximum:.6g}")
-
-
 def _build_problem(args: argparse.Namespace):
     import networkx as nx
 
@@ -1313,40 +1278,6 @@ def _cmd_bench_plot(args: argparse.Namespace) -> int:
     return rc
 
 
-def _cmd_doctor(args: argparse.Namespace) -> int:
-    import torch
-
-    from qqa.hybrid import scip_available
-
-    optional = {
-        "scip": scip_available(),
-        "pignn": importlib.util.find_spec("torch_geometric") is not None,
-        "streamlit": importlib.util.find_spec("streamlit") is not None,
-        "plotly": importlib.util.find_spec("plotly") is not None,
-        "pandas": importlib.util.find_spec("pandas") is not None,
-    }
-    payload = {
-        "python": platform.python_version(),
-        "platform": platform.platform(),
-        "torch": torch.__version__,
-        "cuda_available": torch.cuda.is_available(),
-        "cuda_version": torch.version.cuda,
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "recommended_device": _resolve_device("auto"),
-        "optional": optional,
-    }
-    if args.json:
-        print(json.dumps(payload, indent=2))
-    else:
-        print(f"python     : {payload['python']}")
-        print(f"torch      : {payload['torch']}")
-        print(f"device     : {payload['recommended_device']}")
-        print(f"gpu        : {payload['gpu'] or 'not available'}")
-        for name, available in optional.items():
-            print(f"{name:<11}: {'ready' if available else 'not installed'}")
-    return 0
-
-
 def _cmd_benchmark(args: argparse.Namespace) -> int:
     from qqa.benchmarking.cli import run_benchmark_command
 
@@ -1466,69 +1397,6 @@ def _cmd_example(args: argparse.Namespace) -> int:
         )
         print(f"artifacts  : {output_dir}")
     return 0
-
-
-def _resolve_streamlit_app() -> Path | None:
-    """Locate ``app/streamlit_app.py`` for both wheel and source installs.
-
-    When installed from a wheel, ``hatch`` places the Streamlit app at
-    ``qqa/_app/streamlit_app.py`` (see ``pyproject.toml`` ``force-include``).
-    When run from a source checkout (``pip install -e .`` or ``python -m``),
-    that directory does not exist, so we fall back to ``repo_root/app/``
-    resolved relative to this file.
-    """
-    try:
-        from importlib.resources import files
-
-        candidate = Path(str(files("qqa").joinpath("_app", "streamlit_app.py")))
-        if candidate.exists():
-            return candidate
-    except (ModuleNotFoundError, FileNotFoundError, OSError):
-        pass
-
-    here = Path(__file__).resolve()
-    # src/qqa/cli.py -> src/qqa -> repo_root
-    repo_root = here.parents[2]
-    candidate = repo_root / "app" / "streamlit_app.py"
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def _cmd_gui(args: argparse.Namespace) -> int:
-    if shutil.which("streamlit") is None:
-        print(
-            "[qqa gui] 'streamlit' is not on PATH. Install the GUI extras with "
-            "`pip install qqa[gui]`.",
-            file=sys.stderr,
-        )
-        return 2
-
-    app = _resolve_streamlit_app()
-    if app is None:
-        print(
-            "[qqa gui] Streamlit app not found in the installed package or "
-            "the source tree. Re-install qqa (``pip install qqa[gui]``) or "
-            "clone https://github.com/Yuma-Ichikawa/QQA4CO and run from the "
-            "repository root.",
-            file=sys.stderr,
-        )
-        return 2
-
-    cmd = [
-        "streamlit",
-        "run",
-        str(app),
-        "--server.port",
-        str(args.port),
-        "--server.address",
-        args.host,
-    ]
-    if args.headless:
-        cmd.extend(["--server.headless", "true"])
-    env = os.environ.copy()
-    env.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-    return subprocess.call(cmd, env=env)
 
 
 def _cmd_tex(args: argparse.Namespace) -> int:

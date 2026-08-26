@@ -7,6 +7,10 @@ from dataclasses import dataclass, replace
 
 import torch
 
+from qqa.model.bounds import (
+    BoundTighteningInfeasibleError,
+    tighten_singleton_bounds,
+)
 from qqa.model.ir import (
     ConstraintIR,
     Factor,
@@ -50,6 +54,7 @@ class PresolveReport:
     removed_empty_constraints: int
     removed_duplicate_constraints: int
     rescaled_constraints: int
+    tightened_bounds: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +146,13 @@ def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult
     """Apply safe reductions and return an explicit original-space decoder."""
     if not isinstance(model, ModelIR):
         raise TypeError("model must be a ModelIR.")
+    original = model
+    try:
+        tightening = tighten_singleton_bounds(model)
+    except BoundTighteningInfeasibleError as exc:
+        raise PresolveInfeasibleError(str(exc)) from exc
+    model = tightening.model
+    tightened_bounds = tightening.tightened_bounds
     fixed_indices, fixed_values = _fixed_coordinates(model)
     active_mask = torch.ones(model.num_variables, dtype=torch.bool)
     active_mask[fixed_indices] = False
@@ -251,15 +263,16 @@ def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult
     for operation, details in operations:
         reduced = reduced.transformed(operation, **details)
     report = PresolveReport(
-        model.num_variables,
+        original.num_variables,
         reduced.num_variables,
         len(fixed_indices) if eliminate else 0,
         empty,
         duplicate,
         rescaled,
+        tightened_bounds,
     )
     return PresolveResult(
-        model,
+        original,
         reduced,
         active_indices if eliminate else torch.arange(model.num_variables),
         fixed_indices if eliminate else torch.empty(0, dtype=torch.long),

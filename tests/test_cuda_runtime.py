@@ -81,3 +81,36 @@ def test_cuda_reproducible_profile_and_no_live_allocation_growth():
     gc.collect()
     torch.cuda.synchronize()
     assert torch.cuda.memory_allocated() <= initial_allocated + 1_048_576
+
+
+def test_cuda_triton_sparse_kernel_matches_portable_operator():
+    from qqa.gpu.triton_ops import triton_available
+
+    if not triton_available():
+        pytest.skip("Triton is unavailable.")
+    generator = torch.Generator().manual_seed(13)
+    model = SparseQUBO(
+        torch.randn(24, generator=generator),
+        torch.randint(0, 24, (2, 80), generator=generator),
+        torch.randn(80, generator=generator),
+    ).to("cuda")
+    values = torch.rand((6, 24), generator=generator, device="cuda")
+    expected_energy, expected_gradient = model.energy_gradient(values, implementation="torch")
+    energy, gradient = model.energy_gradient(values, implementation="triton")
+    torch.testing.assert_close(energy, expected_energy, rtol=2e-4, atol=2e-4)
+    torch.testing.assert_close(gradient, expected_gradient, rtol=2e-4, atol=2e-4)
+
+
+def test_cuda_graph_training_step_runs_through_stable_api():
+    problem = qqa.MaxCut(nx.cycle_graph(10), device="cuda")
+    result = qqa.solve(
+        problem,
+        profile="fast",
+        replicas=8,
+        epochs=5,
+        device="cuda",
+        cuda_graphs=True,
+        polish=False,
+    )
+    assert math.isfinite(result.best_obj)
+    assert result.diagnostics["cuda_graphs"] is True

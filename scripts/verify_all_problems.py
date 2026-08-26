@@ -388,7 +388,7 @@ def write_report(summary: list[dict[str, Any]]) -> None:
         "",
         "This report runs QQA on every built-in problem and compares its best "
         "objective against a ground truth or a strong baseline. Each block "
-        "contains the reference used, per-instance numbers, runtime, and a ",
+        "contains the reference used, per-instance numbers, runtime, and a",
         "boolean `ok` flag that must hold for the sweep to be considered successful.",
         "",
     ]

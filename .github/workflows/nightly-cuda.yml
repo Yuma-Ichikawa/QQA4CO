@@ -21,7 +21,7 @@ jobs:
       - name: Install CUDA test environment
         env:
           PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cu128
-        run: uv sync --extra dev
+        run: uv sync --extra dev --extra triton
       - name: Verify CUDA is available
         run: uv run python -c "import torch; assert torch.cuda.is_available()"
       - name: CUDA semantic, compile, and precision tests

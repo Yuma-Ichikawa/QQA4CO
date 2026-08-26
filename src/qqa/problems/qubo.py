@@ -82,7 +82,9 @@ class MaximumIndependentSet(QUBOProblem):
         return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return self.sparse_qubo.energy(x)
+        return self.sparse_qubo.accelerated_energy(
+            x, implementation=getattr(self, "sparse_kernel", "auto")
+        )
 
     def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
         from qqa.repair import independent_set_repair
@@ -252,7 +254,9 @@ class MaxClique(QUBOProblem):
         return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return self.sparse_qubo.energy(x)
+        return self.sparse_qubo.accelerated_energy(
+            x, implementation=getattr(self, "sparse_kernel", "auto")
+        )
 
     def repair_solution(self, x_disc: torch.Tensor) -> torch.Tensor:
         from qqa.repair import independent_set_repair
@@ -399,7 +403,9 @@ class MaxCut(QUBOProblem):
         return self.sparse_qubo.to_dense()
 
     def loss_fn(self, x: torch.Tensor) -> torch.Tensor:
-        return self.sparse_qubo.energy(x)
+        return self.sparse_qubo.accelerated_energy(
+            x, implementation=getattr(self, "sparse_kernel", "auto")
+        )
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         x = x_disc if x_disc.ndim == 2 else x_disc.unsqueeze(0)

@@ -26,6 +26,16 @@ from qqa.model import (
     VariableDomain,
 )
 
+_MAX_PORTABLE_VARIABLES = 1_000_000
+
+
+def _validate_variable_count(value: int) -> int:
+    if isinstance(value, bool) or not 1 <= value <= _MAX_PORTABLE_VARIABLES:
+        raise ValueError(
+            f"Portable inputs must declare between 1 and {_MAX_PORTABLE_VARIABLES} variables."
+        )
+    return value
+
 
 def _data_lines(path: Path) -> list[str]:
     return [
@@ -52,6 +62,7 @@ def load_qubo_text(path: str | Path) -> SparseQUBOProblem:
     minimum = min(min(left, right) for left, right, _ in records)
     offset = 1 if minimum == 1 else 0
     maximum = max(max(left, right) for left, right, _ in records) - offset
+    _validate_variable_count(maximum + 1)
     linear = torch.zeros(maximum + 1, dtype=torch.float64)
     edges = []
     weights = []
@@ -99,7 +110,7 @@ def load_ising_text(path: str | Path) -> ModelIR:
     if not indices:
         raise ValueError("Ising file contains no coefficients.")
     offset = 1 if min(indices) == 1 else 0
-    size = max(indices) - offset + 1
+    size = _validate_variable_count(max(indices) - offset + 1)
     linear_index = torch.as_tensor(
         [index - offset for index, _ in linear_records], dtype=torch.long
     )
@@ -142,8 +153,9 @@ def load_dimacs(path: str | Path) -> ModelIR:
                 raise ValueError("Unsupported DIMACS header.")
             if header[1].lower() == "cnf" and len(header) != 4:
                 raise ValueError("CNF header must be `p cnf variables clauses`.")
-            if int(header[2]) < 1 or int(header[3]) < 0:
-                raise ValueError("DIMACS variable/clause counts must be non-negative.")
+            _validate_variable_count(int(header[2]))
+            if int(header[3]) < 0:
+                raise ValueError("DIMACS clause count must be non-negative.")
             continue
         if header is None:
             raise ValueError("DIMACS file must contain a `p cnf` or `p wcnf` header.")
@@ -205,6 +217,7 @@ def load_opb(path: str | Path) -> ModelIR:
     )
     if not variable_names:
         raise ValueError("OPB file contains no variables.")
+    _validate_variable_count(len(variable_names))
     lookup = {name: index for index, name in enumerate(variable_names)}
 
     def expression(text: str) -> ObjectiveIR:
@@ -257,7 +270,17 @@ def load_opb(path: str | Path) -> ModelIR:
 
 
 def _factor_from_json(record: dict[str, Any]):
+    if not isinstance(record, dict):
+        raise ValueError("Every JSON ModelIR factor must be an object.")
     kind = record.get("type")
+    required = {
+        "linear": {"indices", "weights"},
+        "quadratic": {"edge_index", "weights"},
+        "higher_order": {"indices", "weights"},
+        "clause": {"indices", "signs"},
+    }
+    if kind in required and not required[kind] <= record.keys():
+        raise ValueError(f"JSON ModelIR {kind!r} factor is missing required fields.")
     if kind == "linear":
         return LinearFactor(record["indices"], record["weights"])
     if kind == "quadratic":
@@ -274,6 +297,30 @@ def load_model_ir_json(path: str | Path) -> ModelIR:
     payload = json.loads(source.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise TypeError("JSON ModelIR root must be an object.")
+    variable_records = payload.get("variables")
+    objective_record = payload.get("objective")
+    constraint_records = payload.get("constraints", [])
+    if (
+        not isinstance(variable_records, list)
+        or not variable_records
+        or any(
+            not isinstance(item, dict) or not {"name", "domain"} <= item.keys()
+            for item in variable_records
+        )
+    ):
+        raise ValueError("JSON ModelIR variables must be non-empty schema objects.")
+    if not isinstance(objective_record, dict) or not isinstance(
+        objective_record.get("factors", []), list
+    ):
+        raise ValueError("JSON ModelIR objective must be an object with a factor list.")
+    if not isinstance(constraint_records, list) or any(
+        not isinstance(item, dict)
+        or "name" not in item
+        or not isinstance(item.get("expression"), dict)
+        or not isinstance(item["expression"].get("factors", []), list)
+        for item in constraint_records
+    ):
+        raise ValueError("JSON ModelIR constraints must be schema objects.")
     variables = tuple(
         VariableBlock(
             item["name"],
@@ -283,9 +330,9 @@ def load_model_ir_json(path: str | Path) -> ModelIR:
             item.get("upper"),
             item.get("categories"),
         )
-        for item in payload["variables"]
+        for item in variable_records
     )
-    objective_record = payload["objective"]
+    _validate_variable_count(sum(block.size for block in variables))
     objective = ObjectiveIR(
         tuple(_factor_from_json(item) for item in objective_record.get("factors", [])),
         float(objective_record.get("constant", 0.0)),
@@ -304,9 +351,11 @@ def load_model_ir_json(path: str | Path) -> ModelIR:
             float(item.get("scale", 1.0)),
             float(item.get("tolerance", 1e-6)),
         )
-        for item in payload.get("constraints", [])
+        for item in constraint_records
     )
     metadata = payload.get("metadata", {})
+    if not isinstance(metadata, dict):
+        raise ValueError("JSON ModelIR metadata must be an object.")
     return ModelIR(
         variables,
         objective,

@@ -43,25 +43,23 @@ Until 1.0 we will:
 git add pyproject.toml CHANGELOG.md CITATION.cff docs/verification.md
 git commit -m "release: vX.Y.Z"
 
-# 2. Tag and push.
-git tag -a vX.Y.Z -m "vX.Y.Z"
-git push origin main vX.Y.Z
+# 2. Push main and wait for CI, docs, and secret scanning to pass.
+git push origin main
 
-# 3. Build the wheel and sdist.
-rm -rf dist/
+# 3. Build and validate the exact wheel and sdist locally.
 uv build
+uv run twine check dist/*
 
-# 4. Upload to PyPI (Trusted Publishing via the GitHub Actions release
-#    workflow is the preferred path — see below). For a manual upload:
-uv run twine upload dist/*
+# 4. Publish a GitHub Release. This creates the tag and triggers publish.yml,
+#    which uploads to PyPI through Trusted Publishing.
+gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes-file release-notes.md
 ```
 
 ## Post-release checklist
 
 1. **Verify** `pip install qqa==X.Y.Z` works from a fresh venv on
    another machine.
-2. **GitHub Release** — create one against the new tag, paste the
-   matching `CHANGELOG.md` section as the body.
+2. **GitHub Release** — confirm its `Publish to PyPI` workflow completed.
 3. **Zenodo** — confirm the new DOI was minted (CITATION.cff is what
    triggers it).
 4. **Docs** — confirm the GitHub Pages workflow pushed the new
@@ -72,14 +70,14 @@ uv run twine upload dist/*
 
 ## Trusted Publishing (recommended once configured)
 
-Once Trusted Publishing is set up on PyPI for the `qqa` project, a
-push of the `vX.Y.Z` tag should trigger a GitHub Actions workflow that
-builds and uploads the wheel + sdist with no API token in the repo.
+Once Trusted Publishing is set up on PyPI for the `qqa` project, publishing
+the `vX.Y.Z` GitHub Release triggers a GitHub Actions workflow that builds and
+uploads the wheel + sdist with no API token in the repo.
 Track the workflow run from the GitHub *Actions* tab.
 
 If the workflow fails:
 
-* `workflows/release.yml` logs always show the exact failure step.
+* `.github/workflows/publish.yml` logs always show the exact failure step.
 * `dist/` build failures usually mean a stale `dist/` directory shipped
   in the wheel — purge it locally and re-tag.
 * Trusted Publishing rejection means the PyPI configuration drifted —

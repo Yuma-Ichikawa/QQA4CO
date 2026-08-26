@@ -130,6 +130,36 @@ class SparseQUBO:
         pair = values[..., source] * values[..., target] * self.edge_weight.to(values)
         return linear + pair.sum(dim=-1) + self.constant
 
+    def accelerated_energy(
+        self, values: torch.Tensor, *, implementation: str = "auto"
+    ) -> torch.Tensor:
+        """Evaluate with an analytic-gradient custom op or optional Triton kernels."""
+        from qqa.gpu.ops import sparse_qubo_energy
+
+        return sparse_qubo_energy(
+            values,
+            self.linear,
+            self.edge_index,
+            self.edge_weight,
+            self.constant,
+            implementation=implementation,
+        )
+
+    def energy_gradient(
+        self, values: torch.Tensor, *, implementation: str = "auto"
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return energy and analytic gradient without constructing a dense matrix."""
+        from qqa.gpu.ops import sparse_qubo_energy_gradient
+
+        return sparse_qubo_energy_gradient(
+            values,
+            self.linear,
+            self.edge_index,
+            self.edge_weight,
+            self.constant,
+            implementation=implementation,
+        )
+
     def gradient(self, values: torch.Tensor) -> torch.Tensor:
         """Analytic continuous gradient without constructing a dense matrix."""
         if values.shape[-1] != self.num_variables:

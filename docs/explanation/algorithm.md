@@ -68,7 +68,7 @@ on CPU/CUDA/MPS.
 
 Reference paper: Y. Ichikawa, *"Controlling Continuous Relaxation for
 Combinatorial Optimization"*
-([NeurIPS 2024](https://openreview.net/forum?id=ykACV1IhjD)).
+([NeurIPS 2024](https://openreview.net/forum?id=ykACV1IhJD)).
 
 Reference implementation (DGL):
 <https://github.com/Yuma-Ichikawa/CRA4CO>.

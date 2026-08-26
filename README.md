@@ -5,6 +5,20 @@
 [![PyPI](https://img.shields.io/pypi/v/qqa)](https://pypi.org/project/qqa/)
 [![Python](https://img.shields.io/pypi/pyversions/qqa)](https://pypi.org/project/qqa/)
 
+<p align="center">
+  <a href="https://parallelquasiquantum4co.streamlit.app/">
+    <img src="https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/docs/assets/qqa-runtime-hero.png" alt="Parallel QQA replicas flowing through a sparse factor graph to verified discrete solutions" width="900">
+  </a>
+</p>
+
+## Try QQA in your browser
+
+[![Launch the live QQA Studio](https://img.shields.io/badge/Launch-Live_QQA_Studio-6C5CE7?style=for-the-badge&logo=streamlit&logoColor=white)](https://parallelquasiquantum4co.streamlit.app/)
+
+The hosted Streamlit studio needs no local installation. Build a problem, run
+QQA, inspect convergence and feasibility, and compare supported methods from a
+browser. For a local studio, install `qqa[gui]` and run `qqa gui`.
+
 QQA4CO is a GPU-first primal-search and hybrid optimisation runtime. Quasi-Quantum
 Annealing (QQA) generates diverse candidates, structure-aware repair and local
 search refine them, and optional mathematical solvers certify them when requested.
@@ -17,19 +31,24 @@ dependencies, and public benchmark parsers are explicit extras.
 Core CPU/GPU solver:
 
 ```bash
-pip install qqa
+python -m pip install --upgrade pip
+python -m pip install --upgrade qqa
 ```
 
 Common optional installations:
 
 ```bash
-pip install "qqa[gui]"                 # Streamlit studio
-pip install "qqa[benchmark]"           # MIPLIB/QPLIB + SCIP
-pip install "qqa[highs]"               # HiGHS LP/MIP adapter
-pip install "qqa[cpsat]"               # OR-Tools CP-SAT adapter
-pip install "qqa[pignn]"               # experimental CRA/CPRA GNN backends
-pip install "qqa[dev]"                 # tests, lint, typing, docs tooling
+python -m pip install --upgrade "qqa[gui]"       # Streamlit studio
+python -m pip install --upgrade "qqa[benchmark]" # MIPLIB/QPLIB + SCIP
+python -m pip install --upgrade "qqa[highs]"     # HiGHS LP/MIP adapter
+python -m pip install --upgrade "qqa[cpsat]"     # OR-Tools CP-SAT adapter
+python -m pip install --upgrade "qqa[pignn]"     # experimental CRA/CPRA GNN
+python -m pip install --upgrade "qqa[triton]"    # optional fused CUDA kernels
+python -m pip install --upgrade "qqa[dev]"       # tests, lint, typing, docs
 ```
+
+QQA4CO supports CPython 3.10--3.12. PyPy is not currently supported because the
+solver depends on PyTorch, whose official distributions target CPython.
 
 PyTorch chooses CPU or CUDA according to the installed wheel. Follow the
 [GPU setup guide](https://yuma-ichikawa.github.io/QQA4CO/how-to/gpu/) when a
@@ -261,6 +280,7 @@ QQA with `acquisition_optimizer="qqa"`.
 
 - [Quickstart](https://yuma-ichikawa.github.io/QQA4CO/quickstart/)
 - [Architecture](https://yuma-ichikawa.github.io/QQA4CO/explanation/architecture/)
+- [Advanced opt-in runtime](https://yuma-ichikawa.github.io/QQA4CO/how-to/advanced-runtime/)
 - [Algorithm](https://yuma-ichikawa.github.io/QQA4CO/explanation/algorithm/)
 - [Problem catalog](https://yuma-ichikawa.github.io/QQA4CO/problems/)
 - [Mixed optimisation](https://yuma-ichikawa.github.io/QQA4CO/mixed-optimization/)
@@ -274,7 +294,8 @@ QQA with `acquisition_optimizer="qqa"`.
 ```bash
 git clone https://github.com/Yuma-Ichikawa/QQA4CO.git
 cd QQA4CO
-pip install -e ".[dev]"
+python -m pip install --upgrade pip
+python -m pip install --upgrade -e ".[dev]"
 ruff check src tests scripts app
 ruff format --check src tests scripts app
 pytest -q
@@ -285,16 +306,64 @@ Large datasets and generated campaign trajectories are not source files. Keep on
 tiny smoke instances, checksums, licenses, and compact summaries in the repository;
 use the documented fetch commands and release/CI artifacts for full data.
 
-## Citation
+## Research papers and BibTeX
+
+QQA4CO builds on three peer-reviewed continuous-relaxation methods. The default
+solver is pure QQA; the CRA/CPRA-inspired graph-learning route is an explicit
+`pignn` extra.
+
+### QQA / PQQA — ICLR 2025
+
+[Paper (OpenReview)](https://openreview.net/forum?id=9EfBeXaXf0) ·
+[arXiv](https://arxiv.org/abs/2409.02135)
 
 ```bibtex
 @inproceedings{ichikawa2025optimization,
   title={Optimization by Parallel Quasi-Quantum Annealing with Gradient-Based Sampling},
   author={Ichikawa, Yuma and Arai, Yamato},
-  booktitle={International Conference on Learning Representations},
+  booktitle={The Thirteenth International Conference on Learning Representations},
   year={2025},
   url={https://openreview.net/forum?id=9EfBeXaXf0}
 }
 ```
+
+### CRA — NeurIPS 2024
+
+[Paper (NeurIPS Proceedings)](https://proceedings.neurips.cc/paper_files/paper/2024/hash/54191f424e9013fc1d7b923f6e45dff4-Abstract-Conference.html) ·
+[OpenReview](https://openreview.net/forum?id=ykACV1IhJD) ·
+[Reference implementation](https://github.com/Yuma-Ichikawa/CRA4CO)
+
+```bibtex
+@inproceedings{NEURIPS2024_54191f42,
+  author={Ichikawa, Yuma},
+  booktitle={Advances in Neural Information Processing Systems},
+  editor={A. Globerson and L. Mackey and D. Belgrave and A. Fan and U. Paquet and J. Tomczak and C. Zhang},
+  pages={47189--47216},
+  publisher={Curran Associates, Inc.},
+  title={Controlling Continuous Relaxation for Combinatorial Optimization},
+  url={https://proceedings.neurips.cc/paper_files/paper/2024/file/54191f424e9013fc1d7b923f6e45dff4-Paper-Conference.pdf},
+  volume={37},
+  year={2024},
+  doi={10.52202/079017-1495}
+}
+```
+
+### CPRA — TMLR 2025
+
+[Paper (OpenReview / TMLR)](https://openreview.net/forum?id=ix33zd5zCw) ·
+[Reference implementation](https://github.com/Yuma-Ichikawa/CPRA4CO)
+
+```bibtex
+@article{ichikawa2025continuous,
+  title={Continuous Parallel Relaxation for Finding Diverse Solutions in Combinatorial Optimization Problems},
+  author={Ichikawa, Yuma and Iwashita, Hiroaki},
+  journal={Transactions on Machine Learning Research},
+  issn={2835-8856},
+  year={2025},
+  url={https://openreview.net/forum?id=ix33zd5zCw}
+}
+```
+
+## License
 
 QQA4CO is distributed under the BSD 3-Clause License.

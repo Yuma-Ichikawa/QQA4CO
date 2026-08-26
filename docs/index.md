@@ -61,10 +61,10 @@ summary:
 
 * **`qqa.anneal` (PQQA)** — Y. Ichikawa, *"Optimization by Parallel
   Quasi-Quantum Annealing with Gradient-Based Sampling,"*
-  [arXiv:2409.00184](https://arxiv.org/abs/2409.00184), 2024.
+  [arXiv:2409.02135](https://arxiv.org/abs/2409.02135), 2024.
 * **`qqa.pignn.train_cra_pi_gnn`** — Y. Ichikawa, *"Controlling
   Continuous Relaxation for Combinatorial Optimization,"* NeurIPS
-  2024 ([OpenReview](https://openreview.net/forum?id=ykACV1IhjD)).
+  2024 ([OpenReview](https://openreview.net/forum?id=ykACV1IhJD)).
 * **`qqa.pignn.train_cpra_pi_gnn`** — Y. Ichikawa & H. Iwashita,
   *"Continuous Parallel Relaxation for Finding Diverse Solutions in
   Combinatorial Optimization Problems,"* TMLR 2025

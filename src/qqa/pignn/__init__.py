@@ -5,7 +5,7 @@ GNN-based unsupervised-learning combinatorial-optimization solvers:
 
 * **CRA-PI-GNN** — Y. Ichikawa, *"Controlling Continuous Relaxation for
   Combinatorial Optimization,"* NeurIPS 2024
-  (https://openreview.net/forum?id=ykACV1IhjD). Single-replica
+  (https://openreview.net/forum?id=ykACV1IhJD). Single-replica
   continuous-relaxation annealing on a 2-layer GCN.
 
 * **CPRA** — Y. Ichikawa & H. Iwashita, *"Continuous Parallel Relaxation

@@ -4,13 +4,11 @@ title: "QQA4CO: Quasi-Quantum Annealing for Combinatorial Optimization"
 authors:
   - family-names: Ichikawa
     given-names: Yuma
-  - family-names: Arai
-    given-names: Yamato
 repository-code: "https://github.com/Yuma-Ichikawa/QQA4CO"
 url: "https://github.com/Yuma-Ichikawa/QQA4CO"
 license: BSD-3-Clause-Clear
-version: 0.6.0
-date-released: 2026-04-19
+version: 0.7.0
+date-released: 2026-08-27
 doi: 10.5281/zenodo.19648231
 identifiers:
   - type: doi
