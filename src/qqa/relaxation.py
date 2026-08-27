@@ -15,7 +15,8 @@ All relaxations operate on a leading batch dimension of size ``sol_size``.
 
 from __future__ import annotations
 
-from typing import Protocol
+import math
+from typing import Literal, Protocol
 
 import torch
 
@@ -121,6 +122,76 @@ class BinaryRelaxation:
 
     def num_variables(self, problem):
         return problem.num_nodes
+
+
+class StraightThroughBinaryRelaxation(BinaryRelaxation):
+    """Opt-in logit relaxation with a straight-through hard forward pass.
+
+    The physical value seen by the objective is binary, while gradients flow
+    through the sigmoid probability.  The default QQA route intentionally
+    remains :class:`BinaryRelaxation`; this class is useful for objectives
+    whose continuous extension is poorly conditioned or undefined.
+    """
+
+    def __init__(
+        self,
+        temperature: float = 1.0,
+        *,
+        stochastic: bool = False,
+        shape_fn=None,
+    ) -> None:
+        super().__init__(shape_fn=shape_fn)
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("temperature must be finite and > 0.")
+        self.temperature = float(temperature)
+        self.stochastic = bool(stochastic)
+
+    def init(self, sol_size, problem, device):
+        shape = (
+            self._shape_fn(sol_size, problem) if self._shape_fn else (sol_size, problem.num_nodes)
+        )
+        return torch.zeros(shape, device=device, requires_grad=True)
+
+    def probabilities(self, x):
+        return torch.sigmoid(x / self.temperature)
+
+    def forward(self, x):
+        probabilities = self.probabilities(x)
+        hard = (
+            torch.bernoulli(probabilities)
+            if self.stochastic
+            else (probabilities >= 0.5).to(probabilities.dtype)
+        )
+        return hard + probabilities - probabilities.detach()
+
+    def encode(self, values):
+        probabilities = values.clamp(1e-6, 1.0 - 1e-6)
+        return torch.logit(probabilities)
+
+    def project(self, x):
+        return (self.probabilities(x) >= 0.5).to(x.dtype)
+
+    def penalty(self, x, curve_rate):
+        probabilities = self.probabilities(x)
+        return torch.sum(1 - (1 - 2 * probabilities) ** curve_rate, dim=-1)
+
+    def diversity(self, x):
+        return self.probabilities(x).std(dim=0).sum()
+
+    def perturb_(self, x, learning_rate, temp):
+        with torch.no_grad():
+            if temp > 0:
+                x.add_(torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5))
+            # Logits are translation-sensitive for binary variables, so only
+            # bound their magnitude to avoid sigmoid under/overflow.
+            x.clamp_(-30.0, 30.0)
+
+
+class StochasticBinaryRelaxation(StraightThroughBinaryRelaxation):
+    """Straight-through Bernoulli relaxation for stochastic binary replicas."""
+
+    def __init__(self, temperature: float = 1.0, *, shape_fn=None) -> None:
+        super().__init__(temperature, stochastic=True, shape_fn=shape_fn)
 
 
 def _instance_shape(sol_size, problem):
@@ -280,11 +351,35 @@ class CategoricalRelaxation:
 class SoftmaxCategoricalRelaxation(CategoricalRelaxation):
     """Logit/softmax categorical relaxation with temperature annealing support."""
 
-    def __init__(self, temperature: float = 1.0, *, gumbel: bool = False) -> None:
-        if temperature <= 0:
-            raise ValueError("temperature must be > 0.")
+    def __init__(
+        self,
+        temperature: float = 1.0,
+        *,
+        final_temperature: float | None = None,
+        gumbel: bool = False,
+    ) -> None:
+        final = temperature if final_temperature is None else final_temperature
+        if any(not math.isfinite(value) or value <= 0 for value in (temperature, final)):
+            raise ValueError("temperatures must be finite and > 0.")
+        self.initial_temperature = float(temperature)
+        self.final_temperature = float(final)
         self.temperature = float(temperature)
         self.gumbel = bool(gumbel)
+
+    def set_progress(self, progress: float) -> None:
+        """Update temperature by geometric endpoint-inclusive annealing."""
+        if not math.isfinite(progress):
+            raise ValueError("progress must be finite.")
+        progress = min(1.0, max(0.0, float(progress)))
+        ratio = self.final_temperature / self.initial_temperature
+        self.temperature = self.initial_temperature * ratio**progress
+
+    def _logits(self, x: torch.Tensor) -> torch.Tensor:
+        logits = x
+        if self.gumbel:
+            uniform = torch.rand_like(logits).clamp_(1e-7, 1 - 1e-7)
+            logits = logits - torch.log(-torch.log(uniform))
+        return logits / self.temperature
 
     def init(self, sol_size, problem, device):
         categories = getattr(problem, "num_category", None)
@@ -298,11 +393,7 @@ class SoftmaxCategoricalRelaxation(CategoricalRelaxation):
         )
 
     def forward(self, x):
-        logits = x
-        if self.gumbel:
-            uniform = torch.rand_like(logits).clamp_(1e-7, 1 - 1e-7)
-            logits = logits - torch.log(-torch.log(uniform))
-        return torch.softmax(logits / self.temperature, dim=-1)
+        return torch.softmax(self._logits(x), dim=-1)
 
     def encode(self, values):
         probabilities = values.clamp_min(1e-8)
@@ -313,6 +404,102 @@ class SoftmaxCategoricalRelaxation(CategoricalRelaxation):
             if temp > 0:
                 x.add_(torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5))
             x.sub_(x.mean(dim=-1, keepdim=True)).clamp_(-30.0, 30.0)
+
+
+class EntropicCategoricalRelaxation(SoftmaxCategoricalRelaxation):
+    """Named entropic projection using the softmax convex conjugate."""
+
+
+def _sparsemax(logits: torch.Tensor) -> torch.Tensor:
+    """Project logits onto the simplex with exact sparsemax support."""
+    sorted_logits, _ = torch.sort(logits, dim=-1, descending=True)
+    cumulative = sorted_logits.cumsum(dim=-1) - 1.0
+    ranks = torch.arange(
+        1,
+        logits.shape[-1] + 1,
+        device=logits.device,
+        dtype=logits.dtype,
+    )
+    support = sorted_logits > cumulative / ranks
+    support_size = support.sum(dim=-1, keepdim=True).clamp_min(1)
+    threshold = cumulative.gather(-1, support_size - 1) / support_size.to(logits.dtype)
+    return torch.clamp(logits - threshold, min=0.0)
+
+
+def _entmax15(logits: torch.Tensor, *, iterations: int = 32) -> torch.Tensor:
+    """Differentiable alpha=1.5 entmax via a bounded scalar bisection."""
+    scaled = 0.5 * logits
+    lower = scaled.min(dim=-1, keepdim=True).values - 1.0
+    upper = scaled.max(dim=-1, keepdim=True).values
+    for _ in range(iterations):
+        threshold = (lower + upper) * 0.5
+        probabilities = torch.clamp(scaled - threshold, min=0.0).square()
+        mass = probabilities.sum(dim=-1, keepdim=True)
+        lower = torch.where(mass > 1.0, threshold, lower)
+        upper = torch.where(mass > 1.0, upper, threshold)
+    probabilities = torch.clamp(scaled - upper, min=0.0).square()
+    return probabilities / probabilities.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+
+
+class SparseCategoricalRelaxation(SoftmaxCategoricalRelaxation):
+    """Sparse simplex relaxation using sparsemax or alpha=1.5 entmax."""
+
+    def __init__(
+        self,
+        temperature: float = 1.0,
+        *,
+        final_temperature: float | None = None,
+        mapping: Literal["sparsemax", "entmax15"] = "sparsemax",
+        gumbel: bool = False,
+    ) -> None:
+        super().__init__(
+            temperature,
+            final_temperature=final_temperature,
+            gumbel=gumbel,
+        )
+        if mapping not in {"sparsemax", "entmax15"}:
+            raise ValueError("mapping must be 'sparsemax' or 'entmax15'.")
+        self.mapping = mapping
+
+    def forward(self, x):
+        logits = self._logits(x)
+        return _sparsemax(logits) if self.mapping == "sparsemax" else _entmax15(logits)
+
+
+class MirrorDescentCategoricalRelaxation(CategoricalRelaxation):
+    """Simplex-native categorical relaxation for entropic mirror descent.
+
+    Select ``optimizer='mirror-descent'`` in :func:`qqa.anneal`.  The latent
+    tensor stores probabilities directly and each optimizer step performs the
+    exponentiated-gradient update followed by exact simplex normalisation.
+    """
+
+    def __init__(self, temperature: float = 1.0) -> None:
+        if not math.isfinite(temperature) or temperature <= 0:
+            raise ValueError("temperature must be finite and > 0.")
+        self.temperature = float(temperature)
+
+    def init(self, sol_size, problem, device):
+        values = super().init(sol_size, problem, device)
+        with torch.no_grad():
+            values.div_(values.sum(dim=-1, keepdim=True))
+        return values
+
+    def mirror_step_(self, parameter: torch.Tensor, learning_rate: float) -> None:
+        if parameter.grad is None:
+            return
+        with torch.no_grad():
+            gradient = parameter.grad - parameter.grad.mean(dim=-1, keepdim=True)
+            update = torch.clamp(-learning_rate * gradient / self.temperature, -30.0, 30.0)
+            parameter.mul_(update.exp()).clamp_min_(1e-12)
+            parameter.div_(parameter.sum(dim=-1, keepdim=True))
+
+    def perturb_(self, x, learning_rate, temp):
+        with torch.no_grad():
+            if temp > 0:
+                x.add_(torch.randn_like(x) * ((2 * learning_rate * temp) ** 0.5))
+            x.clamp_min_(1e-12)
+            x.div_(x.sum(dim=-1, keepdim=True))
 
 
 class SinkhornRelaxation(SoftmaxCategoricalRelaxation):
@@ -329,10 +516,15 @@ class SinkhornRelaxation(SoftmaxCategoricalRelaxation):
         self,
         temperature: float = 1.0,
         *,
+        final_temperature: float | None = None,
         iterations: int = 12,
         gumbel: bool = False,
     ) -> None:
-        super().__init__(temperature, gumbel=gumbel)
+        super().__init__(
+            temperature,
+            final_temperature=final_temperature,
+            gumbel=gumbel,
+        )
         if isinstance(iterations, bool) or iterations < 1:
             raise ValueError("iterations must be a positive integer.")
         self.iterations = int(iterations)
@@ -343,11 +535,7 @@ class SinkhornRelaxation(SoftmaxCategoricalRelaxation):
         return super().init(sol_size, problem, device)
 
     def forward(self, x):
-        logits = x
-        if self.gumbel:
-            uniform = torch.rand_like(logits).clamp_(1e-7, 1 - 1e-7)
-            logits = logits - torch.log(-torch.log(uniform))
-        log_matrix = logits / self.temperature
+        log_matrix = self._logits(x)
         for _ in range(self.iterations):
             log_matrix = log_matrix - torch.logsumexp(log_matrix, dim=-1, keepdim=True)
             log_matrix = log_matrix - torch.logsumexp(log_matrix, dim=-2, keepdim=True)
@@ -366,8 +554,13 @@ __all__ = [
     "BinaryInstanceRelaxation",
     "BinaryRelaxation",
     "CategoricalRelaxation",
+    "EntropicCategoricalRelaxation",
+    "MirrorDescentCategoricalRelaxation",
     "Relaxation",
     "SinkhornRelaxation",
     "SoftmaxCategoricalRelaxation",
+    "SparseCategoricalRelaxation",
     "SpinRelaxation",
+    "StochasticBinaryRelaxation",
+    "StraightThroughBinaryRelaxation",
 ]

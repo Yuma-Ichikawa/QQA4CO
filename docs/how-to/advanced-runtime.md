@@ -4,6 +4,58 @@ QQA4CO keeps `qqa.solve(...)` on the portable pure-QQA route unless you
 explicitly enable an advanced runtime. None of the features on this page is
 required for ordinary CPU, CUDA, or MPS solves.
 
+## Alternative binary and simplex geometry
+
+The default remains the paper's pure bounded QQA relaxation. Alternative
+geometry is selected by replacing a problem's relaxation explicitly:
+
+```python
+import qqa
+
+# Hard binary objective with a sigmoid surrogate gradient.
+problem.relaxation = qqa.StraightThroughBinaryRelaxation(temperature=0.5)
+result = qqa.anneal(problem, optimizer="adamw")
+
+# Sparse categorical probabilities (use mapping="entmax15" for entmax).
+categorical.relaxation = qqa.SparseCategoricalRelaxation(
+    mapping="sparsemax",
+    temperature=2.0,
+    final_temperature=0.1,
+)
+result = qqa.anneal(categorical)
+
+# Simplex-native exponentiated-gradient updates.
+categorical.relaxation = qqa.MirrorDescentCategoricalRelaxation()
+result = qqa.anneal(categorical, optimizer="mirror-descent")
+```
+
+`StochasticBinaryRelaxation`, `EntropicCategoricalRelaxation`, softmax/Gumbel,
+Sinkhorn, and Gumbel-Sinkhorn follow the same explicit boundary. Temperature
+annealing is geometric and endpoint-inclusive. None is selected silently by
+the stable pure-QQA route.
+
+## Persistent AOT sparse-QUBO cache
+
+Use `torch.export` to capture an autograd-capable graph once and reuse it
+across processes and dynamic replica batch sizes:
+
+```python
+from qqa.compile import compile_sparse_qubo_aot
+
+compiled = compile_sparse_qubo_aot(
+    sparse_qubo,
+    example_values,
+    cache_dir=".cache/qqa-aot",
+)
+energies = compiled(values)
+print(compiled.cache_hit, compiled.key)
+```
+
+`backend="inductor", dynamic_batch=False` additionally creates a native
+AOTInductor package when the installed PyTorch toolchain provides it. Cache
+keys include all coefficients, Torch/Python versions, dtype, device type, and
+shape policy, so an incompatible artifact is never reused as if valid.
+
 ## Fused sparse CUDA and CUDA Graphs
 
 Install the optional Triton kernels on a supported Linux/CUDA environment:

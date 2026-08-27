@@ -26,7 +26,8 @@ signature has not changed.
 
 `qqa.legacy.*` (wrappers for the old `batch_annealing_*` functions) keeps
 working and emits `DeprecationWarning`. Port to `qqa.anneal()` when you get
-a chance.
+a chance. These wrappers are scheduled for removal in QQA 1.0.0; the stable
+`qqa.solve()` / `qqa.anneal()` APIs and result contracts replace them.
 
 ## Checklist
 

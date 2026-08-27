@@ -40,8 +40,9 @@ root with `app/streamlit_app.py` as the entry point.
 | `app/pages/2_Visualize.py` | Rich plots from the last run |
 | `app/pages/3_Compare.py` | Hyper-parameter sweeps |
 | `app/_common.py` | Theme / problem builder helpers |
-| `requirements.txt` | Pinned CPU-only dependency list (used by Community Cloud) |
-| `runtime.txt` | `python-3.11` — matches the default Community Cloud runtime |
+| `app/requirements.txt` | Entrypoint-local redirect to the pinned CPU-only dependency list; takes precedence over root `uv.lock` |
+| `requirements.txt` | Reproducible Python 3.12 deployment set with the current CPU-only PyTorch wheel |
+| `runtime.txt` | `python-3.12` — matches the current Community Cloud default |
 | `.streamlit/config.toml` | Theme + server / browser / client settings |
 
 If you need to debug a deploy failure, temporarily flip
@@ -56,6 +57,11 @@ push, watch the Streamlit Cloud logs, then revert.
 3. Visit `/_stcore/health` first — it skips all application code, so any
    `200 ok` means the container is up and the UI is reachable.
 4. Visit `/` to walk through Home → Solve → Visualize.
+
+Community Cloud selects the Python version in deployment settings. Existing
+apps cannot change it in place: to move an older deployment to Python 3.12,
+record its subdomain/settings, delete it, and redeploy with Python 3.12 in
+**Advanced settings**. Dependency-only updates continue to redeploy in place.
 
 ## 4. Embedding the app elsewhere
 
@@ -91,5 +97,5 @@ uv run python scripts/check_streamlit_deploy.py
 | Redirect loop to `/-/auth/app` | Private sharing | Set sharing to *Anyone with the link can view* (see §1) |
 | App shows a generic error page | Build failure (usually `pip`) | Temporarily enable `showErrorDetails`, redeploy, read logs |
 | Cold start feels slow (~30 s) | Free tier image spin-up | Expected; warm starts are sub-second |
-| `torch` wheel OOM during build | CUDA wheel pulled | Ensure `requirements.txt` keeps `--extra-index-url https://download.pytorch.org/whl/cpu` |
-| `plotly` missing | Not in `requirements.txt` | Keep `plotly>=5.17` in the top-level deps (not just `[plotly]` extra) |
+| `torch` wheel OOM during build | CUDA wheel pulled | Keep the exact `torch==...+cpu` pin and CPU `--find-links` source in `requirements.txt` |
+| `plotly` missing | Not in `requirements.txt` | Keep the exact Plotly deployment pin in `requirements.txt` (not just the `[plotly]` extra) |

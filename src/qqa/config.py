@@ -46,6 +46,7 @@ class SolverConfig:
     restart_fraction: float = 0.15
     restart_jitter: float = 0.10
     gradient_clip_norm: float | None = 100.0
+    optimizer: Literal["adamw", "lightweight-adamw", "mirror-descent"] = "adamw"
     mixed_precision: Literal["fp32", "bf16"] = "fp32"
     memory_fraction: float = 0.80
     return_population: bool = False
@@ -111,6 +112,8 @@ class SolverConfig:
             raise ValueError("memory_fraction must be in (0, 1].")
         if self.mixed_precision not in {"fp32", "bf16"}:
             raise ValueError("mixed_precision must be 'fp32' or 'bf16'.")
+        if self.optimizer not in {"adamw", "lightweight-adamw", "mirror-descent"}:
+            raise ValueError("optimizer must be 'adamw', 'lightweight-adamw', or 'mirror-descent'.")
         if self.exact_backend not in {"auto", "none", "scip", "highs", "cpsat", "cuopt"}:
             raise ValueError("Unsupported exact_backend.")
         if self.sparse_kernel not in {"auto", "torch", "triton"}:
@@ -180,6 +183,7 @@ class SolverConfig:
             "restart_fraction": resolved.restart_fraction,
             "restart_jitter": resolved.restart_jitter,
             "gradient_clip_norm": resolved.gradient_clip_norm,
+            "optimizer": resolved.optimizer,
             "mixed_precision": resolved.mixed_precision,
             "cuda_graphs": resolved.cuda_graphs,
             "verbose": False,

@@ -11,7 +11,13 @@ import torch
 
 import qqa
 from qqa.blackbox import BlackBoxProblem, EvaluationDatabase
-from qqa.hybrid.neighborhood_portfolio import NeighborhoodBudget, NeighborhoodPortfolio
+from qqa.hybrid.neighborhood_portfolio import (
+    GraphInducedNeighborhoodGenerator,
+    LocalBranchingNeighborhoodGenerator,
+    NeighborhoodBudget,
+    NeighborhoodPortfolio,
+    TrustRegionNeighborhoodGenerator,
+)
 from qqa.model import LinearFactor
 from qqa.presolve.scip_bridge import SCIPState
 from qqa.schedule import make_schedule
@@ -48,19 +54,56 @@ def _state() -> SCIPState:
         pseudocosts=np.asarray([0.2, 4.0, 0.1]),
         node_number=1,
         depth=2,
+        interaction_edges=np.asarray([[0, 1], [1, 2]]),
+        conflict_scores=np.asarray([0.1, 0.2, 4.0]),
+        gradient_scores=np.asarray([0.2, 3.0, 0.1]),
+        historical_scores=np.asarray([2.0, 0.1, 0.3]),
+        reference_history=(
+            np.asarray([0.0, 8.0, 0.0]),
+            np.asarray([1.0, 10.0, 0.0]),
+        ),
     )
 
 
 def test_neighborhood_portfolio_records_bandit_outcomes():
     portfolio = NeighborhoodPortfolio()
     names = []
-    for _ in range(4):
+    for _ in range(10):
         name, neighborhood = portfolio.propose(_state(), NeighborhoodBudget(max_variables=2))
         names.append(name)
         assert len(neighborhood.core_indices) == 2
         portfolio.update(name, runtime=0.1, feasible=True, accepted=True, objective_gain=1.0)
-    assert set(names) == {"rens", "rins", "pseudocost", "reduced-cost"}
+    assert set(names) == {
+        "rens",
+        "rins",
+        "gins",
+        "local-branching",
+        "trust-region",
+        "conflict",
+        "pseudocost",
+        "gradient",
+        "history",
+        "reduced-cost",
+    }
     assert all(row["calls"] == 1 for row in portfolio.diagnostics().values())
+
+
+def test_gins_local_branching_and_trust_region_have_distinct_contracts():
+    state = _state()
+    budget = NeighborhoodBudget(max_variables=2, radius=1)
+    gins = GraphInducedNeighborhoodGenerator().propose(state, budget)
+    assert gins.kind == "gins"
+    assert len(gins.core_indices) == 2
+
+    local = LocalBranchingNeighborhoodGenerator().propose(state, budget)
+    assert local.kind == "local-branching"
+    assert local.radius == 1
+
+    trust = TrustRegionNeighborhoodGenerator().propose(state, budget)
+    assert trust.kind == "trust-region"
+    assert np.all(trust.lower >= state.local_lower[trust.core_indices])
+    assert np.all(trust.upper <= state.local_upper[trust.core_indices])
+    assert np.all(trust.upper - trust.lower <= 2)
 
 
 def test_blackbox_cache_and_multi_trust_region_resume(tmp_path: Path):

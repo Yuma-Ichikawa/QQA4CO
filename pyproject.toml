@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.7.0"
+version = "0.8.0"
 description = "Quasi-Quantum Annealing: a GPU solver for combinatorial, spin-glass, integer, real, and mixed-variable optimization."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -40,6 +40,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Scientific/Engineering",
@@ -50,10 +52,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    # The lower bound matches ``requirements.txt`` (used by Streamlit Community
-    # Cloud) so that local ``uv sync`` and the Cloud deploy resolve the same
-    # torch wheel. Cloud pins an upper bound too; we keep the lower bound here
-    # and leave the upper to the deploy file to avoid churning PyPI users.
+    # Library users receive the newest compatible wheel. The Streamlit deploy
+    # file independently pins the current CPU build for reproducible, bounded
+    # cloud images without constraining ordinary PyPI installations.
     "torch>=2.2",
     "numpy>=1.24",
     "networkx>=3.1",
@@ -164,6 +165,20 @@ dev = [
     "nbval>=0.11",
     "requests>=2.31",
 ]
+
+# Development and CI use the compact CPU wheel on mainstream x86 hosts.
+# This uv-only source does not alter published PyPI metadata; macOS and other
+# architectures continue to resolve their platform-native Torch wheel from
+# PyPI. GPU validation explicitly replaces this wheel in nightly-cuda.yml.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "(sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'win32' and platform_machine == 'AMD64')" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

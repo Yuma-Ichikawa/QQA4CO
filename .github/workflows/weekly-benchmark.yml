@@ -13,12 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v8.1.0
-      - run: uv python install 3.11
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
+      - run: uv python install 3.12
       - name: Install benchmark environment
-        env:
-          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: uv sync --extra dev --extra benchmark
       - name: Run graph, mixed, black-box, and multi-objective representatives
         run: >-
@@ -37,7 +35,7 @@ jobs:
             --format qplib --solvers scip-aggressive sg-cqqa --seeds 0 1 \
             --time-limit 10 --continue-on-error --quiet \
             --output weekly-public/qplib-result.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: weekly-benchmark
           path: |

@@ -6,6 +6,46 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-27
+
+### Advanced opt-in QQA runtime
+
+- Add deterministic and stochastic straight-through binary estimators,
+  entropic softmax, sparsemax/entmax categorical maps, endpoint-inclusive
+  temperature annealing, and simplex-native mirror descent. Pure QQA with
+  AdamW remains the default path.
+- Keep adaptive replica-restart decisions, counters, and event masks on the
+  accelerator until the final result transfer, and align adaptive schedule
+  observations with explicit progress checkpoints.
+- Fix structured warm starts so each relaxation restores its own latent
+  geometry instead of applying an invalid universal unit-cube clamp.
+- Add persistent, content-addressed `torch.export` and AOTInductor sparse-QUBO
+  artifacts with atomic writes, compatibility manifests, dynamic batch
+  support for export, autograd parity, and cache reuse.
+- Fuse sparse-QUBO endpoint gathering and reduction into one indexed load and
+  matrix-vector reduction, reducing the CPU regression-gate runtime while
+  preserving gradients and arbitrary leading batch dimensions.
+
+### Conditional hybrid portfolio
+
+- Expand the opt-in SCIP-guided portfolio with graph-induced, local-branching,
+  trust-region, conflict, gradient, history, pseudocost, RENS, RINS, and
+  reduced-cost neighbourhoods.
+- Extract bounded constraint-interaction graphs and node signals from SCIP
+  state while retaining solver-independent interfaces and path-free results.
+
+### Packaging and automation
+
+- Refresh the fully resolved lock to the newest compatible releases, including
+  PyTorch 2.13, NumPy 2.5, SciPy 1.18, Streamlit 1.62, Plotly 7, pandas 3,
+  Ruff 0.16, and pytest 9; pin the Streamlit deployment to current CPU wheels.
+- Test CPython 3.10 through 3.14, use Python 3.12 for Streamlit and automation,
+  and update all GitHub Actions to immutable current release tags.
+- Add an entrypoint-local Streamlit requirements bridge so Community Cloud
+  reliably selects the reproducible CPU deployment file.
+- Document the opt-in relaxation, mirror-descent, and persistent AOT APIs,
+  plus the CPython-only runtime boundary imposed by official PyTorch wheels.
+
 ## [0.7.0] - 2026-08-27
 
 ### GPU runtime, search, and reliability

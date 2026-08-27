@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -46,6 +46,11 @@ class SCIPState:
     pseudocosts: np.ndarray
     node_number: int
     depth: int
+    interaction_edges: np.ndarray | None = None
+    conflict_scores: np.ndarray | None = None
+    gradient_scores: np.ndarray | None = None
+    historical_scores: np.ndarray | None = None
+    reference_history: tuple[np.ndarray, ...] = ()
 
     @property
     def integer_indices(self) -> np.ndarray:
@@ -77,6 +82,7 @@ def extract_scip_state(model) -> SCIPState:
     upper: list[float] = []
     reduced: list[float] = []
     pseudo: list[float] = []
+    conflict: list[float] = []
 
     for variable in variables:
         lb = _safe_float(variable.getLbLocal, -model.infinity())
@@ -90,6 +96,43 @@ def extract_scip_state(model) -> SCIPState:
             incumbent_values.append(_safe_float(lambda v=variable: model.getSolVal(best, v), lp))
         reduced.append(_safe_float(lambda v=variable: model.getVarRedcost(v), 0.0))
         pseudo.append(_safe_float(lambda v=variable, x=lp: model.getVarPseudocostScore(v, x), 0.0))
+        conflict.append(_safe_float(lambda v=variable: model.getVarConflictScore(v), 0.0))
+
+    # Build a compact variable-interaction graph from active constraints.  A
+    # large row is represented as a star to keep extraction linear in row
+    # width while preserving connectivity for graph-induced neighbourhoods.
+    by_name = {variable.name.removeprefix("t_"): index for index, variable in enumerate(variables)}
+    edges: set[tuple[int, int]] = set()
+    try:
+        constraints = tuple(model.getConss())
+    except Exception:
+        constraints = ()
+    for constraint in constraints:
+        try:
+            row_variables = tuple(model.getConsVars(constraint))
+        except Exception:
+            try:
+                row_variables = tuple(model.getValsLinear(constraint))
+            except Exception:
+                continue
+        indices = sorted(
+            {
+                by_name[name]
+                for variable in row_variables
+                if (name := variable.name.removeprefix("t_")) in by_name
+            }
+        )
+        if len(indices) <= 64:
+            edges.update(
+                (indices[left], indices[right])
+                for left in range(len(indices))
+                for right in range(left + 1, len(indices))
+            )
+        elif indices:
+            edges.update((indices[0], index) for index in indices[1:])
+    interaction_edges = (
+        np.asarray(sorted(edges), dtype=np.int64).T if edges else np.empty((2, 0), dtype=np.int64)
+    )
 
     node = model.getCurrentNode()
     return SCIPState(
@@ -106,11 +149,17 @@ def extract_scip_state(model) -> SCIPState:
         pseudocosts=np.asarray(pseudo, dtype=np.float64),
         node_number=int(model.getNNodes()),
         depth=int(node.getDepth()) if node is not None else 0,
+        interaction_edges=interaction_edges,
+        conflict_scores=np.asarray(conflict, dtype=np.float64),
+        gradient_scores=np.abs(np.asarray(reduced, dtype=np.float64)),
     )
 
 
 def _scip_expression(expression: SparseQuadratic, variables, quicksum):
-    linear = expression.linear.tocoo()
+    # ``SparseQuadratic.__post_init__`` normalises every accepted dense or
+    # sequence input to a SciPy sparse matrix.  Keep the public constructor
+    # type broad while making that post-init invariant explicit here.
+    linear = cast(Any, expression.linear).tocoo()
     result = float(expression.constant) + quicksum(
         float(coefficient) * variables[column]
         for column, coefficient in zip(linear.col, linear.data, strict=True)
@@ -166,7 +215,7 @@ def build_scip_model(
     variables = tuple(
         model.addVar(
             name=variable_name,
-            vtype=type_map[variable_type],
+            vtype=type_map[VariableType(variable_type)],
             lb=finite_bound(lower),
             ub=finite_bound(upper),
         )

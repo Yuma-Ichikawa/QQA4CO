@@ -1,0 +1,4 @@
+# Streamlit Community Cloud checks the entrypoint directory before the
+# repository root. Keep this indirection so the deploy uses the intentionally
+# CPU-only, reproducible dependency set even when a root uv.lock is present.
+-r ../requirements.txt

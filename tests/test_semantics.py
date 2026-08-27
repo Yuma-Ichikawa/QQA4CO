@@ -46,6 +46,22 @@ def test_sparse_qubo_dense_energy_and_gradient_parity():
     assert torch.allclose(sparse_gradient, dense_gradient, atol=1e-6)
 
 
+@pytest.mark.parametrize("leading_shape", [(), (5,), (2, 3)])
+def test_sparse_qubo_energy_preserves_arbitrary_leading_dimensions(leading_shape):
+    qubo = SparseQUBO(
+        torch.tensor([1.0, -2.0, 0.5]),
+        torch.tensor([[0, 1], [1, 2]]),
+        torch.tensor([0.25, -0.75]),
+        constant=0.125,
+    )
+    values = torch.rand(*leading_shape, 3, requires_grad=True)
+    energy = qubo.energy(values)
+    assert energy.shape == leading_shape
+    energy.sum().backward()
+    assert values.grad is not None
+    assert torch.isfinite(values.grad).all()
+
+
 @pytest.mark.parametrize("sense,expected", [("minimize", 0.0), ("maximize", 6.0)])
 def test_objective_sense_is_canonicalized_once(sense, expected):
     model = ModelIR(

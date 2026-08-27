@@ -15,7 +15,7 @@ page is the explanation of how the flags interact.
 
 ```bash
 qqa version
-# 0.7.0
+# 0.8.0
 ```
 
 Prints the value of `qqa.__version__`, which is single-sourced from

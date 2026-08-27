@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
@@ -12,7 +12,7 @@ repos:
     # Keep in sync with the ``ruff`` version resolved by ``uv.lock`` (and
     # therefore by CI). Bumping one without the other is the fastest way to
     # get pre-commit vs CI drift.
-    rev: v0.16.0
+    rev: v0.16.4
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -22,7 +22,7 @@ repos:
   # CI re-runs the same check in .github/workflows/gitleaks.yml, so a
   # contributor who skips pre-commit locally is still caught on the PR.
   - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.21.2
+    rev: v8.30.1
     hooks:
       - id: gitleaks
 
@@ -31,6 +31,6 @@ repos:
   # to leak local paths, experiment numbers and occasionally credentials
   # via their cached stdout.
   - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1
+    rev: 0.9.1
     hooks:
       - id: nbstripout

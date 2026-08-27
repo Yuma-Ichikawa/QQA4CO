@@ -225,6 +225,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="QQA latent-gradient norm cap; pass 0 to disable.",
     )
+    solve.add_argument(
+        "--optimizer",
+        choices=["adamw", "lightweight-adamw", "mirror-descent"],
+        default="adamw",
+        help=(
+            "QQA latent optimizer. mirror-descent requires an explicit "
+            "MirrorDescentCategoricalRelaxation."
+        ),
+    )
     solve.add_argument("--seed", type=int, default=0)
     solve.add_argument(
         "--device",
@@ -843,6 +852,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             "restart_patience": "restart_patience",
             "restart_fraction": "restart_fraction",
             "restart_jitter": "restart_jitter",
+            "optimizer": "optimizer",
         }
         overrides = {
             config_name: value
@@ -926,6 +936,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
                     "restart_fraction": args.restart_fraction,
                     "restart_jitter": args.restart_jitter,
                     "gradient_clip_norm": args.gradient_clip or None,
+                    "optimizer": args.optimizer,
                     "verbose": not args.quiet,
                     **({"schedule": qqa_schedule} if qqa_schedule is not None else {}),
                 },
@@ -1052,6 +1063,7 @@ def _cmd_solve(args: argparse.Namespace) -> int:
             "restart_fraction": args.restart_fraction,
             "restart_jitter": args.restart_jitter,
             "gradient_clip_norm": args.gradient_clip or None,
+            "optimizer": args.optimizer,
             "verbose": not args.quiet,
         }
         if qqa_schedule is not None:

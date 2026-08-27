@@ -47,7 +47,7 @@ python -m pip install --upgrade "qqa[triton]"    # optional fused CUDA kernels
 python -m pip install --upgrade "qqa[dev]"       # tests, lint, typing, docs
 ```
 
-QQA4CO supports CPython 3.10--3.12. PyPy is not currently supported because the
+QQA4CO supports CPython 3.10--3.14. PyPy is not currently supported because the
 solver depends on PyTorch, whose official distributions target CPython.
 
 PyTorch chooses CPU or CUDA according to the installed wheel. Follow the
@@ -263,11 +263,15 @@ QQA with `acquisition_optimizer="qqa"`.
 | Feature | Status |
 | --- | --- |
 | Sparse factor QQA and local search | Stable |
+| Device-resident telemetry and restart control | Stable |
+| Softmax/Gumbel, sparsemax/entmax and mirror-descent relaxations | Experimental, opt-in |
+| Persistent torch.export/AOTInductor sparse-model cache | Experimental, opt-in |
 | Dense QUBO compatibility view | Deprecated for large models |
 | Stable `solve` / `plan` / `inspect` contract | Stable |
 | Mixed-variable QQA and ModelIR presolve | Beta |
 | MPS, QPLIB, OPB, DIMACS, QUBO, Ising inputs | Beta |
 | SCIP hybrid and exact certification | Beta, optional |
+| RENS/RINS/GINS/local-branching/trust-region portfolio | Beta, optional |
 | HiGHS and CP-SAT adapters | Beta, optional |
 | Black-box trust-region solver | Beta |
 | Multi-objective and uncertainty extensions | Beta |

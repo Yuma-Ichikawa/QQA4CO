@@ -18,7 +18,7 @@ from qqa.schedule import LinearBGSchedule
 
 def _deprecated(old: str, new: str = "qqa.anneal") -> None:
     warnings.warn(
-        f"{old} is deprecated and will be removed in a future release; use {new} instead.",
+        f"{old} is deprecated and will be removed in QQA 1.0.0; use {new} instead.",
         DeprecationWarning,
         stacklevel=3,
     )

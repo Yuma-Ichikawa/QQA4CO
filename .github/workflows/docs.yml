@@ -26,19 +26,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Set up Python
-        run: uv python install 3.11
+        run: uv python install 3.12
       - name: Install with docs extras (CPU torch)
-        env:
-          PIP_EXTRA_INDEX_URL: https://download.pytorch.org/whl/cpu
         run: uv sync --extra docs
       - name: Build site
         run: uv run mkdocs build --clean --strict --site-dir _site
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: _site
 
@@ -50,4 +48,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.0

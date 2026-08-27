@@ -143,6 +143,30 @@ class _LightweightAdamW:
             )
 
 
+class _MirrorDescentOptimizer:
+    """Minimal optimizer adapter delegated to a simplex relaxation."""
+
+    def __init__(self, parameter: torch.Tensor, relaxation: Any, *, learning_rate: float) -> None:
+        mirror_step = getattr(relaxation, "mirror_step_", None)
+        if not callable(mirror_step):
+            raise TypeError(
+                "optimizer='mirror-descent' requires a relaxation exposing mirror_step_."
+            )
+        self.parameter = parameter
+        self.relaxation = relaxation
+        self.learning_rate = float(learning_rate)
+        self.state: dict[torch.Tensor, dict[str, torch.Tensor]] = {parameter: {}}
+
+    def zero_grad(self, *, set_to_none: bool = True) -> None:
+        if set_to_none:
+            self.parameter.grad = None
+        elif self.parameter.grad is not None:
+            self.parameter.grad.zero_()
+
+    def step(self) -> None:
+        self.relaxation.mirror_step_(self.parameter, self.learning_rate)
+
+
 def _is_instance_problem(problem) -> bool:
     return hasattr(problem, "num_instance")
 
@@ -161,13 +185,21 @@ def _reset_optimizer_rows(
     optimizer: Any,
     parameter: torch.Tensor,
     rows: torch.Tensor,
+    enabled: torch.Tensor | None = None,
 ) -> None:
     """Clear Adam moments for replicas whose latent state was restarted."""
     state = optimizer.state.get(parameter, {})
     for key in ("exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
         value = state.get(key)
         if torch.is_tensor(value) and value.shape == parameter.shape:
-            value[rows].zero_()
+            if enabled is None:
+                value[rows].zero_()
+            else:
+                value[rows] = torch.where(
+                    enabled,
+                    torch.zeros_like(value[rows]),
+                    value[rows],
+                )
 
 
 def _restart_replicas(
@@ -180,6 +212,7 @@ def _restart_replicas(
     fraction: float,
     jitter: float,
     learning_rate: float,
+    enabled: torch.Tensor | None = None,
 ) -> int:
     """Restart weak replicas with a global/local basin-hopping mixture."""
     count = min(x.shape[0] - 1, max(1, math.ceil(x.shape[0] * fraction)))
@@ -203,9 +236,9 @@ def _restart_replicas(
             local = elite.unsqueeze(0).expand(elite_count, *elite.shape).clone()
             local.add_(jitter * torch.randn_like(local))
             replacements[:elite_count] = local
-        x[worst] = replacements
+        x[worst] = replacements if enabled is None else torch.where(enabled, replacements, x[worst])
         relaxation.perturb_(x, learning_rate, 0.0)
-        _reset_optimizer_rows(optimizer, x, worst)
+        _reset_optimizer_rows(optimizer, x, worst, enabled)
     return count
 
 
@@ -232,7 +265,7 @@ def anneal(
     polish: bool = True,
     return_population: bool = False,
     weight_decay: float = 0.0,
-    optimizer: Literal["adamw", "lightweight-adamw"] = "adamw",
+    optimizer: Literal["adamw", "lightweight-adamw", "mirror-descent"] = "adamw",
     gradient_clip_norm: float | None = None,
     restart_patience: int | None = None,
     restart_fraction: float = 0.15,
@@ -310,7 +343,8 @@ def anneal(
         ``"adamw"`` preserves the standard Torch implementation.
         ``"lightweight-adamw"`` uses the same single-parameter update without
         Torch optimizer discovery overhead and is intended for short hybrid
-        callbacks.
+        callbacks. ``"mirror-descent"`` is an opt-in exponentiated-gradient
+        update for :class:`~qqa.relaxation.MirrorDescentCategoricalRelaxation`.
     gradient_clip_norm:
         Optional global norm cap for the latent gradient. Useful for
         user-defined objectives with large coefficients or singular
@@ -355,8 +389,8 @@ def anneal(
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
     if not math.isfinite(weight_decay) or weight_decay < 0:
         raise ValueError(f"weight_decay must be finite and >= 0, got {weight_decay}.")
-    if optimizer not in {"adamw", "lightweight-adamw"}:
-        raise ValueError("optimizer must be 'adamw' or 'lightweight-adamw'.")
+    if optimizer not in {"adamw", "lightweight-adamw", "mirror-descent"}:
+        raise ValueError("optimizer must be 'adamw', 'lightweight-adamw', or 'mirror-descent'.")
     if gradient_clip_norm is not None and (
         not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
     ):
@@ -377,6 +411,8 @@ def anneal(
         raise TypeError("cuda_graphs must be boolean.")
     if cuda_graphs and optimizer != "adamw":
         raise ValueError("cuda_graphs requires optimizer='adamw'.")
+    if optimizer == "mirror-descent" and weight_decay:
+        raise ValueError("mirror-descent does not support Euclidean weight_decay.")
     # Mirror the validation that the pignn / cpra trainers already enforce:
     # the binary / spin penalty 1 - (1 - 2p)^c is asymmetric for odd c and
     # silently breaks the discrete attractor at γ > 0. CategoricalRelaxation
@@ -459,8 +495,13 @@ def anneal(
         # identical at t=0 — otherwise the diversity term has nothing to spread
         # apart and the population collapses immediately. The clamp keeps the
         # seed inside the [0, 1] cube even when the user passes raw {0,1} bits.
-        x = (seed + 0.05 * torch.randn_like(seed)).clamp_(0.0, 1.0)
+        x = seed + 0.05 * torch.randn_like(seed)
+        # Restore the *relaxation's* latent domain.  A universal clamp to
+        # [0, 1] corrupts logit-based softmax/ST estimators and used to make
+        # structured warm starts silently lose their intended geometry.
+        relax.perturb_(x, learning_rate, 0.0)
         x.requires_grad_(True)
+    optimiser: Any
     if optimizer == "adamw":
         adamw_options: dict[str, Any] = {}
         if cuda_graphs:
@@ -471,11 +512,17 @@ def anneal(
             weight_decay=weight_decay,
             **adamw_options,
         )
-    else:
+    elif optimizer == "lightweight-adamw":
         optimiser = _LightweightAdamW(
             x,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
+        )
+    else:
+        optimiser = _MirrorDescentOptimizer(
+            x,
+            relax,
+            learning_rate=learning_rate,
         )
     if cuda_graphs:
         x.grad = torch.zeros_like(x)
@@ -485,16 +532,15 @@ def anneal(
         optimiser_state["exp_avg_sq"] = torch.zeros_like(x)
 
     hp = {"div_param": float(div_param), "restart_count": 0}
-    restart_epochs: list[int] = []
-    restart_count = 0
-    restart_window_epochs = 0
+    restart_count_device = torch.zeros((), dtype=torch.int64, device=x.device)
+    restart_epoch_mask = torch.zeros(num_epochs, dtype=torch.bool, device=x.device)
 
     with torch.no_grad():
         x_disc = relax.project(x)
         loss_disc = loss_function(x_disc)
         if is_batch:
             min_vals, min_idx = torch.min(loss_disc, dim=0)
-            best_obj = min_vals.detach().cpu().numpy().astype(np.float64)
+            best_obj: Any = min_vals.detach().cpu().numpy().astype(np.float64)
             columns = torch.arange(x_disc.size(1), device=x_disc.device)
             best_sol = x_disc[min_idx, columns].detach().clone()
         else:
@@ -510,7 +556,10 @@ def anneal(
     best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
     restart_reference = best_obj_gpu.detach().clone()
     adaptive_reference = best_obj_gpu.detach().clone()
-    adaptive_interval = max(1, min(check_interval, max(1, num_epochs // 20)))
+    # Adaptive schedule observation is an explicit host control point. Keep
+    # it aligned with check_interval so ordinary GPU runs do not gain hidden
+    # synchronisations in addition to user-requested progress checks.
+    adaptive_interval = check_interval
     # Pre-seed ``state`` with the post-init evaluation so ``on_train_end`` has
     # a valid CallbackState even when ``num_epochs == 0``. The loop below will
     # overwrite it as it iterates.
@@ -591,6 +640,9 @@ def anneal(
         if time_limit is not None and perf_counter() - runtime_start >= time_limit:
             deadline_reached = True
             break
+        update_relaxation = getattr(relax, "set_progress", None)
+        if callable(update_relaxation):
+            update_relaxation(1.0 if num_epochs <= 1 else epoch / (num_epochs - 1))
         bg = float(schedule(epoch, num_epochs))
         if captured_step is not None:
             losses, penalties, diversity = captured_step.replay(
@@ -622,8 +674,6 @@ def anneal(
                 selected = x_disc[min_idx]
                 best_sol = torch.where(improved, selected, best_sol)
                 best_obj_gpu = torch.minimum(best_obj_gpu, min_val)
-        restart_window_epochs += 1
-
         state = CallbackState(
             epoch=epoch,
             num_epochs=num_epochs,
@@ -668,26 +718,25 @@ def anneal(
             restart_patience is not None
             and sol_size > 1
             and epoch < num_epochs - 1
-            and restart_window_epochs >= restart_patience
+            and (epoch + 1) % restart_patience == 0
         ):
             improved_in_window = torch.any(best_obj_gpu < restart_reference - 1e-12)
-            if not bool(improved_in_window.item()):
-                restarted = _restart_replicas(
-                    x=x,
-                    best_sol=best_sol,
-                    discrete_losses=loss_disc,
-                    relaxation=relax,
-                    optimizer=optimiser,
-                    fraction=restart_fraction,
-                    jitter=restart_jitter,
-                    learning_rate=learning_rate,
-                )
-                if restarted:
-                    restart_count += restarted
-                    restart_epochs.append(epoch)
-                    hp["restart_count"] = restart_count
+            restart_enabled = ~improved_in_window
+            restarted = _restart_replicas(
+                x=x,
+                best_sol=best_sol,
+                discrete_losses=loss_disc,
+                relaxation=relax,
+                optimizer=optimiser,
+                fraction=restart_fraction,
+                jitter=restart_jitter,
+                learning_rate=learning_rate,
+                enabled=restart_enabled,
+            )
+            if restarted:
+                restart_count_device.add_(restart_enabled.to(torch.int64) * restarted)
+                restart_epoch_mask[epoch] = restart_enabled
             restart_reference = best_obj_gpu.detach().clone()
-            restart_window_epochs = 0
 
     runtime = perf_counter() - runtime_start
     best_obj = (
@@ -695,6 +744,9 @@ def anneal(
         if is_batch
         else float(best_obj_gpu.item())
     )
+    restart_count = int(restart_count_device.item())
+    restart_epochs = restart_epoch_mask.nonzero(as_tuple=False).flatten().cpu().tolist()
+    hp["restart_count"] = restart_count
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
         print(f"  BEST LOSS : {best_obj}")
@@ -704,7 +756,7 @@ def anneal(
     for cb in cb_list:
         cb.on_train_end(state)
 
-    history = recorder.history if recorder is not None else {}
+    history: dict[str, Any] = recorder.history if recorder is not None else {}
     if record_history:
         history["restart_epochs"] = restart_epochs
         history["restart_count"] = restart_count
@@ -732,6 +784,9 @@ def anneal(
     best_sol, best_obj, polished_sol = apply_polish_if_improves(
         problem, best_sol, best_obj, polish=polish and not is_batch
     )
+    # The incumbent is initialised from a non-empty replica population before
+    # polishing, so the helper's optional return cannot be ``None`` here.
+    assert best_sol is not None
     if polished_sol is not None and best_obj < prev_obj:
         score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
         if verbose:

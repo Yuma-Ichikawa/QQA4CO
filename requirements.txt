@@ -8,24 +8,26 @@
 #   so ``import qqa`` works inside the Streamlit app.
 #
 # Local development should still use ``uv sync --all-extras``; this file is
-# only consumed by pip-based deploy targets (Streamlit Community Cloud,
-# Hugging Face Spaces, Render, etc.).
+# for constrained deploy targets (Streamlit Community Cloud, Hugging Face
+# Spaces, Render, etc.) and is intentionally valid for both pip and uv.
 
-# CPU-only PyTorch wheel (avoids the 900MB CUDA build that would blow
-# through the 1GB Streamlit Community Cloud image budget).
---extra-index-url https://download.pytorch.org/whl/cpu
-torch>=2.2,<2.8
+# Expose CPU Torch wheels as flat candidates while keeping PyPI as the sole
+# package index.  This works with both pip and uv without weakening uv's
+# dependency-confusion protection or selecting stale utility packages from a
+# secondary index.
+--find-links https://download.pytorch.org/whl/cpu/torch/
+torch==2.13.0+cpu
 
-numpy>=1.24,<3
-networkx>=3.1
-scipy>=1.11
-matplotlib>=3.8
-tqdm>=4.66
+numpy==2.5.2
+networkx==3.6.1
+scipy==1.18.1
+matplotlib==3.11.1
+tqdm==4.70.0
 
 # Interactive plots + GUI (REQUIRED by app/_common.py at import time).
-plotly>=5.17
-pandas>=2.0
-streamlit>=1.30
+plotly==7.0.0
+pandas==3.0.5
+streamlit==1.62.0
 
 # Install this repository so ``import qqa`` works inside the app.
 # IMPORTANT: must be the LAST line. We bump pyproject.toml's ``version``

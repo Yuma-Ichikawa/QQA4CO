@@ -15,6 +15,14 @@ _EXPORTS = {
     "QQAHeuristicConfig": ("qqa.hybrid.heuristic_types", "QQAHeuristicConfig"),
     "QQAHeuristicStats": ("qqa.hybrid.heuristic_types", "QQAHeuristicStats"),
     "NeighborhoodBudget": ("qqa.hybrid.neighborhood_portfolio", "NeighborhoodBudget"),
+    "GraphInducedNeighborhoodGenerator": (
+        "qqa.hybrid.neighborhood_portfolio",
+        "GraphInducedNeighborhoodGenerator",
+    ),
+    "LocalBranchingNeighborhoodGenerator": (
+        "qqa.hybrid.neighborhood_portfolio",
+        "LocalBranchingNeighborhoodGenerator",
+    ),
     "NeighborhoodPortfolio": (
         "qqa.hybrid.neighborhood_portfolio",
         "NeighborhoodPortfolio",
@@ -23,6 +31,10 @@ _EXPORTS = {
     "ScoredNeighborhoodGenerator": (
         "qqa.hybrid.neighborhood_portfolio",
         "ScoredNeighborhoodGenerator",
+    ),
+    "TrustRegionNeighborhoodGenerator": (
+        "qqa.hybrid.neighborhood_portfolio",
+        "TrustRegionNeighborhoodGenerator",
     ),
     "SCIPExpressionError": ("qqa.hybrid.scip_model", "SCIPExpressionError"),
     "SCIPHybridResult": ("qqa.hybrid.scip", "SCIPHybridResult"),

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -123,15 +123,22 @@ class SparseQUBO:
         """Evaluate any leading batch dimensions in ``O(batch * edges)``."""
         if values.shape[-1] != self.num_variables:
             raise ValueError(f"Expected {self.num_variables} variables, got {values.shape[-1]}.")
-        linear = (values * self.linear.to(values)).sum(dim=-1)
+        linear = torch.matmul(values, self.linear.to(values))
         if self.num_edges == 0:
             return linear + self.constant
-        source, target = self.edge_index
-        pair = values[..., source] * values[..., target] * self.edge_weight.to(values)
-        return linear + pair.sum(dim=-1) + self.constant
+        # One vectorised advanced-index operation is materially faster than
+        # gathering the two endpoints separately on current CPU and GPU Torch
+        # kernels.  The final matmul also avoids an intermediate weighted edge
+        # tensor while preserving autograd and arbitrary leading dimensions.
+        endpoints = values[..., self.edge_index]
+        pairwise = endpoints[..., 0, :] * endpoints[..., 1, :]
+        return linear + torch.matmul(pairwise, self.edge_weight.to(values)) + self.constant
 
     def accelerated_energy(
-        self, values: torch.Tensor, *, implementation: str = "auto"
+        self,
+        values: torch.Tensor,
+        *,
+        implementation: Literal["auto", "torch", "triton"] = "auto",
     ) -> torch.Tensor:
         """Evaluate with an analytic-gradient custom op or optional Triton kernels."""
         from qqa.gpu.ops import sparse_qubo_energy
@@ -146,7 +153,10 @@ class SparseQUBO:
         )
 
     def energy_gradient(
-        self, values: torch.Tensor, *, implementation: str = "auto"
+        self,
+        values: torch.Tensor,
+        *,
+        implementation: Literal["auto", "torch", "triton"] = "auto",
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return energy and analytic gradient without constructing a dense matrix."""
         from qqa.gpu.ops import sparse_qubo_energy_gradient
@@ -159,6 +169,12 @@ class SparseQUBO:
             self.constant,
             implementation=implementation,
         )
+
+    def compile_aot(self, example_values: torch.Tensor, **kwargs):
+        """Create or load a persistent :mod:`torch.export`/AOTInductor artifact."""
+        from qqa.compile.aot import compile_sparse_qubo_aot
+
+        return compile_sparse_qubo_aot(self, example_values, **kwargs)
 
     def gradient(self, values: torch.Tensor) -> torch.Tensor:
         """Analytic continuous gradient without constructing a dense matrix."""
