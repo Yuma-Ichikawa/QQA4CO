@@ -463,6 +463,8 @@ def _update_archive(
                 archive_weights,
             )
         if archive_solutions is not None:
+            if archive_weights is None:
+                raise RuntimeError("Pareto archive weights were not initialised.")
             solutions = torch.cat([archive_solutions.to(solutions.device), solutions])
             solution_weights = torch.cat(
                 [archive_weights.to(solution_weights.device), solution_weights]

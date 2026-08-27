@@ -71,12 +71,19 @@ def _compile_scip_expression(source: str, variables: dict[str, list], pyscipopt,
         if isinstance(node, ast.Expression):
             return visit(node.body)
         if isinstance(node, ast.Constant):
+            if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+                raise SCIPExpressionError("Only numeric constants can be compiled for SCIP.")
             return float(node.value)
         if isinstance(node, ast.Name):
             values = variables[node.id]
             return values[0] if len(values) == 1 else values
         if isinstance(node, ast.Subscript):
-            return variables[node.value.id][node.slice.value]
+            if not isinstance(node.value, ast.Name) or not isinstance(node.slice, ast.Constant):
+                raise SCIPExpressionError("Only direct literal indexing is supported.")
+            index = node.slice.value
+            if not isinstance(index, int) or isinstance(index, bool):
+                raise SCIPExpressionError("Variable indices must be integers.")
+            return variables[node.value.id][index]
         if isinstance(node, ast.UnaryOp):
             value = scalar(visit(node.operand), "unary operation")
             return value if isinstance(node.op, ast.UAdd) else -value
@@ -95,6 +102,8 @@ def _compile_scip_expression(source: str, variables: dict[str, list], pyscipopt,
                 return left**right
             raise SCIPExpressionError(f"Unsupported operator {type(node.op).__name__}.")
         if isinstance(node, ast.Call):
+            if not isinstance(node.func, ast.Name):
+                raise SCIPExpressionError("Only direct function calls are supported.")
             name = node.func.id
             arguments = [visit(argument) for argument in node.args]
             if name == "sum":

@@ -11,6 +11,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
@@ -253,8 +254,8 @@ def run_benchmark_command(args: argparse.Namespace) -> int:
     if args.benchmark_command == "merge":
         from qqa.benchmarking.merge import merge_benchmark_campaigns
 
-        result = merge_benchmark_campaigns(args.campaign)
-        rendered = json.dumps(result.to_dict(), ensure_ascii=False, indent=2, allow_nan=False)
+        merged = merge_benchmark_campaigns(args.campaign)
+        rendered = json.dumps(merged.to_dict(), ensure_ascii=False, indent=2, allow_nan=False)
         output = Path(args.output).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(rendered + "\n", encoding="utf-8")
@@ -280,6 +281,7 @@ def run_benchmark_command(args: argparse.Namespace) -> int:
         "reference_file": args.reference_file,
         "verbose": not args.quiet,
     }
+    result: Any
     if comparison:
         result = compare_benchmark_solvers(
             instances,

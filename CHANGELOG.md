@@ -6,6 +6,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-27
+
+### Reliability and portability
+
+- Expand CI type checking from six core files to all 151 source modules and
+  isolate uv cache keys per Python version to prevent matrix upload races.
+- Expose validated CSR, bound-array, variable-domain, and variable-type views
+  on canonical model objects so MIPLIB, QPLIB, SCIP, HiGHS, and CP-SAT share
+  one statically safe representation without changing accepted input types.
+- Fix integer warm-start clipping to use supported PyTorch operations, retain
+  partial PI-GNN replica solutions while filling missing replicas, and harden
+  sparse/dense sampler dispatch and Pareto archive invariants.
+- Strengthen safe-expression AST narrowing, LLM client request typing,
+  mixed-variable declarations, application callables, benchmark result
+  aggregation, and optional exact-backend boundaries.
+- Keep CUDA validation explicitly opt-in and give every unsupported or
+  unavailable optional path a deterministic guard instead of an ambiguous
+  attribute or `None` failure.
+- Synchronise the software citation metadata with v0.8.1 and include
+  `CITATION.cff` in source distributions.
+
 ## [0.8.0] - 2026-08-27
 
 ### Advanced opt-in QQA runtime

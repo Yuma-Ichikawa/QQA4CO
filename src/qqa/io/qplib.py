@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from scipy import sparse
@@ -147,7 +147,9 @@ def load_qplib(path: str | Path) -> AlgebraicModel:
         pyqplib.VarType.INTEGER: VariableType.INTEGER,
     }
     variable_types = tuple(type_map[value] for value in parsed.var_types)
-    sense = "minimize" if parsed.obj.sense is pyqplib.Sense.MINIMIZE else "maximize"
+    sense: Literal["minimize", "maximize"] = (
+        "minimize" if parsed.obj.sense is pyqplib.Sense.MINIMIZE else "maximize"
+    )
     model = AlgebraicModel(
         name=str(parsed.name),
         variable_names=tuple(f"x_{index + 1}" for index in range(dimension)),
@@ -176,13 +178,13 @@ def load_qplib(path: str | Path) -> AlgebraicModel:
         probes.append(initial)
     finite_lower = np.where(
         np.isfinite(model.lower_bounds),
-        model.lower_bounds,
-        np.where(np.isfinite(model.upper_bounds), model.upper_bounds - 2.0, -1.0),
+        model.lower_array,
+        np.where(np.isfinite(model.upper_array), model.upper_array - 2.0, -1.0),
     )
     finite_upper = np.where(
         np.isfinite(model.upper_bounds),
-        model.upper_bounds,
-        np.where(np.isfinite(model.lower_bounds), model.lower_bounds + 2.0, 1.0),
+        model.upper_array,
+        np.where(np.isfinite(model.lower_array), model.lower_array + 2.0, 1.0),
     )
     probe = finite_lower + 0.37 * (finite_upper - finite_lower)
     for index in model.integer_indices:

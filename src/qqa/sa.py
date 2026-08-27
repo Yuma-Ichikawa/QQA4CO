@@ -109,7 +109,7 @@ def _qubo_seq_glauber_sweep(
     x: torch.Tensor,
     q_sym: torch.Tensor,
     q_diag: torch.Tensor,
-    beta: float,
+    beta: float | torch.Tensor,
     rng: torch.Generator,
 ) -> torch.Tensor:
     """One **sequential** single-bit Metropolis sweep on a binary QUBO.
@@ -199,7 +199,7 @@ def _interaction_color_classes(
     edges = torch.as_tensor(edge_index, dtype=torch.long).detach().cpu()
     if edges.ndim != 2 or edges.shape[0] != 2:
         raise ValueError("edge_index must have shape (2, E).")
-    adjacency = [set() for _ in range(num_vars)]
+    adjacency: list[set[int]] = [set() for _ in range(num_vars)]
     for left, right in edges.T.tolist():
         if not 0 <= left < num_vars or not 0 <= right < num_vars:
             raise ValueError("edge_index contains an out-of-range variable.")
@@ -263,7 +263,7 @@ def _sparse_colored_metropolis_sweep(
 def _seq_mh_sweep(
     x: torch.Tensor,
     problem,
-    beta: float,
+    beta: float | torch.Tensor,
     num_vars: int,
     is_spin: bool,
     rng: torch.Generator,
@@ -437,11 +437,12 @@ def simulated_annealing(
         and getattr(sparse_qubo, "num_variables", None) == num_vars
         and callable(getattr(sparse_qubo, "gradient", None))
     )
-    color_classes = (
-        _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
-        if use_sparse_fast
-        else ()
-    )
+    if use_sparse_fast:
+        if sparse_qubo is None:  # Defensive guard for dynamically typed problem objects.
+            raise RuntimeError("Sparse QUBO dispatch lost its sparse representation.")
+        color_classes = _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
+    else:
+        color_classes = ()
     q_mat = None if use_sparse_fast else getattr(problem, "Q_mat", None)
     use_qubo_fast = (
         not use_sparse_fast
@@ -450,6 +451,8 @@ def simulated_annealing(
         and q_mat.shape == (num_vars, num_vars)
     )
     if use_qubo_fast:
+        if not isinstance(q_mat, torch.Tensor):
+            raise RuntimeError("Dense QUBO dispatch requires a tensor Q_mat.")
         q_mat = q_mat.to(device)
         # Symmetrise once: ΔE_i for a single-bit flip on x^T Q x is
         # (1 - 2 x_i) * (Q + Q^T)_i,: x   (when Q is symmetric this is 2 Q_i x).

@@ -25,6 +25,7 @@ jobs:
         uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
+          cache-suffix: py-${{ matrix.python-version }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -38,12 +39,8 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check src tests scripts app
 
-      - name: Type-check stable core
-        run: >-
-          uv run mypy --ignore-missing-imports --follow-imports=skip
-          --check-untyped-defs src/qqa/result.py src/qqa/config.py
-          src/qqa/model/ir.py src/qqa/compile/sparse_qubo.py
-          src/qqa/portfolio/inspector.py src/qqa/portfolio/planner.py
+      - name: Type-check all source modules
+        run: uv run mypy --ignore-missing-imports --check-untyped-defs src
 
       - name: Run tests with coverage
         run: uv run pytest -q --cov=src/qqa --cov-report=xml --cov-report=term

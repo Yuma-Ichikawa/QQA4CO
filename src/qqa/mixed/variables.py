@@ -15,11 +15,20 @@ VariableKind = Literal["binary", "integer", "real"]
 class VariableSpec(Protocol):
     """Structural type shared by all variable declarations."""
 
-    name: str
-    size: int
-    kind: VariableKind
-    lower: float
-    upper: float
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def size(self) -> int: ...
+
+    @property
+    def kind(self) -> VariableKind: ...
+
+    @property
+    def lower(self) -> float | int: ...
+
+    @property
+    def upper(self) -> float | int: ...
 
 
 def _validate_name_and_size(name: str, size: int) -> None:

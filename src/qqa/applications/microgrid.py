@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import torch
 
 from qqa.mixed import Binary, Constraint, Integer, MixedProblem, Real
@@ -20,7 +22,7 @@ def _data_like(values: torch.Tensor, source: torch.Tensor) -> torch.Tensor:
     return source.to(device=values.device, dtype=values.dtype)
 
 
-def _cost(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _cost(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     power = v["power"]
     fixed = _data_like(power, _FIXED_COST)
     marginal = _data_like(power, _MARGINAL_COST)
@@ -32,20 +34,32 @@ def _cost(v: dict[str, torch.Tensor]) -> torch.Tensor:
     return generation + storage + demand_response
 
 
-def _emissions(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _emissions(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     power = v["power"]
     factors = _data_like(power, _EMISSIONS)
     # Storage is assigned a small lifecycle intensity.
     return (factors * power).sum(-1) + 0.035 * v["storage_mw"]
 
 
-def _available_reserve(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _available_reserve(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     power = v["power"]
     capacity = _data_like(power, _CAPACITY)
     return (capacity * v["commit"] - power).sum(-1) + 5.0 * v["storage_units"]
 
 
 def _constraints() -> list[Constraint]:
+    def maximum_output(index: int, capacity: float):
+        def constraint(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
+            return v["power"][:, index] - capacity * v["commit"][:, index]
+
+        return constraint
+
+    def minimum_output(index: int, minimum: float):
+        def constraint(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
+            return minimum * v["commit"][:, index] - v["power"][:, index]
+
+        return constraint
+
     constraints = [
         Constraint(
             lambda v: v["power"].sum(-1) + v["storage_mw"] + v["demand_response"],
@@ -81,7 +95,7 @@ def _constraints() -> list[Constraint]:
         constraints.extend(
             [
                 Constraint(
-                    lambda v, i=index, cap=capacity: v["power"][:, i] - cap * v["commit"][:, i],
+                    maximum_output(index, capacity),
                     sense="<=",
                     rhs=0.0,
                     weight=20_000_000.0,
@@ -90,7 +104,7 @@ def _constraints() -> list[Constraint]:
                     name=f"unit_{index}_maximum",
                 ),
                 Constraint(
-                    lambda v, i=index, floor=minimum: floor * v["commit"][:, i] - v["power"][:, i],
+                    minimum_output(index, minimum),
                     sense="<=",
                     rhs=0.0,
                     weight=20_000_000.0,

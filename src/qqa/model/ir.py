@@ -11,7 +11,7 @@ from functools import reduce
 from operator import mul
 from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 from urllib.parse import urlsplit
 
 import torch
@@ -102,6 +102,11 @@ class VariableBlock:
     @property
     def size(self) -> int:
         return _shape_size(self.shape)
+
+    @property
+    def domain_value(self) -> VariableDomain:
+        """Canonical domain established during validation."""
+        return cast(VariableDomain, self.domain)
 
 
 @runtime_checkable

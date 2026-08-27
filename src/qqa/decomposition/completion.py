@@ -187,6 +187,7 @@ def complete_integer_assignment(
             ]
             if len(auxiliary) == 1:
                 objective_auxiliary = auxiliary[0].name
+    candidate_objective: float | None
     try:
         candidate_objective = (
             algebraic_objective
@@ -263,7 +264,11 @@ def complete_integer_assignment(
                     )
                 )
                 if accepted:
-                    if algebraic_objective is not None and original_before is not None:
+                    if (
+                        algebraic is not None
+                        and algebraic_objective is not None
+                        and original_before is not None
+                    ):
                         tolerance = 1e-9 * max(
                             1.0,
                             abs(original_before),

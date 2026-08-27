@@ -810,8 +810,8 @@ class QAP(COProblem):
         D = rng.integers(0, 10, size=(N, N)).astype(np.float32)
         np.fill_diagonal(F, 0)
         np.fill_diagonal(D, 0)
-        F = (F + F.T) / 2
-        D = (D + D.T) / 2
+        F = ((F + F.T) / 2).astype(np.float32, copy=False)
+        D = ((D + D.T) / 2).astype(np.float32, copy=False)
         self.F = torch.as_tensor(F, device=device)
         self.D = torch.as_tensor(D, device=device)
         if relaxation == "categorical":

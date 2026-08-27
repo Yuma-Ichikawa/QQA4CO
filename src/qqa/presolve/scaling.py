@@ -40,7 +40,7 @@ def _maximum_abs_by_column(model: AlgebraicModel) -> np.ndarray:
     maximum = np.zeros(model.num_variables, dtype=np.float64)
 
     def accumulate(expression: SparseQuadratic) -> None:
-        linear = expression.linear.tocoo()
+        linear = expression.linear_csr.tocoo()
         np.maximum.at(maximum, linear.col, np.abs(linear.data))
         quadratic = expression.quadratic.tocoo()
         np.maximum.at(maximum, quadratic.col, np.abs(quadratic.data))

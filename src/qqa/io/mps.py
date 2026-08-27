@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from scipy import sparse
@@ -98,6 +99,9 @@ def load_mps(path: str | Path, *, include_constraints: bool = True) -> Algebraic
                 )
             )
 
+    objective_sense: Literal["minimize", "maximize"] = (
+        "maximize" if str(scip.getObjectiveSense()).lower() == "maximize" else "minimize"
+    )
     result = AlgebraicModel(
         name=_source_stem(source),
         variable_names=names,
@@ -106,7 +110,7 @@ def load_mps(path: str | Path, *, include_constraints: bool = True) -> Algebraic
         upper_bounds=upper,
         objective=objective,
         constraints=constraints,
-        objective_sense=str(scip.getObjectiveSense()).lower(),
+        objective_sense=objective_sense,
         source_format="mps",
         metadata={
             "source_name": source.name,

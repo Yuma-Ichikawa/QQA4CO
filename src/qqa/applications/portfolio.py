@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import torch
 
 from qqa.mixed import Binary, Constraint, Real
@@ -26,7 +28,7 @@ def _like(values: torch.Tensor, data: torch.Tensor) -> torch.Tensor:
     return data.to(device=values.device, dtype=values.dtype)
 
 
-def _risk(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _risk(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     weights = v["weight"]
     loadings = _like(weights, _FACTOR_LOADINGS)
     idiosyncratic = _like(weights, _IDIOSYNCRATIC_VOL)
@@ -34,17 +36,29 @@ def _risk(v: dict[str, torch.Tensor]) -> torch.Tensor:
     return factor_exposure.square().sum(dim=-1) + (weights * idiosyncratic).square().sum(dim=-1)
 
 
-def _return(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _return(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     expected = _like(v["weight"], _EXPECTED_RETURN)
     return (v["weight"] * expected).sum(dim=-1)
 
 
-def _turnover(v: dict[str, torch.Tensor]) -> torch.Tensor:
+def _turnover(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
     current = _like(v["weight"], _CURRENT_WEIGHT)
     return (v["weight"] - current).abs().sum(dim=-1)
 
 
 def _constraints() -> list[Constraint]:
+    def maximum_link(index: int):
+        def link(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
+            return v["weight"][:, index] - 0.50 * v["select"][:, index]
+
+        return link
+
+    def minimum_link(index: int):
+        def link(v: Mapping[str, torch.Tensor]) -> torch.Tensor:
+            return 0.05 * v["select"][:, index] - v["weight"][:, index]
+
+        return link
+
     constraints = [
         Constraint(
             lambda v: v["weight"].sum(dim=-1),
@@ -78,7 +92,7 @@ def _constraints() -> list[Constraint]:
         constraints.extend(
             [
                 Constraint(
-                    lambda v, i=index: v["weight"][:, i] - 0.50 * v["select"][:, i],
+                    maximum_link(index),
                     sense="<=",
                     rhs=0.0,
                     weight=250_000.0,
@@ -87,7 +101,7 @@ def _constraints() -> list[Constraint]:
                     name=f"asset_{index}_maximum_link",
                 ),
                 Constraint(
-                    lambda v, i=index: 0.05 * v["select"][:, i] - v["weight"][:, i],
+                    minimum_link(index),
                     sense="<=",
                     rhs=0.0,
                     weight=250_000.0,

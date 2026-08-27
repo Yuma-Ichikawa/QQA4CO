@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from qqa.compile import SparseQUBO
+from qqa.gpu.ops import SparseImplementation
 from qqa.problems.base import QUBOProblem
 from qqa.relaxation import BinaryRelaxation
 
@@ -17,7 +18,7 @@ class SparseQUBOProblem(QUBOProblem):
         qubo: SparseQUBO,
         *,
         name: str = "sparse-qubo",
-        sparse_kernel: str = "auto",
+        sparse_kernel: SparseImplementation = "auto",
     ) -> None:
         if sparse_kernel not in {"auto", "torch", "triton"}:
             raise ValueError("sparse_kernel must be auto, torch, or triton.")

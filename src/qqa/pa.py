@@ -297,11 +297,12 @@ def population_annealing(
         and getattr(sparse_qubo, "num_variables", None) == num_vars
         and callable(getattr(sparse_qubo, "gradient", None))
     )
-    color_classes = (
-        _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
-        if use_sparse_fast
-        else ()
-    )
+    if use_sparse_fast:
+        if sparse_qubo is None:  # Defensive guard for dynamically typed problem objects.
+            raise RuntimeError("Sparse QUBO dispatch lost its sparse representation.")
+        color_classes = _interaction_color_classes(sparse_qubo.edge_index, num_vars, device=device)
+    else:
+        color_classes = ()
     q_mat = None if use_sparse_fast else getattr(problem, "Q_mat", None)
     use_qubo_fast = (
         not use_sparse_fast
@@ -310,6 +311,8 @@ def population_annealing(
         and q_mat.shape == (num_vars, num_vars)
     )
     if use_qubo_fast:
+        if not isinstance(q_mat, torch.Tensor):
+            raise RuntimeError("Dense QUBO dispatch requires a tensor Q_mat.")
         q_mat = q_mat.to(device)
         q_sym = 0.5 * (q_mat + q_mat.t())
         q_diag = q_sym.diagonal().contiguous()
@@ -380,6 +383,8 @@ def population_annealing(
                 loss_curr = loss_curr[idx].contiguous()
                 if record_genealogy:
                     parents_log.append(idx.detach().clone())
+                    if ancestors is None:
+                        raise RuntimeError("Genealogy tracking was not initialised.")
                     ancestors = ancestors[idx].contiguous()
         else:
             log_z_step = 0.0

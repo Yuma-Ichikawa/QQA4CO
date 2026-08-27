@@ -19,6 +19,8 @@ from scipy import sparse
 
 from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic, VariableType
 
+_ISOLATED_WORKER_STARTUP_GRACE_SECONDS = 120.0
+
 
 @dataclass(slots=True)
 class ExactBackendResult:
@@ -81,12 +83,14 @@ def solve_scip_algebraic(
         raise RuntimeError(f"{status}: exact backend returned no primal solution.")
     values = np.asarray([scip.getSolVal(best, variable) for variable in variables])
     evaluation = model.evaluate(values)
+    bound: float | None
     try:
         bound = float(scip.getDualbound())
         if not math.isfinite(bound):
             bound = None
     except Exception:
         bound = None
+    gap: float | None
     try:
         gap = float(scip.getGap())
         if not math.isfinite(gap):
@@ -131,7 +135,7 @@ def solve_cpsat_algebraic(
     """
     _validate_request(model, time_limit, threads)
     _require_linear(model, "CP-SAT")
-    if any(kind is VariableType.CONTINUOUS for kind in model.variable_types):
+    if any(kind is VariableType.CONTINUOUS for kind in model.variable_type_values):
         raise NotImplementedError("CP-SAT does not support continuous variables.")
     finite = np.isfinite(model.lower_bounds) & np.isfinite(model.upper_bounds)
     if not finite.all():
@@ -155,7 +159,7 @@ def solve_cpsat_algebraic(
             model.variable_names, model.lower_bounds, model.upper_bounds, strict=True
         )
     ]
-    objective_coo = model.objective.linear.tocoo()
+    objective_coo = model.objective.linear_csr.tocoo()
     objective_coefficients = integers(objective_coo.data, "objective coefficients")
     objective = sum(
         int(value) * variables[int(index)]
@@ -163,7 +167,7 @@ def solve_cpsat_algebraic(
     ) + int(integers(np.asarray([model.objective.constant]), "objective constant")[0])
     (cp.minimize if model.objective_sense == "minimize" else cp.maximize)(objective)
     for row in model.constraints:
-        coo = row.expression.linear.tocoo()
+        coo = row.expression.linear_csr.tocoo()
         coefficients = integers(coo.data, f"constraint {row.name!r} coefficients")
         expression = sum(
             int(value) * variables[int(index)]
@@ -234,15 +238,15 @@ def solve_highs_algebraic(
     highs.addCols(
         size,
         objective,
-        model.lower_bounds,
-        model.upper_bounds,
+        model.lower_array,
+        model.upper_array,
         0,
         np.zeros(size + 1, dtype=np.int32),
         np.empty(0, dtype=np.int32),
         np.empty(0, dtype=np.float64),
     )
     if model.constraints:
-        csr = sparse.vstack([row.expression.linear for row in model.constraints], format="csr")
+        csr = sparse.vstack([row.expression.linear_csr for row in model.constraints], format="csr")
         lower = np.asarray(
             [row.lower - row.expression.constant for row in model.constraints], dtype=np.float64
         )
@@ -308,7 +312,7 @@ def _model_payload(model: AlgebraicModel) -> dict[str, Any]:
     return {
         "name": model.name,
         "variable_names": model.variable_names,
-        "variable_types": tuple(item.value for item in model.variable_types),
+        "variable_types": tuple(item.value for item in model.variable_type_values),
         "lower_bounds": model.lower_bounds,
         "upper_bounds": model.upper_bounds,
         "objective": _expression_payload(model.objective),
@@ -453,7 +457,11 @@ def solve_exact_algebraic(
     if not isolated:
         return function(model, **kwargs)
     _validate_request(model, float(kwargs.get("time_limit", 0.0)), int(kwargs.get("threads", 1)))
-    timeout = float(kwargs["time_limit"]) + 30.0
+    # Importing a native backend and Torch in a fresh process can dominate a
+    # tiny solve, especially on cold or contended filesystems. This grace is
+    # process-startup overhead only; the backend still receives the exact user
+    # time limit for optimisation.
+    timeout = float(kwargs["time_limit"]) + _ISOLATED_WORKER_STARTUP_GRACE_SECONDS
     with tempfile.TemporaryDirectory(prefix="qqa-exact-") as temporary:
         directory = Path(temporary)
         request = directory / "request.bin"

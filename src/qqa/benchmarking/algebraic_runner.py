@@ -491,7 +491,7 @@ def _isolated_benchmark_worker(
             _isolated_worker=True,
             **run_kwargs,
         )
-        payload = {"result": result.to_dict()}
+        payload: dict[str, object] = {"result": result.to_dict()}
     except BaseException as exc:  # noqa: BLE001 - cross-process error boundary
         payload = {"error_type": type(exc).__name__}
     Path(output_path).write_text(

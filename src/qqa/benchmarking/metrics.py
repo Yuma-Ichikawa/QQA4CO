@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from statistics import median
-from typing import Any
+from typing import Any, cast
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +153,7 @@ class SCIPProgressTracker:
                 # The transformed auxiliary objective is not a safe fallback
                 # for nonlinear QPLIB models. Omit an unverified event.
                 return
+        dual: float | None
         try:
             dual = float(model.getDualbound())
             if not math.isfinite(dual):
@@ -375,9 +376,11 @@ def _record_outcome(
     integral: int,
 ) -> None:
     labels = ("losses", "ties", "wins")
-    bucket["paired_runs"] += 1
-    bucket["primal_quality"][labels[primary + 1]] += 1
-    bucket["primal_integral"][labels[integral + 1]] += 1
+    bucket["paired_runs"] = cast(int, bucket["paired_runs"]) + 1
+    primal_quality = cast(dict[str, int], bucket["primal_quality"])
+    primal_integral_counts = cast(dict[str, int], bucket["primal_integral"])
+    primal_quality[labels[primary + 1]] += 1
+    primal_integral_counts[labels[integral + 1]] += 1
 
 
 def summarise_comparison(
@@ -400,7 +403,7 @@ def summarise_comparison(
         primary = [0, 0, 0]
         integral = [0, 0, 0]
         paired = 0
-        qqa_intervention = {
+        qqa_intervention: dict[str, Any] = {
             "heuristic_invoked_pairs": 0,
             "qqa_executed_pairs": 0,
             "qqa_incumbent_improvement_pairs": 0,

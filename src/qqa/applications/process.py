@@ -3,18 +3,28 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 from qqa.blackbox import BlackBoxConstraint, BlackBoxProblem
+from qqa.blackbox.problem import ScalarPoint
 from qqa.mixed import Binary, Integer, Real
 
 
-def _process_response(point: dict) -> tuple[float, float, float]:
+def _scalar(point: ScalarPoint, name: str) -> float | int:
+    """Return a scalar field guaranteed by this model's declarations."""
+    value = point[name]
+    if isinstance(value, list):
+        raise TypeError(f"{name} must be scalar.")
+    return cast(float | int, value)
+
+
+def _process_response(point: ScalarPoint) -> tuple[float, float, float]:
     """Return yield, heat load, and hourly profit for one plant setting."""
-    catalyst = int(point["catalyst"])
-    reactors = int(point["reactors"])
-    temperature = float(point["temperature"])
-    residence = float(point["residence_time"])
-    recycle = float(point["recycle"])
+    catalyst = int(_scalar(point, "catalyst"))
+    reactors = int(_scalar(point, "reactors"))
+    temperature = float(_scalar(point, "temperature"))
+    residence = float(_scalar(point, "residence_time"))
+    recycle = float(_scalar(point, "recycle"))
 
     preferred_temperature = 372.0 + 9.0 * catalyst
     yield_fraction = (
@@ -71,7 +81,9 @@ def build_process_blackbox() -> BlackBoxProblem:
                 name="heat_capacity",
             ),
             BlackBoxConstraint(
-                lambda point: math.ceil(point["reactors"] / 2) + point["catalyst"],
+                lambda point: (
+                    math.ceil(_scalar(point, "reactors") / 2) + _scalar(point, "catalyst")
+                ),
                 sense="<=",
                 rhs=3.0,
                 scale=1.0,

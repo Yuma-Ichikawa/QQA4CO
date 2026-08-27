@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from numbers import Real
-from typing import Literal
+from typing import Any, Literal
 
 from qqa.tex.schema import MODEL_JSON_SCHEMA
 
@@ -120,6 +120,17 @@ def _extract_json_text(text: str) -> str:
 class OpenAICompatibleClient:
     """Call an OpenAI Responses-compatible or Anthropic Messages endpoint."""
 
+    api_key: str
+    base_url: str
+    model: str
+    api_style: Literal["responses", "messages"]
+    verify_ssl: bool
+    timeout: float
+    max_retries: int
+    max_output_tokens: int
+    max_response_bytes: int
+    _structured_available: bool | None
+
     def __init__(
         self,
         *,
@@ -216,7 +227,9 @@ class OpenAICompatibleClient:
                 allow_layout_controls=True,
             )
         structured = self.api_style == "responses" and self._structured_available is not False
-        request_options = {"system_prompt": system_prompt} if system_prompt else {}
+        request_options: dict[str, Any] = {}
+        if system_prompt is not None:
+            request_options["system_prompt"] = system_prompt
         try:
             response = self._request(
                 prompt,

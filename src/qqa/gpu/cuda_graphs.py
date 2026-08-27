@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, cast
 
 import torch
 
@@ -36,7 +36,7 @@ class CUDAGraphStep(Generic[T]):
             raise ValueError("example_inputs must be a non-empty tuple of CUDA tensors.")
         if isinstance(warmup, bool) or not isinstance(warmup, int) or warmup < 1:
             raise ValueError("warmup must be a positive integer.")
-        self._function = function
+        self._function: Callable[..., T] = function
         self._inputs = tuple(item.detach().clone() for item in example_inputs)
         if any(item.device != self._inputs[0].device for item in state_tensors):
             raise ValueError("state_tensors must share the captured CUDA device.")
@@ -52,7 +52,7 @@ class CUDAGraphStep(Generic[T]):
                 state.copy_(snapshot)
         self._graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self._graph):
-            self._output = function(*self._inputs)
+            self._output: T = function(*self._inputs)
         with torch.no_grad():
             for state, snapshot in zip(state_tensors, state_snapshots, strict=True):
                 state.copy_(snapshot)
@@ -72,8 +72,8 @@ class CUDAGraphStep(Generic[T]):
         if not clone_output:
             return self._output
         if torch.is_tensor(self._output):
-            return self._output.clone()
-        return tuple(item.clone() for item in self._output)
+            return cast(T, self._output.clone())
+        return cast(T, tuple(item.clone() for item in self._output))
 
 
 __all__ = ["CUDAGraphStep", "cuda_graphs_available"]

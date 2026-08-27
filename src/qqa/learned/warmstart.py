@@ -98,9 +98,19 @@ def _discretize(model: ModelIR, values: torch.Tensor) -> torch.Tensor:
         elif block.domain is VariableDomain.INTEGER:
             selected.round_()
             if block.lower is not None:
-                selected.maximum_(torch.as_tensor(block.lower, device=selected.device).reshape(-1))
+                selected.copy_(
+                    torch.maximum(
+                        selected,
+                        torch.as_tensor(block.lower, device=selected.device).reshape(-1),
+                    )
+                )
             if block.upper is not None:
-                selected.minimum_(torch.as_tensor(block.upper, device=selected.device).reshape(-1))
+                selected.copy_(
+                    torch.minimum(
+                        selected,
+                        torch.as_tensor(block.upper, device=selected.device).reshape(-1),
+                    )
+                )
         offset += block.size
     return result
 

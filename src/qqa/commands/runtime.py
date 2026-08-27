@@ -15,7 +15,7 @@ def command_version() -> int:
 def resolve_device(device: str) -> str:
     from qqa.utils import resolve_device as resolve
 
-    return resolve(device)
+    return str(resolve(device))
 
 
 def print_score(score: dict) -> None:

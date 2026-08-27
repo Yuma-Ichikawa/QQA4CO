@@ -17,6 +17,8 @@ needed by hand)::
 
 from __future__ import annotations
 
+from typing import overload
+
 import torch
 
 
@@ -36,6 +38,26 @@ def _polish_solution(problem, best_sol: torch.Tensor) -> torch.Tensor | None:
     if isinstance(relaxation, CategoricalRelaxation):
         return greedy_categorical_move(problem, best_sol)
     return None
+
+
+@overload
+def apply_polish_if_improves(
+    problem,
+    best_sol: torch.Tensor,
+    best_obj: float,
+    *,
+    polish: bool = True,
+) -> tuple[torch.Tensor, float, torch.Tensor | None]: ...
+
+
+@overload
+def apply_polish_if_improves(
+    problem,
+    best_sol: None,
+    best_obj: float,
+    *,
+    polish: bool = True,
+) -> tuple[None, float, None]: ...
 
 
 @torch.no_grad()

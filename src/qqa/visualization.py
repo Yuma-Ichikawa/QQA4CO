@@ -601,10 +601,11 @@ def plot_solution_heatmap(
     For lattice spin problems (``EdwardsAnderson`` with ``dim == 2``) the
     solution is reshaped to ``(L, L)`` automatically.
     """
-    sol = result.best_sol
-    if hasattr(sol, "detach"):
-        sol = sol.detach().cpu().numpy()
-    sol = np.asarray(sol)
+    raw_solution = result.best_sol
+    solution = (
+        raw_solution.detach().cpu().numpy() if hasattr(raw_solution, "detach") else raw_solution
+    )
+    sol = np.asarray(solution)
     if sol.ndim == 2:
         # Three valid 2-D shapes reach here:
         #   * batched-instance problems: ``(num_instance, max_node)`` — keep
@@ -761,7 +762,7 @@ def plot_population_evolution(
         loss_sorted,
         aspect="auto",
         cmap="viridis",
-        extent=[epochs[0], epochs[-1], 0, loss_sorted.shape[0]],
+        extent=(float(epochs[0]), float(epochs[-1]), 0.0, float(loss_sorted.shape[0])),
     )
     ax2 = ax.twinx()
     ax2.plot(epochs, best_traj, color="black", lw=1.5, label="best-of-batch")

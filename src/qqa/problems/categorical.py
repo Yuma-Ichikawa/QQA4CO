@@ -129,7 +129,7 @@ class Coloring(COProblem):
         unbatched = x_disc.ndim == 2
         values = x_disc.unsqueeze(0) if unbatched else x_disc
         repaired = torch.zeros_like(values)
-        adjacency = [set() for _ in range(self.num_node)]
+        adjacency: list[set[int]] = [set() for _ in range(self.num_node)]
         for left, right in zip(self.edge_u.tolist(), self.edge_v.tolist(), strict=True):
             adjacency[left].add(right)
             adjacency[right].add(left)

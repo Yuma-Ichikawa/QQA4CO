@@ -179,7 +179,8 @@ def problem_from_spec(spec: ModelSpec | dict) -> MixedProblem | MultiObjectivePr
         constraints=_constraints_from_spec(spec, variable_map),
         name=spec.name,
     )
-    problem.model_spec = spec
+    cast_problem: Any = problem
+    cast_problem.model_spec = spec
     return problem
 
 

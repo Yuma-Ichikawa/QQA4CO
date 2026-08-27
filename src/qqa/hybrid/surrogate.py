@@ -164,10 +164,10 @@ def generate_surrogate_candidates(
 
 def _fallback_point(algebraic: AlgebraicModel) -> np.ndarray:
     point = np.zeros(algebraic.num_variables, dtype=np.float64)
-    finite_lower = np.isfinite(algebraic.lower_bounds)
-    finite_upper = np.isfinite(algebraic.upper_bounds)
-    point[finite_lower] = np.maximum(point[finite_lower], algebraic.lower_bounds[finite_lower])
-    point[finite_upper] = np.minimum(point[finite_upper], algebraic.upper_bounds[finite_upper])
+    finite_lower = np.isfinite(algebraic.lower_array)
+    finite_upper = np.isfinite(algebraic.upper_array)
+    point[finite_lower] = np.maximum(point[finite_lower], algebraic.lower_array[finite_lower])
+    point[finite_upper] = np.minimum(point[finite_upper], algebraic.upper_array[finite_upper])
     return point
 
 
@@ -354,7 +354,7 @@ def _restricted_algebraic_rows(
     candidates: list[tuple[float, np.ndarray, float, float, float, float]] = []
     for constraint in algebraic.constraints:
         expression = constraint.expression
-        coefficients = expression.linear[:, original].toarray().reshape(-1)
+        coefficients = expression.linear_csr[:, original].toarray().reshape(-1)
         if not np.any(coefficients):
             continue
         base_activity = expression.value(base)

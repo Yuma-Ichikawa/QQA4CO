@@ -74,7 +74,7 @@ def tighten_singleton_bounds(model: ModelIR) -> BoundTighteningResult:
         lower, upper = _domain_bounds(block)
         lower_parts.append(lower)
         upper_parts.append(upper)
-        domains.extend([block.domain] * block.size)
+        domains.extend([block.domain_value] * block.size)
     lower = torch.cat(lower_parts)
     upper = torch.cat(upper_parts)
     original_lower = lower.clone()

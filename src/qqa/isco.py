@@ -395,7 +395,7 @@ def _isco_single(
     diag = torch.diagonal(Q).contiguous()
 
     if seed is not None:
-        gen: torch.Generator | None = torch.Generator(device=device)
+        gen = torch.Generator(device=device)
         gen.manual_seed(int(seed))
     else:
         gen = None
@@ -613,7 +613,7 @@ def _isco_batched(
             mask_var = mask_var.squeeze(0)
 
     if seed is not None:
-        gen: torch.Generator | None = torch.Generator(device=device)
+        gen = torch.Generator(device=device)
         gen.manual_seed(int(seed))
     else:
         gen = None

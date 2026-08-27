@@ -12,7 +12,7 @@ from __future__ import annotations
 import warnings
 
 from qqa.annealing import anneal
-from qqa.callbacks import AutoDivTuner, TrajectoryTracker
+from qqa.callbacks import AutoDivTuner, Callback, TrajectoryTracker
 from qqa.schedule import LinearBGSchedule
 
 
@@ -125,7 +125,7 @@ def batch_annealing_mis_trajectory(
     """Legacy MIS-trajectory annealing. Returns ``(best_obj, runtime, dynamics_memory)``."""
     _deprecated("qqa.legacy.batch_annealing_mis_trajectory")
     tracker = TrajectoryTracker(problem_P1, mode=mode)
-    callbacks = [tracker]
+    callbacks: list[Callback] = [tracker]
     if auto_divparam:
         callbacks.append(AutoDivTuner(target=div_target, lr=div_param_lr))
     result = anneal(

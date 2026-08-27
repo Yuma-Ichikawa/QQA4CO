@@ -245,7 +245,8 @@ def solve(
         problem = loaded
 
     if getattr(problem, "sparse_qubo", None) is not None:
-        problem.sparse_kernel = resolved.sparse_kernel
+        dynamic_problem: Any = problem
+        dynamic_problem.sparse_kernel = resolved.sparse_kernel
 
     is_cuda = resolved.device.startswith("cuda") and torch.cuda.is_available()
     if is_cuda:

@@ -6,7 +6,7 @@ import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Real
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 
@@ -136,6 +136,7 @@ class MixedProblem(COProblem):
         # objective. Direct ``loss_fn`` users retain the exact declared
         # weights because the default is one.
         self.penalty_multiplier = 1.0
+        self._augmented_lagrangian: Any | None = None
         self.num_vars = self.space.dimension
         self.num_nodes = self.space.dimension
         self.relaxation = MixedRelaxation(self.space)
@@ -181,7 +182,7 @@ class MixedProblem(COProblem):
 
     def loss_fn(self, values: torch.Tensor) -> torch.Tensor:
         values = self._ensure_batched(values)
-        controller = getattr(self, "_augmented_lagrangian", None)
+        controller = self._augmented_lagrangian
         if controller is not None:
             return self.objective_values(values) + controller.penalty(self, values)
         return self.objective_values(values) + self.penalty_multiplier * self.constraint_penalty(

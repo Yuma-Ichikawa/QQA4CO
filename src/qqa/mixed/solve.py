@@ -9,6 +9,7 @@ from typing import Any
 import torch
 
 from qqa.annealing import AnnealResult, anneal
+from qqa.callbacks import Callback
 from qqa.mixed.augmented_lagrangian import (
     AdaptiveALCallback,
     AdaptiveAugmentedLagrangian,
@@ -156,7 +157,7 @@ def solve_mixed(
             raise ValueError(f"{name} must be a positive integer.")
     if isinstance(repair_steps, bool) or not isinstance(repair_steps, int) or repair_steps < 0:
         raise ValueError("repair_steps must be a non-negative integer.")
-    defaults = {
+    defaults: dict[str, Any] = {
         "sol_size": 128,
         "learning_rate": 0.05,
         "min_bg": -0.5,
@@ -208,7 +209,7 @@ def solve_mixed(
         )
     controller = None
     archive = ConstraintArchive() if problem.constraints else None
-    callbacks = list(defaults.get("callbacks", ()))
+    callbacks: list[Callback] = list(defaults.get("callbacks", ()))
     if archive is not None:
         callbacks.append(
             ConstraintArchiveCallback(

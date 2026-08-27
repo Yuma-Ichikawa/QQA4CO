@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 import torch
 
 from qqa.hybrid.heuristic_types import QQAHeuristicConfig
 from qqa.hybrid.surrogate import CoreSurrogate
 from qqa.mixed import Binary, Constraint, Integer, MixedProblem
+from qqa.mixed.variables import VariableSpec
 
 
 class CoreRowProblem(MixedProblem):
@@ -23,8 +26,8 @@ class CoreRowProblem(MixedProblem):
 
     def __init__(
         self,
-        declarations,
-        objective,
+        declarations: list[VariableSpec],
+        objective: Any,
         names: list[str],
         surrogate: CoreSurrogate,
         *,
@@ -33,6 +36,10 @@ class CoreRowProblem(MixedProblem):
         constraints: list[Constraint] = []
         source_rows: list[int] = []
         weight = row_penalty / max(1, surrogate.num_rows)
+
+        def placeholder(values: Mapping[str, torch.Tensor]) -> torch.Tensor:
+            return 0.0 * values[names[0]]
+
         for row in range(surrogate.num_rows):
             lower = float(surrogate.row_lower[row])
             upper = float(surrogate.row_upper[row])
@@ -50,7 +57,7 @@ class CoreRowProblem(MixedProblem):
             ):
                 constraints.append(
                     Constraint(
-                        lambda values, key=names[0]: 0.0 * values[key],
+                        placeholder,
                         sense="==",
                         rhs=lower,
                         weight=weight,
@@ -64,7 +71,7 @@ class CoreRowProblem(MixedProblem):
             if math.isfinite(lower):
                 constraints.append(
                     Constraint(
-                        lambda values, key=names[0]: 0.0 * values[key],
+                        placeholder,
                         sense=">=",
                         rhs=lower,
                         weight=weight,
@@ -77,7 +84,7 @@ class CoreRowProblem(MixedProblem):
             if math.isfinite(upper):
                 constraints.append(
                     Constraint(
-                        lambda values, key=names[0]: 0.0 * values[key],
+                        placeholder,
                         sense="<=",
                         rhs=upper,
                         weight=weight,
@@ -132,7 +139,7 @@ def build_core_problem(
     *,
     adaptive_rows: bool = False,
 ) -> tuple[MixedProblem, list[str]]:
-    declarations = []
+    declarations: list[VariableSpec] = []
     names = []
     targets = []
     spans = []
@@ -168,7 +175,7 @@ def build_core_problem(
     row_scale = torch.tensor(surrogate.row_scale, dtype=torch.float64)
     constant_cache: dict[tuple[torch.device, torch.dtype], tuple[torch.Tensor, ...]] = {}
 
-    def objective(values):
+    def objective(values: Mapping[str, torch.Tensor]) -> torch.Tensor:
         stacked = torch.stack([values[name] for name in names], dim=1)
         cache_key = (stacked.device, stacked.dtype)
         constants = constant_cache.get(cache_key)
@@ -227,7 +234,7 @@ def build_core_problem(
         return original + proximity + direction + row_loss
 
     if adaptive_rows:
-        problem = CoreRowProblem(
+        problem: MixedProblem = CoreRowProblem(
             declarations,
             objective,
             names,

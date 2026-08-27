@@ -91,7 +91,7 @@ def independent_set_repair(
         if result[left] > 0.5 and result[right] > 0.5:
             drop = right if priority[left] >= priority[right] else left
             result[drop] = 0.0
-    adjacency = [set() for _ in range(values.numel())]
+    adjacency: list[set[int]] = [set() for _ in range(values.numel())]
     for left, right in edges.detach().cpu().T.tolist():
         adjacency[left].add(right)
         adjacency[right].add(left)

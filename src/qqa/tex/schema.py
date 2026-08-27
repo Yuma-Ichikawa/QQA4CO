@@ -6,7 +6,7 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from numbers import Real as RealNumber
-from typing import Any
+from typing import Any, Literal, cast
 
 import torch
 
@@ -53,7 +53,7 @@ def _text(
 @dataclass(frozen=True, slots=True)
 class VariableDeclaration:
     name: str
-    kind: str
+    kind: Literal["binary", "integer", "real"]
     lower: float
     upper: float
     size: int
@@ -63,7 +63,7 @@ class VariableDeclaration:
         _exact_keys(value, {"name", "kind", "lower", "upper", "size"}, "variable")
         declaration = cls(
             name=_text(value["name"], "Variable name", maximum=MAX_NAME_LENGTH),
-            kind=value["kind"],
+            kind=cast(Literal["binary", "integer", "real"], value["kind"]),
             lower=_finite(value["lower"], "variable lower"),
             upper=_finite(value["upper"], "variable upper"),
             size=value["size"],
@@ -88,7 +88,7 @@ class VariableDeclaration:
 @dataclass(frozen=True, slots=True)
 class ObjectiveDeclaration:
     name: str
-    direction: str
+    direction: Literal["min", "max"]
     expression: str
     unit: str
 
@@ -99,7 +99,7 @@ class ObjectiveDeclaration:
             raise ValueError("Objective direction must be 'min' or 'max'.")
         return cls(
             name=_text(value["name"], "Objective name", maximum=MAX_NAME_LENGTH),
-            direction=value["direction"],
+            direction=cast(Literal["min", "max"], value["direction"]),
             expression=_text(
                 value["expression"],
                 "Objective expression",
@@ -118,7 +118,7 @@ class ObjectiveDeclaration:
 class ConstraintDeclaration:
     name: str
     expression: str
-    sense: str
+    sense: Literal["<=", ">=", "=="]
     rhs: float
     weight: float
     scale: float
@@ -150,7 +150,7 @@ class ConstraintDeclaration:
                 "Constraint expression",
                 maximum=MAX_EXPRESSION_LENGTH,
             ),
-            sense=value["sense"],
+            sense=cast(Literal["<=", ">=", "=="], value["sense"]),
             **numbers,
         )
 

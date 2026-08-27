@@ -64,7 +64,8 @@ def blackbox_from_spec(spec: ModelSpec | dict) -> BlackBoxProblem:
         direction=objective.direction,
         name=spec.name,
     )
-    problem.model_spec = spec
+    dynamic_problem: Any = problem
+    dynamic_problem.model_spec = spec
     return problem
 
 
@@ -106,6 +107,7 @@ def execute_plan(
     fix_seed(seed)
     resolved_device = resolve_device(device)
     extra = {} if solver_kwargs is None else dict(solver_kwargs)
+    problem: Any
     if plan.selected_solver == "blackbox":
         problem = blackbox_from_spec(plan.spec)
         options = {

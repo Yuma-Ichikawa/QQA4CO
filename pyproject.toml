@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.8.0"
+version = "0.8.1"
 description = "Quasi-Quantum Annealing: a GPU solver for combinatorial, spin-glass, integer, real, and mixed-variable optimization."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -149,6 +149,7 @@ include = [
     "/src/qqa",
     "/app",
     "/README.md",
+    "/CITATION.cff",
     "/LICENSE",
     "/CHANGELOG.md",
     "/pyproject.toml",

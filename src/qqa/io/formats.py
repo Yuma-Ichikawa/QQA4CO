@@ -25,6 +25,7 @@ from qqa.model import (
     VariableBlock,
     VariableDomain,
 )
+from qqa.model.ir import Factor
 
 _MAX_PORTABLE_VARIABLES = 1_000_000
 
@@ -124,7 +125,7 @@ def load_ising_text(path: str | Path) -> ModelIR:
         .T
     )
     edge_weight = torch.as_tensor([weight for _, _, weight in edge_records], dtype=torch.float64)
-    factors = []
+    factors: list[Factor] = []
     if linear_records:
         factors.append(LinearFactor(linear_index, linear_weight))
     if edge_records:
@@ -184,7 +185,7 @@ def load_dimacs(path: str | Path) -> ModelIR:
         raise ValueError("DIMACS clause count does not match the header.")
     top = float(header[4]) if header[1].lower() == "wcnf" and len(header) > 4 else None
     objective_factors = []
-    constraints = []
+    constraints: list[ConstraintIR] = []
     for index, (weight, literals) in enumerate(clauses):
         factor = ClauseFactor(
             torch.as_tensor([[abs(value) - 1 for value in literals]], dtype=torch.long),
@@ -236,7 +237,7 @@ def load_opb(path: str | Path) -> ModelIR:
 
     objective = ObjectiveIR(())
     sense = ObjectiveSense.MINIMIZE
-    constraints = []
+    constraints: list[ConstraintIR] = []
     for line in lines:
         line = line.rstrip(";").strip()
         if line.lower().startswith(("min:", "max:")):

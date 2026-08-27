@@ -6,20 +6,24 @@ import ast
 import math
 import operator
 from collections.abc import Callable, Mapping
+from typing import Any
 
 import torch
 
 from qqa.mixed.variables import VariableSpec
 
-_BINARY = {
+_BINARY: dict[type[ast.operator], Callable[[Any, Any], Any]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
     ast.Pow: operator.pow,
 }
-_UNARY = {ast.UAdd: operator.pos, ast.USub: operator.neg}
-_FUNCTIONS = {
+_UNARY: dict[type[ast.unaryop], Callable[[Any], Any]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+_FUNCTIONS: dict[str, Callable[..., torch.Tensor]] = {
     "abs": torch.abs,
     "square": torch.square,
     "sqrt": torch.sqrt,
@@ -122,23 +126,32 @@ def compile_expression(
     _validate_tree(tree, variables)
 
     def evaluate(named: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        def visit(node: ast.AST):
+        def visit(node: ast.AST) -> Any:
             if isinstance(node, ast.Expression):
                 return visit(node.body)
             if isinstance(node, ast.Constant):
+                if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+                    raise UnsafeExpressionError("Only finite numeric constants are allowed.")
                 return float(node.value)
             if isinstance(node, ast.Name):
                 if node.id not in named:
                     raise UnsafeExpressionError(f"Variable {node.id!r} is unavailable.")
                 return named[node.id]
             if isinstance(node, ast.Subscript):
+                if not isinstance(node.value, ast.Name) or not isinstance(node.slice, ast.Constant):
+                    raise UnsafeExpressionError("Only direct literal indexing is allowed.")
+                index = node.slice.value
+                if not isinstance(index, int) or isinstance(index, bool):
+                    raise UnsafeExpressionError("Variable indices must be integers.")
                 value = named[node.value.id]
-                return value if value.ndim == 1 else value[..., node.slice.value]
+                return value if value.ndim == 1 else value[..., index]
             if isinstance(node, ast.UnaryOp):
                 return _UNARY[type(node.op)](visit(node.operand))
             if isinstance(node, ast.BinOp):
                 return _BINARY[type(node.op)](visit(node.left), visit(node.right))
             if isinstance(node, ast.Call):
+                if not isinstance(node.func, ast.Name):
+                    raise UnsafeExpressionError("Only direct function calls are allowed.")
                 name = node.func.id
                 args = [visit(argument) for argument in node.args]
                 if name == "sum":
@@ -146,6 +159,8 @@ def compile_expression(
                     return value.sum(dim=-1) if torch.is_tensor(value) and value.ndim > 1 else value
                 tensor_args = []
                 like = next((value for value in named.values() if torch.is_tensor(value)), None)
+                if like is None:
+                    raise UnsafeExpressionError("Expression requires at least one tensor variable.")
                 for value in args:
                     tensor_args.append(
                         torch.as_tensor(value, device=like.device, dtype=like.dtype)

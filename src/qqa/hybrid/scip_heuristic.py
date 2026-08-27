@@ -458,7 +458,10 @@ class QQAHeuristic(_HeurBase):
                 if repair_budget > 0.05:
                     repair_started = perf_counter()
                     if self.completion_template is None:
-                        self.completion_template = self.completion_template_factory()
+                        factory = self.completion_template_factory
+                        if factory is None:
+                            raise RuntimeError("Completion template factory is unavailable.")
+                        self.completion_template = factory()
                     self._lns_archive.add(repair_signature)
                     partial_repair = state.incumbent_values is None
                     if partial_repair:
@@ -468,7 +471,7 @@ class QQAHeuristic(_HeurBase):
                     completed = complete_integer_assignment(
                         self.completion_template,
                         [state.names[index] for index in repair_indices],
-                        repair_values,
+                        repair_values.tolist(),
                         main_model=self.model,
                         heuristic=self,
                         algebraic=self.algebraic,

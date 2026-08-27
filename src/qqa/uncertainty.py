@@ -47,7 +47,10 @@ class ScenarioFactor:
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         outcomes = self.evaluate_scenarios(values)
-        probabilities = self.probabilities.to(values)
+        probabilities = self.probabilities
+        if probabilities is None:  # Defensive guard for static type checkers and unsafe mutation.
+            raise RuntimeError("Scenario probabilities were not initialised.")
+        probabilities = probabilities.to(values)
         if self.mode == "mean":
             return (outcomes * probabilities).sum(dim=-1)
         if self.mode == "worst":

@@ -567,12 +567,9 @@ def train_cpra_pi_gnn(
     _q_stack: torch.Tensor | None = None
     if not single_problem:
         q_mats = [getattr(p, "Q_mat", None) for p in problems_per_replica]
-        if (
-            all(q is not None for q in q_mats)
-            and all(isinstance(q, torch.Tensor) for q in q_mats)
-            and len({tuple(q.shape) for q in q_mats}) == 1
-        ):
-            _q_stack = torch.stack([q.to(device) for q in q_mats], dim=0)
+        tensor_q_mats = [q for q in q_mats if isinstance(q, torch.Tensor)]
+        if len(tensor_q_mats) == len(q_mats) and len({tuple(q.shape) for q in tensor_q_mats}) == 1:
+            _q_stack = torch.stack([q.to(device) for q in tensor_q_mats], dim=0)
 
     history: dict[str, list] = {
         "loss": [],
@@ -704,7 +701,7 @@ def train_cpra_pi_gnn(
     runtime = time() - runtime_start
 
     # Fallback for num_epochs == 0 — same contract as train_cra_pi_gnn.
-    if all(b is None for b in best_bits_per_replica):
+    if any(b is None for b in best_bits_per_replica):
         with torch.no_grad():
             probs = model(edge_index)
             if probs.dim() == 1:
@@ -718,12 +715,17 @@ def train_cpra_pi_gnn(
                     for r in range(int(num_replicas))
                 ]
             for r, obj_r in enumerate(fallback_objs):
-                best_bits_per_replica[r] = bits_all[:, r].detach().clone()
-                best_obj_per_replica[r] = obj_r
+                if best_bits_per_replica[r] is None:
+                    best_bits_per_replica[r] = bits_all[:, r].detach().clone()
+                    best_obj_per_replica[r] = obj_r
+
+    resolved_bits = [bits for bits in best_bits_per_replica if bits is not None]
+    if len(resolved_bits) != int(num_replicas):
+        raise RuntimeError("PI-GNN failed to produce a solution for every replica.")
 
     # Determine the overall best replica.
     best_replica = int(min(range(int(num_replicas)), key=lambda r: best_obj_per_replica[r]))
-    best_bits = best_bits_per_replica[best_replica]
+    best_bits = resolved_bits[best_replica]
     best_obj = best_obj_per_replica[best_replica]
 
     # Default-on polish on the winning replica only — polishing all R replicas
@@ -736,12 +738,13 @@ def train_cpra_pi_gnn(
     )
     if polished_sol is not None and best_obj < prev_best_obj:
         best_bits_per_replica[best_replica] = best_bits
+        resolved_bits[best_replica] = best_bits
         best_obj_per_replica[best_replica] = best_obj
 
     # Per-replica score summaries.
     replica_records: list[dict] = []
     for r in range(int(num_replicas)):
-        bits_r = best_bits_per_replica[r]
+        bits_r = resolved_bits[r]
         score_r = safe_score_summary(
             problems_per_replica[r],
             bits_r,

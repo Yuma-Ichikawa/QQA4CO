@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -105,7 +106,7 @@ def _load_gset(graph_type, subset, **kw):
     return datasets.gset(subset=graph_type or subset or "standard", **kw)
 
 
-_PROBLEM_LOADER = {
+_PROBLEM_LOADER: dict[str, Callable[..., Any]] = {
     "maxcut": datasets.discs_maxcut,
     "mis": datasets.discs_mis,
     "maxclique": datasets.discs_maxclique,
@@ -181,10 +182,10 @@ def _resolve_suite(suite: str) -> list[tuple[str, str, str | None]]:
 
     out: list[tuple[str, str, str | None]] = []
     if suite == "all":
-        for fam, types in catalog.items():
+        for family, types in catalog.items():
             for gtype, subsets in types.items():
                 for sub in subsets:
-                    out.append((fam, gtype, sub))
+                    out.append((family, gtype, sub))
         return out
 
     # Longest-prefix family match.
@@ -258,7 +259,7 @@ def _run_sa(problem, *, device: str, sol_size: int, num_epochs: int, **_unused):
 def _run_pa(problem, *, device: str, sol_size: int, num_epochs: int, **_unused):
     return qqa.population_annealing(
         problem,
-        population_size=sol_size,
+        sol_size=sol_size,
         num_temps=max(10, num_epochs // 50),
         sweeps_per_temp=10,
         device=device,
@@ -266,7 +267,7 @@ def _run_pa(problem, *, device: str, sol_size: int, num_epochs: int, **_unused):
     )
 
 
-_BACKENDS = {
+_BACKENDS: dict[str, Callable[..., Any]] = {
     "qqa": _run_qqa_anneal,
     "sa": _run_sa,
     "pa": _run_pa,
@@ -331,7 +332,7 @@ def _per_instance_objectives_and_feasibility(
     return [float(v) for v in values], feasibles
 
 
-def _approx_ratio(objective: float, best_known: float, kind: str) -> float | None:
+def _approx_ratio(objective: float, best_known: float | None, kind: str) -> float | None:
     """Approximation ratio relative to the published best (NaN-safe).
 
     Sign convention: the returned number is "higher is better", clipped so

@@ -85,7 +85,7 @@ class _SparseQUBOEnergy(torch.autograd.Function):
         edge_index: torch.Tensor,
         edge_weight: torch.Tensor,
         constant: float,
-        implementation: str,
+        implementation: SparseImplementation,
     ) -> torch.Tensor:
         energy, gradient = sparse_qubo_energy_gradient(
             values,

@@ -184,7 +184,7 @@ def _ordered_family_axes(reports: list[dict]) -> list[str]:
     return axes
 
 
-def _family_color(fam: str) -> str:
+def _family_color(fam: str) -> Any:
     if fam in _FAMILY_COLORS:
         return _FAMILY_COLORS[fam]
     return plt.get_cmap("tab10")(hash(fam) % 10)
@@ -663,7 +663,7 @@ def render(
         "font.family": "DejaVu Sans",
         "font.size": 10,
     }
-    with plt.rc_context(rc):
+    with plt.rc_context(rc):  # type: ignore[arg-type]  # Matplotlib stubs require literal keys.
         fig = plt.figure(figsize=(17.0, 12.0), dpi=130, facecolor=th["bg"])
 
         # HEADER strip (top 7%).

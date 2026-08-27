@@ -10,6 +10,7 @@ the Python API, CLI, UI, and benchmark runner.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -247,7 +248,7 @@ def make_schedule(
     maximum: float = 0.1,
 ) -> Schedule:
     """Build a validated standard schedule by a stable public name."""
-    factories = {
+    factories: dict[str, Callable[..., Schedule]] = {
         "linear": LinearBGSchedule,
         "cosine": CosineBGSchedule,
         "exponential": ExponentialBGSchedule,

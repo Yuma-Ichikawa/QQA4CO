@@ -514,11 +514,15 @@ def blackbox_optimize(
         raise ValueError("acquisition must be 'expected_improvement' or 'lcb'.")
     if acquisition_optimizer not in {"pool", "qqa"}:
         raise ValueError("acquisition_optimizer must be 'pool' or 'qqa'.")
-    for name, value in (
+    for name, integer_value in (
         ("qqa_acquisition_epochs", qqa_acquisition_epochs),
         ("qqa_acquisition_replicas", qqa_acquisition_replicas),
     ):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        if (
+            isinstance(integer_value, bool)
+            or not isinstance(integer_value, int)
+            or integer_value < 1
+        ):
             raise ValueError(f"{name} must be a positive integer.")
     if (
         isinstance(max_model_points, bool)
@@ -532,7 +536,7 @@ def blackbox_optimize(
         raise ValueError("surrogate must be 'rbf' or 'rff'.")
     if isinstance(rff_features, bool) or not isinstance(rff_features, int) or rff_features < 8:
         raise ValueError("rff_features must be an integer >= 8.")
-    for name, value, lower in (
+    for name, numeric_value, minimum_value in (
         ("exploration", exploration, 0.0),
         ("constraint_weight", constraint_weight, 0.0),
         ("initial_radius", initial_radius, 0.0),
@@ -541,12 +545,12 @@ def blackbox_optimize(
         ("noise", noise, 0.0),
     ):
         if (
-            isinstance(value, bool)
-            or not isinstance(value, Real)
-            or not math.isfinite(value)
-            or value < lower
+            isinstance(numeric_value, bool)
+            or not isinstance(numeric_value, Real)
+            or not math.isfinite(numeric_value)
+            or numeric_value < minimum_value
         ):
-            raise ValueError(f"{name} must be finite and >= {lower}.")
+            raise ValueError(f"{name} must be finite and >= {minimum_value}.")
     if initial_radius <= 0 or initial_radius > 1:
         raise ValueError("initial_radius must be in (0, 1].")
     if min_radius <= 0 or min_radius > initial_radius:

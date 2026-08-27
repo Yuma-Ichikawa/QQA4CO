@@ -20,6 +20,7 @@ import json
 import pickle
 import sys
 from pathlib import Path
+from typing import Any
 
 from qqa.commands.runtime import (
     command_version as _cmd_version,
@@ -829,6 +830,8 @@ def _build_replica_problems(args: argparse.Namespace, base_problem) -> list | No
 def _cmd_solve(args: argparse.Namespace) -> int:
     import qqa
 
+    result: Any
+
     if args.model is not None:
         backend = getattr(args, "backend", "qqa")
         if backend in {"pignn", "cpra"}:
@@ -1167,15 +1170,15 @@ def _cmd_bench(args: argparse.Namespace) -> int:
         return 0
 
     if args.preset == "ea-small":
-        problem = qqa.EdwardsAnderson(L=4, dim=3, seed=args.seed, device=args.device)
+        ea_problem = qqa.EdwardsAnderson(L=4, dim=3, seed=args.seed, device=args.device)
         r = qqa.anneal(
-            problem,
+            ea_problem,
             sol_size=args.sol_size,
             num_epochs=args.epochs,
             device=args.device,
             verbose=False,
         )
-        N = problem.num_spins
+        N = ea_problem.num_spins
         print(f"preset     : {args.preset}")
         print(f"N          : {N}")
         print(f"E_0/N      : {r.best_obj / N:.4f}")

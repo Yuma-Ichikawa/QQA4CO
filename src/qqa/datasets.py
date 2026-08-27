@@ -438,6 +438,7 @@ def discs_maxcut(
     """
     sdir, records = _resolve_discs_subset("maxcut", graph_type, subset, root=root)
     graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    problems: list
     if parallel:
         problems = [MaxCutInstance(graphs, device=device)]
     else:
@@ -466,6 +467,7 @@ def discs_mis(
     """
     sdir, records = _resolve_discs_subset("mis", graph_type, subset, root=root)
     graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    problems: list
     if parallel:
         problems = [MaximumIndependentSetInstance(graphs, penalty=penalty, device=device)]
     else:
@@ -490,6 +492,7 @@ def discs_maxclique(
     """
     sdir, records = _resolve_discs_subset("maxclique", graph_type, subset, root=root)
     graphs, bests, recs = _load_graphs_from_manifest(sdir, records, limit=limit)
+    problems: list
     if parallel:
         problems = [MaxCliqueInstance(graphs, penalty=penalty, device=device)]
     else:

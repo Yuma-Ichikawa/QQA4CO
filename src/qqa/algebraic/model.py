@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -102,7 +102,8 @@ def _bound_vector(values: Sequence[float] | np.ndarray, size: int, label: str) -
 
 
 def _symmetric_csr(matrix: sparse.spmatrix | np.ndarray, size: int) -> sparse.csr_matrix:
-    if sparse.issparse(matrix) and matrix.shape == (size, size) and matrix.nnz == 0:
+    sparse_matrix = cast(sparse.spmatrix, matrix) if sparse.issparse(matrix) else None
+    if sparse_matrix is not None and sparse_matrix.shape == (size, size) and sparse_matrix.nnz == 0:
         return _zero_quadratic(size)
     result = sparse.csr_matrix(matrix, dtype=np.float64, shape=(size, size))
     result.sum_duplicates()
@@ -181,15 +182,20 @@ class SparseQuadratic:
 
     @property
     def dimension(self) -> int:
-        return self.linear.shape[1]
+        return self.linear_csr.shape[1]
+
+    @property
+    def linear_csr(self) -> sparse.csr_matrix:
+        """Canonical CSR linear row established during validation."""
+        return cast(sparse.csr_matrix, self.linear)
 
     @property
     def linear_nonzeros(self) -> int:
-        return int(self.linear.nnz)
+        return int(self.linear_csr.nnz)
 
     def linear_dense(self) -> np.ndarray:
         """Return a dense copy for algorithms that explicitly require one."""
-        return np.asarray(self.linear.toarray(), dtype=np.float64).reshape(-1)
+        return np.asarray(self.linear_csr.toarray(), dtype=np.float64).reshape(-1)
 
     @property
     def is_linear(self) -> bool:
@@ -197,7 +203,7 @@ class SparseQuadratic:
 
     def value(self, point: Sequence[float] | np.ndarray) -> float:
         x = _finite_vector(point, self.dimension, "point")
-        linear_value = float(self.linear.dot(x)[0])
+        linear_value = float(self.linear_csr.dot(x)[0])
         return float(0.5 * x @ self.quadratic.dot(x) + linear_value + self.constant)
 
     def gradient(self, point: Sequence[float] | np.ndarray) -> np.ndarray:
@@ -319,9 +325,24 @@ class AlgebraicModel:
         return len(self.constraints)
 
     @property
+    def variable_type_values(self) -> tuple[VariableType, ...]:
+        """Canonical variable domains established during validation."""
+        return cast(tuple[VariableType, ...], self.variable_types)
+
+    @property
+    def lower_array(self) -> np.ndarray:
+        """Canonical immutable lower-bound vector."""
+        return cast(np.ndarray, self.lower_bounds)
+
+    @property
+    def upper_array(self) -> np.ndarray:
+        """Canonical immutable upper-bound vector."""
+        return cast(np.ndarray, self.upper_bounds)
+
+    @property
     def integer_indices(self) -> np.ndarray:
         return np.fromiter(
-            (index for index, kind in enumerate(self.variable_types) if kind.integral),
+            (index for index, kind in enumerate(self.variable_type_values) if kind.integral),
             dtype=np.int64,
         )
 
@@ -330,7 +351,7 @@ class AlgebraicModel:
         return np.fromiter(
             (
                 index
-                for index, kind in enumerate(self.variable_types)
+                for index, kind in enumerate(self.variable_type_values)
                 if kind is VariableType.CONTINUOUS
             ),
             dtype=np.int64,
