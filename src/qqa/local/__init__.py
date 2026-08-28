@@ -7,7 +7,7 @@ from qqa.local.advanced import (
     path_relink,
     tabu_search,
 )
-from qqa.local.archive import EliteArchive, EliteEntry
+from qqa.local.archive import EliteArchive, EliteEntry, HistoricalEliteCallback
 from qqa.local.sparse_qubo import LocalSearchResult, sparse_qubo_descent
 from qqa.local.structured import (
     StructuredSearchResult,
@@ -22,6 +22,7 @@ from qqa.local.structured import (
 __all__ = [
     "EliteArchive",
     "EliteEntry",
+    "HistoricalEliteCallback",
     "LocalSearchResult",
     "QUBOLocalSearchResult",
     "StructuredSearchResult",

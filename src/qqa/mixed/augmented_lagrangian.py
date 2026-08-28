@@ -135,10 +135,15 @@ class AdaptiveAugmentedLagrangian:
     multipliers: torch.Tensor
     rho: torch.Tensor
     previous_violation: torch.Tensor
+    previous_residual: torch.Tensor
     rho_growth: float = 2.0
+    minimum_rho: float = 1e-8
     maximum_rho: float = 1e10
     improvement_ratio: float = 0.9
+    balance_mu: float = 10.0
     updates: int = 0
+    rho_increases: int = 0
+    rho_decreases: int = 0
 
     @classmethod
     def for_problem(
@@ -169,6 +174,7 @@ class AdaptiveAugmentedLagrangian:
                 float("inf"),
                 dtype=torch.float64,
             ),
+            previous_residual=torch.zeros(len(problem.constraints), dtype=torch.float64),
             rho_growth=float(rho_growth),
             maximum_rho=float(maximum_rho),
             improvement_ratio=float(improvement_ratio),
@@ -214,12 +220,24 @@ class AdaptiveAugmentedLagrangian:
             self.multipliers[inequality] + self.rho[inequality] * representative[inequality],
             0.0,
         )
-        stalled = current > self.improvement_ratio * self.previous_violation
-        self.rho[stalled] = torch.clamp(
-            self.rho[stalled] * self.rho_growth,
-            max=self.maximum_rho,
-        )
+        if self.updates:
+            primal_residual = current
+            dual_residual = self.rho * (representative - self.previous_residual).abs()
+            stalled = current > self.improvement_ratio * self.previous_violation
+            increase = stalled & (primal_residual > self.balance_mu * dual_residual)
+            decrease = dual_residual > self.balance_mu * primal_residual
+            self.rho[increase] = torch.clamp(
+                self.rho[increase] * self.rho_growth,
+                max=self.maximum_rho,
+            )
+            self.rho[decrease] = torch.clamp(
+                self.rho[decrease] / self.rho_growth,
+                min=self.minimum_rho,
+            )
+            self.rho_increases += int(increase.sum().item())
+            self.rho_decreases += int(decrease.sum().item())
         self.previous_violation = current
+        self.previous_residual = representative
         self.updates += 1
 
     def diagnostics(self) -> dict[str, object]:
@@ -228,6 +246,9 @@ class AdaptiveAugmentedLagrangian:
             "multipliers": self.multipliers.tolist(),
             "rho": self.rho.tolist(),
             "previous_violation": self.previous_violation.tolist(),
+            "primal_dual_balance_mu": self.balance_mu,
+            "rho_increases": self.rho_increases,
+            "rho_decreases": self.rho_decreases,
         }
 
 

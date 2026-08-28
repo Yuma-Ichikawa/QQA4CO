@@ -156,6 +156,42 @@ def submodular_roof_duality(
     return PersistencyResult(fixings, optimum, True, "submodular-roof-duality")
 
 
+@torch.no_grad()
+def general_qpbo_persistency(
+    qubo: SparseQUBO,
+    *,
+    exact_component_limit: int = 24,
+    tolerance: float = 1e-9,
+) -> PersistencyResult:
+    """Return safe persistencies and a bound for any binary quadratic energy.
+
+    Submodular instances use graph-cut roof duality.  Small non-submodular
+    instances use exact probing.  Larger instances return the valid termwise
+    relaxation bound with no speculative fixings; this conservative fallback
+    is intentionally labelled non-exact and never overstates QPBO persistency.
+    """
+    if not bool((qubo.edge_weight > tolerance).any()):
+        return submodular_roof_duality(qubo, tolerance=tolerance)
+    if qubo.num_variables <= exact_component_limit:
+        result = exact_probe_persistency(
+            qubo,
+            max_variables=exact_component_limit,
+            tolerance=tolerance,
+        )
+        return PersistencyResult(
+            result.fixings,
+            result.optimum_or_lower_bound,
+            True,
+            "general-qpbo-exact-probing",
+        )
+    lower_bound = (
+        float(qubo.constant)
+        + float(qubo.linear.clamp_max(0).sum().item())
+        + float(qubo.edge_weight.clamp_max(0).sum().item())
+    )
+    return PersistencyResult({}, lower_bound, False, "general-qpbo-termwise-relaxation")
+
+
 def detect_qubo_symmetries(
     qubo: SparseQUBO,
     *,
@@ -206,5 +242,6 @@ __all__ = [
     "detect_qubo_symmetries",
     "dominance_fixings",
     "exact_probe_persistency",
+    "general_qpbo_persistency",
     "submodular_roof_duality",
 ]

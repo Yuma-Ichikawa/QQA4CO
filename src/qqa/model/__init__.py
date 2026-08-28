@@ -1,5 +1,13 @@
 """Canonical sparse model representation."""
 
+from qqa.model.capabilities import (
+    FactorCapability,
+    FactorCapabilityRecord,
+    ModelCapabilityReport,
+    factor_capabilities,
+    inspect_capabilities,
+    require_qqa_capabilities,
+)
 from qqa.model.ir import (
     AllDifferentFactor,
     AssignmentFactor,
@@ -49,12 +57,15 @@ __all__ = [
     "ConstraintIR",
     "CumulativeResourceFactor",
     "FlowConservationFactor",
+    "FactorCapability",
+    "FactorCapabilityRecord",
     "HigherOrderFactor",
     "IndicatorFactor",
     "LinearFactor",
     "LogicalFactor",
     "MatchingFactor",
     "ModelIR",
+    "ModelCapabilityReport",
     "ModelMetadata",
     "NoOverlapFactor",
     "ObjectiveIR",
@@ -73,5 +84,8 @@ __all__ = [
     "TransformationRecord",
     "VariableBlock",
     "VariableDomain",
+    "factor_capabilities",
+    "inspect_capabilities",
     "presolve_model",
+    "require_qqa_capabilities",
 ]

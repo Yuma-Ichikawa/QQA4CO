@@ -21,10 +21,20 @@ class SolveStatus(str, Enum):
 
     OPTIMAL = "optimal"
     FEASIBLE = "feasible"
-    INFEASIBLE = "infeasible"
+    INFEASIBLE_PROVEN = "infeasible_proven"
+    INFEASIBLE = "infeasible_proven"  # backwards-compatible alias
+    UNBOUNDED_PROVEN = "unbounded_proven"
+    LOCALLY_OPTIMAL = "locally_optimal"
     TIME_LIMIT = "time_limit"
     ITERATION_LIMIT = "iteration_limit"
-    FAILED = "failed"
+    ERROR = "error"
+    FAILED = "error"  # backwards-compatible alias
+    UNKNOWN = "unknown"
+
+
+class FeasibilityStatus(str, Enum):
+    FEASIBLE = "feasible"
+    INFEASIBLE = "infeasible"
     UNKNOWN = "unknown"
 
 
@@ -55,10 +65,17 @@ class ConstraintReport:
     """Aggregate feasibility diagnostics without hiding individual rows."""
 
     rows: tuple[ConstraintViolation, ...] = ()
+    evaluated: bool = False
 
     @property
     def feasible(self) -> bool:
-        return all(row.satisfied for row in self.rows)
+        return self.evaluated and all(row.satisfied for row in self.rows)
+
+    @property
+    def status(self) -> FeasibilityStatus:
+        if not self.evaluated:
+            return FeasibilityStatus.UNKNOWN
+        return FeasibilityStatus.FEASIBLE if self.feasible else FeasibilityStatus.INFEASIBLE
 
     @property
     def maximum_violation(self) -> float:
@@ -74,7 +91,11 @@ class ConstraintReport:
 
     @classmethod
     def unconstrained(cls) -> ConstraintReport:
-        return cls(())
+        return cls((), evaluated=True)
+
+    @classmethod
+    def unknown(cls) -> ConstraintReport:
+        return cls((), evaluated=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +154,24 @@ class Provenance:
             raise ValueError("seed must be a non-negative integer.")
 
 
+@dataclass(frozen=True, slots=True)
+class CertificateMetadata:
+    """Portable pointer to a proof/certificate without embedding machine paths."""
+
+    proof_system: str
+    status: str
+    verifier: str | None = None
+    sha256: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.proof_system or not self.status:
+            raise ValueError("Certificate proof_system and status must be non-empty.")
+        if self.sha256 is not None and (
+            len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256)
+        ):
+            raise ValueError("Certificate sha256 must be a lowercase hexadecimal digest.")
+
+
 @dataclass(slots=True)
 class SolveResult:
     """One unambiguous result contract for all QQA4CO solve routes.
@@ -144,10 +183,10 @@ class SolveResult:
     """
 
     status: SolveStatus
-    raw_solution: torch.Tensor
-    objective_value: float
-    internal_energy: float
-    merit_value: float
+    raw_solution: torch.Tensor | None
+    objective_value: float | None
+    internal_energy: float | None
+    merit_value: float | None
     feasible: bool
     violations: ConstraintReport
     timings: TimingReport
@@ -161,6 +200,8 @@ class SolveResult:
     proven_optimal: bool = False
     population: torch.Tensor | None = None
     archive: Any = None
+    events: tuple[Any, ...] = ()
+    certificate: CertificateMetadata | None = None
     score: dict[str, Any] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
     legacy_result: Any = field(default=None, repr=False)
@@ -168,8 +209,14 @@ class SolveResult:
     def __post_init__(self) -> None:
         self.status = SolveStatus(self.status)
         for name in ("objective_value", "internal_energy", "merit_value"):
-            if not math.isfinite(float(getattr(self, name))):
+            value = getattr(self, name)
+            if value is not None and not math.isfinite(float(value)):
                 raise ValueError(f"{name} must be finite.")
+        if self.raw_solution is None and any(
+            value is not None
+            for value in (self.objective_value, self.internal_energy, self.merit_value)
+        ):
+            raise ValueError("Objective/energy/merit require a raw solution.")
         if self.repaired_solution is None and self.repaired_objective_value is not None:
             raise ValueError("repaired_objective_value requires repaired_solution.")
         if self.repaired_solution is not None and self.repaired_objective_value is None:
@@ -182,19 +229,20 @@ class SolveResult:
             raise ValueError("feasible must agree with violations.feasible.")
         if self.proven_optimal and self.status is not SolveStatus.OPTIMAL:
             raise ValueError("proven_optimal requires status='optimal'.")
+        self.events = tuple(self.events)
 
     @property
-    def solution(self) -> torch.Tensor:
+    def solution(self) -> torch.Tensor | None:
         """Preferred reported solution, using repair when available."""
         return self.repaired_solution if self.repaired_solution is not None else self.raw_solution
 
     @property
-    def best_sol(self) -> torch.Tensor:
+    def best_sol(self) -> torch.Tensor | None:
         """Compatibility alias for :attr:`solution`."""
         return self.solution
 
     @property
-    def best_obj(self) -> float:
+    def best_obj(self) -> float | None:
         """Compatibility alias for the original mathematical objective."""
         if self.repaired_objective_value is not None:
             return self.repaired_objective_value
@@ -204,6 +252,12 @@ class SolveResult:
     def runtime(self) -> float:
         """Compatibility alias for total wall-clock time."""
         return self.timings.total
+
+    @property
+    def history(self) -> dict[str, Any]:
+        """Compatibility view of backend history for existing visualisations."""
+        history = getattr(self.legacy_result, "history", None)
+        return history if isinstance(history, dict) else {}
 
     def to_dict(self, *, include_solutions: bool = False) -> dict[str, Any]:
         """Return a JSON-oriented, environment-neutral representation."""
@@ -216,6 +270,8 @@ class SolveResult:
             "feasible": self.feasible,
             "violations": {
                 "rows": [asdict(row) for row in self.violations.rows],
+                "evaluated": self.violations.evaluated,
+                "status": self.violations.status.value,
                 "maximum": self.violations.maximum_violation,
                 "l1": self.violations.l1_violation,
                 "l2": self.violations.l2_violation,
@@ -223,14 +279,21 @@ class SolveResult:
             "best_bound": self.best_bound,
             "relative_gap": self.relative_gap,
             "proven_optimal": self.proven_optimal,
+            "certificate": None if self.certificate is None else asdict(self.certificate),
             "timings": asdict(self.timings),
             "resources": asdict(self.resources),
             "provenance": asdict(self.provenance),
             "score": self.score,
             "diagnostics": self.diagnostics,
+            "events": [
+                event.to_dict() if callable(getattr(event, "to_dict", None)) else event
+                for event in self.events
+            ],
         }
         if include_solutions:
-            payload["raw_solution"] = self.raw_solution.detach().cpu().tolist()
+            payload["raw_solution"] = (
+                None if self.raw_solution is None else self.raw_solution.detach().cpu().tolist()
+            )
             payload["repaired_solution"] = (
                 None
                 if self.repaired_solution is None
@@ -242,6 +305,8 @@ class SolveResult:
 __all__ = [
     "ConstraintReport",
     "ConstraintViolation",
+    "CertificateMetadata",
+    "FeasibilityStatus",
     "Provenance",
     "ResourceReport",
     "SolveResult",

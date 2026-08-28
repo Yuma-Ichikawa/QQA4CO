@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from contextlib import nullcontext
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from time import perf_counter
 from typing import Any, Literal
 
@@ -80,6 +80,8 @@ class AnnealResult:
     diagnostics: dict = field(default_factory=dict)
     """Solver-level diagnostics such as adaptive restart counts and the
     numerical-stability controls used for the run."""
+    archive: Any = None
+    """Historical feasibility/quality/diversity archive retained across epochs."""
 
 
 class _LightweightAdamW:
@@ -181,6 +183,27 @@ def _replica_merit(discrete_losses: torch.Tensor) -> torch.Tensor:
     return ((flattened - centre) / scale).mean(dim=1)
 
 
+def _schedule_checkpoint_descriptor(schedule: Schedule) -> dict[str, Any]:
+    """Describe a schedule without source paths or executable payloads."""
+    parameters: dict[str, Any] = {}
+    mutable_state: dict[str, Any] = {}
+    if is_dataclass(schedule):
+        names = [item.name for item in fields(schedule)]
+    else:
+        names = sorted(getattr(schedule, "__dict__", {}))
+    for name in names:
+        value = getattr(schedule, name)
+        if isinstance(value, tuple):
+            value = list(value)
+        target = mutable_state if name.startswith("_") else parameters
+        target[name] = value
+    return {
+        "type": f"{type(schedule).__module__}.{type(schedule).__qualname__}",
+        "parameters": parameters,
+        "state": mutable_state,
+    }
+
+
 def _reset_optimizer_rows(
     optimizer: Any,
     parameter: torch.Tensor,
@@ -212,6 +235,7 @@ def _restart_replicas(
     fraction: float,
     jitter: float,
     learning_rate: float,
+    archive_centres: torch.Tensor | None = None,
     enabled: torch.Tensor | None = None,
 ) -> int:
     """Restart weak replicas with a global/local basin-hopping mixture."""
@@ -221,8 +245,14 @@ def _restart_replicas(
     worst = torch.topk(_replica_merit(discrete_losses), k=count, largest=True).indices
     encode = getattr(relaxation, "encode", None)
     elite = best_sol.to(device=x.device, dtype=x.dtype)
+    centres = (
+        elite.unsqueeze(0)
+        if archive_centres is None
+        else archive_centres.to(device=x.device, dtype=x.dtype)
+    )
     if encode is not None:
         elite = encode(elite)
+        centres = encode(centres)
     if elite.shape != x.shape[1:]:
         return 0
 
@@ -233,7 +263,8 @@ def _restart_replicas(
     with torch.no_grad():
         replacements = torch.rand_like(x[worst])
         if elite_count:
-            local = elite.unsqueeze(0).expand(elite_count, *elite.shape).clone()
+            archive_rows = torch.arange(elite_count, device=x.device) % len(centres)
+            local = centres[archive_rows].clone()
             local.add_(jitter * torch.randn_like(local))
             replacements[:elite_count] = local
         x[worst] = replacements if enabled is None else torch.where(enabled, replacements, x[worst])
@@ -261,7 +292,7 @@ def anneal(
     record_history: bool = True,
     verbose: bool = True,
     mixed_precision: Literal["fp32", "bf16"] = "fp32",
-    initial_state: torch.Tensor | None = None,
+    initial_state: Any = None,
     polish: bool = True,
     return_population: bool = False,
     weight_decay: float = 0.0,
@@ -272,6 +303,17 @@ def anneal(
     restart_jitter: float = 0.10,
     compile_core: bool = False,
     cuda_graphs: bool = False,
+    normalize_loss: bool = True,
+    robust_scaling: bool = True,
+    heterogeneous_replicas: bool = False,
+    replica_exchange_interval: int | None = None,
+    factor_preconditioning: bool = True,
+    curvature_aware_beta: bool = True,
+    archive_size: int = 64,
+    archive_interval: int | None = None,
+    checkpoint_path: str | None = None,
+    checkpoint_interval: int | None = None,
+    resume_from: str | None = None,
 ) -> AnnealResult:
     """Run Quasi-Quantum Annealing on ``problem``.
 
@@ -292,7 +334,7 @@ def anneal(
     min_bg, max_bg:
         Convenience override for the default linear schedule.
     curve_rate:
-        Exponent of the QQA penalty (must be even for the convex regime).
+        Exponent of the QQA penalty (must be even for symmetric binary wells).
     div_param:
         Weight of the diversity term. Set to 0 to disable.
     num_epochs:
@@ -409,8 +451,43 @@ def anneal(
         raise TypeError("compile_core must be boolean.")
     if not isinstance(cuda_graphs, bool):
         raise TypeError("cuda_graphs must be boolean.")
+    for name, value in (
+        ("normalize_loss", normalize_loss),
+        ("robust_scaling", robust_scaling),
+        ("heterogeneous_replicas", heterogeneous_replicas),
+        ("factor_preconditioning", factor_preconditioning),
+        ("curvature_aware_beta", curvature_aware_beta),
+    ):
+        if not isinstance(value, bool):
+            raise TypeError(f"{name} must be boolean.")
+    if replica_exchange_interval is not None and (
+        isinstance(replica_exchange_interval, bool)
+        or not isinstance(replica_exchange_interval, int)
+        or replica_exchange_interval < 1
+    ):
+        raise ValueError("replica_exchange_interval must be a positive integer or None.")
+    if isinstance(archive_size, bool) or not isinstance(archive_size, int) or archive_size < 0:
+        raise ValueError("archive_size must be a non-negative integer.")
+    if archive_interval is not None and (
+        isinstance(archive_interval, bool)
+        or not isinstance(archive_interval, int)
+        or archive_interval < 1
+    ):
+        raise ValueError("archive_interval must be a positive integer or None.")
+    if checkpoint_interval is not None and (
+        isinstance(checkpoint_interval, bool)
+        or not isinstance(checkpoint_interval, int)
+        or checkpoint_interval < 1
+    ):
+        raise ValueError("checkpoint_interval must be a positive integer or None.")
+    if checkpoint_interval is not None and checkpoint_path is None:
+        raise ValueError("checkpoint_interval requires checkpoint_path.")
+    if resume_from is not None and initial_state is not None:
+        raise ValueError("resume_from and initial_state are mutually exclusive.")
     if cuda_graphs and optimizer != "adamw":
         raise ValueError("cuda_graphs requires optimizer='adamw'.")
+    if cuda_graphs and heterogeneous_replicas and replica_exchange_interval is not None:
+        raise ValueError("cuda_graphs and replica exchange cannot share mutable optimizer state.")
     if optimizer == "mirror-descent" and weight_decay:
         raise ValueError("mirror-descent does not support Euclidean weight_decay.")
     # Mirror the validation that the pignn / cpra trainers already enforce:
@@ -451,6 +528,44 @@ def anneal(
             0.1 if max_bg is None else max_bg,
         )
 
+    schedule_descriptor = _schedule_checkpoint_descriptor(schedule)
+    checkpoint_config = {
+        "sol_size": sol_size,
+        "num_epochs": num_epochs,
+        "optimizer": optimizer,
+        "curve_rate": curve_rate,
+        "learning_rate": learning_rate,
+        "temperature": temp,
+        "diversity_weight": div_param,
+        "weight_decay": weight_decay,
+        "gradient_clip_norm": gradient_clip_norm,
+        "restart_patience": restart_patience,
+        "restart_fraction": restart_fraction,
+        "restart_jitter": restart_jitter,
+        "mixed_precision": mixed_precision,
+        "compile_core": compile_core,
+        "cuda_graphs": cuda_graphs,
+        "normalize_loss": normalize_loss,
+        "robust_scaling": robust_scaling,
+        "heterogeneous_replicas": heterogeneous_replicas,
+        "replica_exchange_interval": replica_exchange_interval,
+        "factor_preconditioning": factor_preconditioning,
+        "curvature_aware_beta": curvature_aware_beta,
+        "archive_size": archive_size,
+        "archive_interval": archive_interval or max(1, num_epochs // 32),
+        "check_interval": check_interval,
+        "polish": polish,
+        "schedule": {
+            "type": schedule_descriptor["type"],
+            "parameters": schedule_descriptor["parameters"],
+        },
+    }
+    if checkpoint_path is not None or resume_from is not None:
+        from qqa.runtime.security import validate_portable_payload
+
+        validate_portable_payload(checkpoint_config)
+        validate_portable_payload(schedule_descriptor["state"])
+
     relax = problem.relaxation
     loss_function = (
         torch.compile(problem.loss_fn, fullgraph=True) if compile_core else problem.loss_fn
@@ -462,19 +577,85 @@ def anneal(
         recorder = HistoryRecorder()
         cb_list.append(recorder)
     cb_list.extend(callbacks)
+    archive_callback = None
+    if archive_size and sol_size > 1:
+        from qqa.local.archive import HistoricalEliteCallback
+
+        archive_callback = HistoricalEliteCallback(
+            maximum_size=archive_size,
+            interval=archive_interval or max(1, num_epochs // 32),
+        )
+        cb_list.append(archive_callback)
 
     runtime_start = perf_counter()
     is_batch = _is_instance_problem(problem)
+    restored_checkpoint = None
+    checkpoint_fingerprint = None
+    start_epoch = 0
+    if resume_from is not None or checkpoint_path is not None:
+        from qqa.runtime.checkpoint import fingerprint_problem, load_checkpoint
+
+        checkpoint_fingerprint = fingerprint_problem(problem)
+        if resume_from is not None:
+            restored_checkpoint = load_checkpoint(resume_from, device=device)
+            if restored_checkpoint.model_fingerprint != checkpoint_fingerprint:
+                raise ValueError("Checkpoint model fingerprint does not match this problem.")
+            for key, expected in checkpoint_config.items():
+                if key in {"num_epochs", "archive_interval"}:
+                    continue
+                if restored_checkpoint.config.get(key) != expected:
+                    raise ValueError(f"Checkpoint {key} does not match the requested run.")
+            saved_schedule_state = restored_checkpoint.metadata.get("schedule_state", {})
+            if set(saved_schedule_state) != set(schedule_descriptor["state"]):
+                raise ValueError("Checkpoint schedule state does not match the requested schedule.")
+            for name, value in saved_schedule_state.items():
+                object.__setattr__(schedule, name, value)
+            start_epoch = restored_checkpoint.epoch
+            if not 0 <= start_epoch <= num_epochs:
+                raise ValueError("Checkpoint epoch lies outside the requested run.")
     if initial_state is not None and is_batch:
         # Warm-starting batched-instance problems would require a
         # per-instance seed tensor and is rarely useful — skip silently
         # rather than impose a confusing shape contract.
         initial_state = None
-    if initial_state is None:
+    if restored_checkpoint is not None:
+        if "latent" not in restored_checkpoint.tensors:
+            raise ValueError("Checkpoint has no latent population tensor.")
+        x = restored_checkpoint.tensors["latent"].to(device=device)
+        if x.shape[0] != sol_size:
+            raise ValueError("Checkpoint population size does not match sol_size.")
+        x = x.detach().clone().requires_grad_(True)
+        cpu_rng_state = restored_checkpoint.tensors.get("cpu_rng_state")
+        if cpu_rng_state is None:
+            raise ValueError("Checkpoint has no CPU random-generator state.")
+        torch.random.set_rng_state(cpu_rng_state.detach().cpu())
+        if torch.device(device).type == "cuda":
+            device_rng_state = restored_checkpoint.tensors.get("device_rng_state")
+            if device_rng_state is None:
+                raise ValueError("CUDA checkpoint has no device random-generator state.")
+            torch.cuda.set_rng_state(device_rng_state.detach().cpu(), device=device)
+        if archive_callback is not None:
+            archive_callback.restore_checkpoint_tensors(restored_checkpoint.tensors)
+    elif initial_state is None:
         x = relax.init(sol_size, problem, device)
     else:
         seed_dtype = getattr(problem, "dtype", torch.float32)
-        seed = initial_state.detach().to(device=device, dtype=seed_dtype)
+        from qqa.runtime.population import WarmStateBundle, compose_warm_population
+
+        if isinstance(initial_state, WarmStateBundle):
+            composed = compose_warm_population(
+                initial_state,
+                replicas=sol_size,
+                device=device,
+                dtype=seed_dtype,
+            )
+            if composed is None:
+                raise ValueError("WarmStateBundle contains no candidate state.")
+            seed = composed
+        elif torch.is_tensor(initial_state):
+            seed = initial_state.detach().to(device=device, dtype=seed_dtype)
+        else:
+            raise TypeError("initial_state must be a tensor, WarmStateBundle, or None.")
         encode = getattr(relax, "encode", None)
         if encode is not None:
             seed = encode(seed)
@@ -524,20 +705,67 @@ def anneal(
             relax,
             learning_rate=learning_rate,
         )
+    if restored_checkpoint is not None:
+        restored_state = optimiser.state.setdefault(x, {})
+        for key in ("step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+            tensor = restored_checkpoint.tensors.get(f"optimizer_{key}")
+            if tensor is not None:
+                target_device = x.device if key != "step" or cuda_graphs else torch.device("cpu")
+                restored_state[key] = tensor.to(device=target_device).detach().clone()
+        if hasattr(optimiser, "steps"):
+            optimiser.steps = int(restored_checkpoint.metadata.get("optimizer_steps", 0))
     if cuda_graphs:
         x.grad = torch.zeros_like(x)
         optimiser_state = optimiser.state[x]
-        optimiser_state["step"] = torch.zeros((), device=x.device)
-        optimiser_state["exp_avg"] = torch.zeros_like(x)
-        optimiser_state["exp_avg_sq"] = torch.zeros_like(x)
+        optimiser_state.setdefault("step", torch.zeros((), device=x.device))
+        optimiser_state.setdefault("exp_avg", torch.zeros_like(x))
+        optimiser_state.setdefault("exp_avg_sq", torch.zeros_like(x))
+
+    from qqa.runtime.population import (
+        ReplicaPortfolio,
+        estimate_convexification_beta,
+        factor_preconditioner,
+    )
+
+    convexification_beta = (
+        estimate_convexification_beta(problem) if curvature_aware_beta and curve_rate == 2 else 0.0
+    )
+    replica_portfolio = (
+        ReplicaPortfolio(sol_size, convexification_beta=convexification_beta)
+        if heterogeneous_replicas and sol_size > 1
+        else None
+    )
+    preconditioner = (
+        factor_preconditioner(problem, x) if factor_preconditioning else torch.ones_like(x[0])
+    )
+    learning_rate_scale = (
+        replica_portfolio.learning_rate_scale(x.device, x.dtype)
+        if replica_portfolio is not None
+        else torch.ones(sol_size, device=x.device, dtype=x.dtype)
+    )
+    learning_rate_scale = learning_rate_scale.reshape(sol_size, *((1,) * (x.ndim - 1)))
 
     hp = {"div_param": float(div_param), "restart_count": 0}
     restart_count_device = torch.zeros((), dtype=torch.int64, device=x.device)
     restart_epoch_mask = torch.zeros(num_epochs, dtype=torch.bool, device=x.device)
+    exchange_count_device = torch.zeros((), dtype=torch.int64, device=x.device)
+    exchange_epoch_mask = torch.zeros(num_epochs, dtype=torch.bool, device=x.device)
 
     with torch.no_grad():
         x_disc = relax.project(x)
         loss_disc = loss_function(x_disc)
+        if normalize_loss and robust_scaling:
+            objective_center = loss_disc.median(dim=0).values
+            objective_mad = (loss_disc - objective_center).abs().median(dim=0).values
+            objective_fallback = loss_disc.abs().median(dim=0).values.clamp_min(1.0)
+            objective_scale = torch.where(
+                objective_mad > torch.finfo(loss_disc.dtype).eps,
+                objective_mad,
+                objective_fallback,
+            )
+        else:
+            objective_center = torch.zeros_like(loss_disc[0])
+            objective_scale = torch.ones_like(loss_disc[0])
         if is_batch:
             min_vals, min_idx = torch.min(loss_disc, dim=0)
             best_obj: Any = min_vals.detach().cpu().numpy().astype(np.float64)
@@ -554,6 +782,20 @@ def anneal(
     # host receives the final value once after the loop (or when an explicit
     # user callback chooses to inspect it).
     best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
+    if restored_checkpoint is not None:
+        checkpoint_best_sol = restored_checkpoint.tensors.get("best_solution")
+        checkpoint_best_obj = restored_checkpoint.tensors.get("best_objective")
+        if checkpoint_best_sol is None or checkpoint_best_obj is None:
+            raise ValueError("Checkpoint has no incumbent tensors.")
+        best_sol = checkpoint_best_sol.to(device=x.device, dtype=x_disc.dtype).detach().clone()
+        best_obj_gpu = (
+            checkpoint_best_obj.to(device=x.device, dtype=loss_disc.dtype).detach().clone()
+        )
+        best_obj = (
+            best_obj_gpu.detach().cpu().numpy().astype(np.float64)
+            if is_batch
+            else float(best_obj_gpu.item())
+        )
     restart_reference = best_obj_gpu.detach().clone()
     adaptive_reference = best_obj_gpu.detach().clone()
     # Adaptive schedule observation is an explicit host control point. Keep
@@ -566,7 +808,7 @@ def anneal(
     state = CallbackState(
         epoch=-1,
         num_epochs=num_epochs,
-        bg=float(schedule(0, num_epochs)),
+        bg=float(schedule(start_epoch, num_epochs)),
         x=x,
         losses=torch.zeros(1, device=x.device),
         penalties=torch.zeros(1, device=x.device),
@@ -594,10 +836,26 @@ def anneal(
             diversity_value = (
                 relax.diversity(x) if sol_size > 1 else torch.zeros((), device=x.device)
             )
-            diversity_term = -diversity_value * sol_size
-            total_value = (losses_value.sum() + (penalties_value * bg_value).sum()) * (
-                1 - diversity_weight
-            ) + diversity_term * diversity_weight
+            if normalize_loss:
+                normalised_losses = (losses_value - objective_center) / objective_scale
+                beta = torch.as_tensor(bg_value, device=x.device, dtype=x.dtype)
+                while beta.ndim < penalties_value.ndim:
+                    beta = beta.unsqueeze(-1)
+                dimensions = max(
+                    1,
+                    relax.num_variables(problem) * int(getattr(problem, "num_instance", 1) or 1),
+                )
+                objective_term = normalised_losses.mean()
+                penalty_term = (penalties_value * beta).mean() / dimensions
+                diversity_term = -diversity_value / dimensions
+                total_value = (objective_term + penalty_term) * (
+                    1 - diversity_weight
+                ) + diversity_term * diversity_weight
+            else:
+                diversity_term = -diversity_value * sol_size
+                total_value = (losses_value.sum() + (penalties_value * bg_value).sum()) * (
+                    1 - diversity_weight
+                ) + diversity_term * diversity_weight
         return losses_value, penalties_value, diversity_value, total_value
 
     captured_step = None
@@ -613,11 +871,16 @@ def anneal(
                 bg_value, diversity_weight
             )
             total_value.backward()
+            gradient = x.grad
+            if gradient is None:
+                raise RuntimeError("Autograd returned no latent gradient.")
+            gradient.mul_(preconditioner)
+            gradient.mul_(learning_rate_scale)
             if gradient_clip_norm is not None:
                 gradient_scale = (
-                    gradient_clip_norm / (torch.linalg.vector_norm(x.grad) + 1e-12)
+                    gradient_clip_norm / (torch.linalg.vector_norm(gradient) + 1e-12)
                 ).clamp(max=1.0)
-                x.grad.mul_(gradient_scale)
+                gradient.mul_(gradient_scale)
             optimiser.step()
             relax.perturb_(x, learning_rate, temp)
             return losses_value, penalties_value, diversity_value
@@ -625,35 +888,94 @@ def anneal(
         optimiser_tensors = tuple(
             value for value in optimiser.state[x].values() if torch.is_tensor(value)
         )
+        initial_beta = (
+            replica_portfolio.beta(
+                float(schedule(start_epoch, num_epochs)),
+                0.0 if num_epochs <= 1 else start_epoch / (num_epochs - 1),
+                device=x.device,
+                dtype=x.dtype,
+            )
+            if replica_portfolio is not None
+            else x.new_tensor(float(schedule(start_epoch, num_epochs)))
+        )
+        graph_gradient = x.grad
+        if graph_gradient is None:
+            raise RuntimeError("CUDA graph capture requires an allocated latent gradient.")
         captured_step = CUDAGraphStep(
             graph_optimizer_step,
             (
-                x.new_tensor(float(schedule(0, num_epochs))),
+                initial_beta,
                 x.new_tensor(float(hp["div_param"])),
             ),
-            state_tensors=(x, x.grad, *optimiser_tensors),
+            state_tensors=(x, graph_gradient, *optimiser_tensors),
         )
 
-    completed_epochs = 0
+    def save_runtime_checkpoint(epoch: int, *, completed: bool) -> None:
+        if checkpoint_path is None:
+            return
+        from qqa.runtime.checkpoint import Checkpoint, save_checkpoint
+
+        optimiser_state = optimiser.state.get(x, {})
+        tensors = {
+            "latent": x.detach(),
+            "best_solution": best_sol.detach(),
+            "best_objective": best_obj_gpu.detach(),
+            "cpu_rng_state": torch.random.get_rng_state(),
+        }
+        if x.device.type == "cuda":
+            tensors["device_rng_state"] = torch.cuda.get_rng_state(x.device)
+        if archive_callback is not None:
+            tensors.update(archive_callback.checkpoint_tensors())
+        for key in ("step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
+            value = optimiser_state.get(key)
+            if torch.is_tensor(value):
+                tensors[f"optimizer_{key}"] = value.detach()
+        save_checkpoint(
+            Checkpoint(
+                model_fingerprint=str(checkpoint_fingerprint),
+                config=checkpoint_config,
+                epoch=epoch,
+                tensors=tensors,
+                metadata={
+                    "completed": completed,
+                    "optimizer_steps": int(getattr(optimiser, "steps", epoch)),
+                    "schedule_state": _schedule_checkpoint_descriptor(schedule)["state"],
+                },
+            ),
+            checkpoint_path,
+        )
+
+    completed_epochs = start_epoch
     deadline_reached = False
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         if time_limit is not None and perf_counter() - runtime_start >= time_limit:
             deadline_reached = True
             break
         update_relaxation = getattr(relax, "set_progress", None)
+        progress = 1.0 if num_epochs <= 1 else epoch / (num_epochs - 1)
         if callable(update_relaxation):
-            update_relaxation(1.0 if num_epochs <= 1 else epoch / (num_epochs - 1))
+            update_relaxation(progress)
         bg = float(schedule(epoch, num_epochs))
+        beta_value: float | torch.Tensor = (
+            replica_portfolio.beta(bg, progress, device=x.device, dtype=x.dtype)
+            if replica_portfolio is not None
+            else bg
+        )
         if captured_step is not None:
             losses, penalties, diversity = captured_step.replay(
-                x.new_tensor(bg),
+                torch.as_tensor(beta_value, device=x.device, dtype=x.dtype),
                 x.new_tensor(float(hp["div_param"])),
             )
         else:
             optimiser.zero_grad(set_to_none=True)
-            losses, penalties, diversity, total = loss_terms(bg, hp["div_param"])
+            losses, penalties, diversity, total = loss_terms(beta_value, hp["div_param"])
             # Backward and AdamW remain full precision outside autocast.
             total.backward()
+            gradient = x.grad
+            if gradient is None:
+                raise RuntimeError("Autograd returned no latent gradient.")
+            gradient.mul_(preconditioner)
+            gradient.mul_(learning_rate_scale)
             if gradient_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
             optimiser.step()
@@ -674,6 +996,20 @@ def anneal(
                 selected = x_disc[min_idx]
                 best_sol = torch.where(improved, selected, best_sol)
                 best_obj_gpu = torch.minimum(best_obj_gpu, min_val)
+            if (
+                replica_portfolio is not None
+                and replica_exchange_interval is not None
+                and epoch < num_epochs - 1
+                and (epoch + 1) % replica_exchange_interval == 0
+            ):
+                exchanged = replica_portfolio.exchange_(
+                    x,
+                    loss_disc,
+                    optimiser,
+                    epoch=epoch,
+                )
+                exchange_count_device.add_(exchanged)
+                exchange_epoch_mask[epoch] = exchanged > 0
         state = CallbackState(
             epoch=epoch,
             num_epochs=num_epochs,
@@ -731,12 +1067,25 @@ def anneal(
                 fraction=restart_fraction,
                 jitter=restart_jitter,
                 learning_rate=learning_rate,
+                archive_centres=(
+                    None
+                    if archive_callback is None
+                    else archive_callback.device_restart_centres(
+                        max(1, math.ceil(sol_size * restart_fraction / 2))
+                    )
+                ),
                 enabled=restart_enabled,
             )
             if restarted:
                 restart_count_device.add_(restart_enabled.to(torch.int64) * restarted)
                 restart_epoch_mask[epoch] = restart_enabled
             restart_reference = best_obj_gpu.detach().clone()
+        if (
+            checkpoint_path is not None
+            and checkpoint_interval is not None
+            and completed_epochs % checkpoint_interval == 0
+        ):
+            save_runtime_checkpoint(completed_epochs, completed=False)
 
     runtime = perf_counter() - runtime_start
     best_obj = (
@@ -746,6 +1095,8 @@ def anneal(
     )
     restart_count = int(restart_count_device.item())
     restart_epochs = restart_epoch_mask.nonzero(as_tuple=False).flatten().cpu().tolist()
+    exchange_count = int(exchange_count_device.item())
+    exchange_epochs = exchange_epoch_mask.nonzero(as_tuple=False).flatten().cpu().tolist()
     hp["restart_count"] = restart_count
     if verbose:
         print("\n" + "=" * 30 + " [FINAL] " + "=" * 30)
@@ -760,6 +1111,8 @@ def anneal(
     if record_history:
         history["restart_epochs"] = restart_epochs
         history["restart_count"] = restart_count
+        history["exchange_epochs"] = exchange_epochs
+        history["exchange_count"] = exchange_count
 
     # Human-readable score.
     # * Single-instance: ``best_obj`` is a Python float and ``score`` is the
@@ -791,6 +1144,9 @@ def anneal(
         score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
         if verbose:
             print(f"  POLISH    : 1-flip improved best_obj -> {best_obj}")
+    if checkpoint_path is not None:
+        best_obj_gpu = torch.as_tensor(best_obj, device=x.device, dtype=loss_disc.dtype)
+        save_runtime_checkpoint(completed_epochs, completed=completed_epochs >= num_epochs)
 
     return AnnealResult(
         best_sol=best_sol,
@@ -815,7 +1171,27 @@ def anneal(
             "deadline_reached": deadline_reached,
             "compile_core": compile_core,
             "cuda_graphs": cuda_graphs,
+            "normalize_loss": normalize_loss,
+            "robust_scaling": robust_scaling,
+            "objective_center": objective_center.detach().cpu().tolist(),
+            "objective_scale": objective_scale.detach().cpu().tolist(),
+            "heterogeneous_replicas": heterogeneous_replicas,
+            "replica_roles": (
+                [] if replica_portfolio is None else replica_portfolio.roles("cpu").tolist()
+            ),
+            "replica_exchange_interval": replica_exchange_interval,
+            "replica_exchange_count": exchange_count,
+            "replica_exchange_events": len(exchange_epochs),
+            "factor_preconditioning": factor_preconditioning,
+            "curvature_aware_beta": curvature_aware_beta,
+            "convexification_beta": convexification_beta,
+            "historical_archive": (
+                None if archive_callback is None else archive_callback.archive.diagnostics()
+            ),
+            "resumed": restored_checkpoint is not None,
+            "checkpoint_written": checkpoint_path is not None,
         },
+        archive=None if archive_callback is None else archive_callback.archive,
     )
 
 

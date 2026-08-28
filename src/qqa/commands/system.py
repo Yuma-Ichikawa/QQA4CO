@@ -15,6 +15,16 @@ from qqa.commands.runtime import resolve_device
 
 
 def command_doctor(args) -> int:
+    if getattr(args, "model", None):
+        import qqa
+
+        report = qqa.doctor(args.model, replicas=args.replicas)
+        if args.json:
+            print(json.dumps(report.to_dict(), indent=2, sort_keys=True))
+        else:
+            print(report.explain())
+        return 0 if report.ready else 2
+
     import torch
 
     from qqa.hybrid import scip_available

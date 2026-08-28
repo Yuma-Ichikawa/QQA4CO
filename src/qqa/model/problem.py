@@ -16,6 +16,7 @@ from qqa.model import (
     PairwisePottsFactor,
     VariableDomain,
 )
+from qqa.model.capabilities import require_qqa_capabilities
 from qqa.problems.base import COProblem
 from qqa.relaxation import (
     BinaryRelaxation,
@@ -25,14 +26,19 @@ from qqa.relaxation import (
 )
 
 
-def _scalar_bound(value: torch.Tensor | float | None, default: float) -> float:
+def _scalar_bound(value: torch.Tensor | float | None, *, block: str, side: str) -> float:
     if value is None:
-        return default
+        raise ValueError(
+            f"Pure QQA requires an explicit finite {side} bound for variable block {block!r}."
+        )
     flat = torch.as_tensor(value).reshape(-1)
     if flat.numel() != 1:
         raise ValueError("QQA execution currently requires uniform bounds per block.")
     if not torch.isfinite(flat).all():
-        return default
+        raise ValueError(
+            f"Pure QQA requires a finite {side} bound for variable block {block!r}; "
+            "no implicit [-10, 10] replacement is performed."
+        )
     return float(flat.item())
 
 
@@ -40,6 +46,7 @@ class ModelIRProblem(COProblem):
     """Evaluate a canonical model with automatic scaled constraint penalties."""
 
     def __init__(self, model: ModelIR, *, dtype: torch.dtype = torch.float32) -> None:
+        require_qqa_capabilities(model)
         self.model_ir = model
         self.name = model.metadata.name
         self.num_nodes = model.num_variables
@@ -83,15 +90,19 @@ class ModelIRProblem(COProblem):
                 if block.domain is VariableDomain.BINARY:
                     variables.append(BinaryVariable(name, block.size))
                 elif block.domain is VariableDomain.INTEGER:
-                    lower = int(math.ceil(_scalar_bound(block.lower, -10.0)))
-                    upper = int(math.floor(_scalar_bound(block.upper, 10.0)))
+                    lower = int(
+                        math.ceil(_scalar_bound(block.lower, block=block.name, side="lower"))
+                    )
+                    upper = int(
+                        math.floor(_scalar_bound(block.upper, block=block.name, side="upper"))
+                    )
                     variables.append(IntegerVariable(name, lower, upper, block.size))
                 elif block.domain is VariableDomain.REAL:
                     variables.append(
                         RealVariable(
                             name,
-                            _scalar_bound(block.lower, -10.0),
-                            _scalar_bound(block.upper, 10.0),
+                            _scalar_bound(block.lower, block=block.name, side="lower"),
+                            _scalar_bound(block.upper, block=block.name, side="upper"),
                             block.size,
                         )
                     )

@@ -192,16 +192,31 @@ def greedy_spin_flip(
     if torch.is_tensor(external):
         field = field + external.to(device=x.device, dtype=x.dtype)
     cap = max_iters if max_iters is not None else 20 * x.numel()
+    visited = {bytes((x > 0).to(torch.uint8).cpu().numpy())}
     for _ in range(cap):
         delta = 2.0 * x * field
         best_i = int(torch.argmin(delta).item())
         if float(delta[best_i].item()) >= -1e-10:
-            break
+            best_i = -1
+            # Zero-energy moves traverse plateaus without worsening the
+            # incumbent. This removes domain-wall traps in ferromagnets while
+            # the visited set prevents cycles on general Ising models.
+            neutral = torch.where(torch.abs(delta) <= 1e-10)[0]
+            for candidate_index in neutral.tolist():
+                candidate = x.clone()
+                candidate[candidate_index] = -candidate[candidate_index]
+                key = bytes((candidate > 0).to(torch.uint8).cpu().numpy())
+                if key not in visited:
+                    best_i = candidate_index
+                    break
+            if best_i < 0:
+                break
         old_spin = x[best_i].clone()
         x[best_i] = -old_spin
         field = field - 2.0 * old_spin * symmetric[:, best_i]
         # The diagonal never contributes to Ising energy because s_i²=1.
         field[best_i] = field[best_i] + 2.0 * old_spin * diagonal[best_i]
+        visited.add(bytes((x > 0).to(torch.uint8).cpu().numpy()))
     return x.to(device=spins.device, dtype=spins.dtype)
 
 

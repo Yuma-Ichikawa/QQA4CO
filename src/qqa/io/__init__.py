@@ -7,6 +7,7 @@ from qqa.io.formats import (
     load_opb,
     load_portable_model,
     load_qubo_text,
+    model_ir_from_dict,
 )
 from qqa.io.mps import load_mps
 from qqa.io.qplib import load_qplib, qplib_available
@@ -20,5 +21,6 @@ __all__ = [
     "load_portable_model",
     "load_qplib",
     "load_qubo_text",
+    "model_ir_from_dict",
     "qplib_available",
 ]

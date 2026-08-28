@@ -6,6 +6,59 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-28
+
+### Mathematical and semantic foundations
+
+- Normalize stable QQA dynamics across replicas and relaxed dimensions with
+  robust median/MAD objective scaling while retaining raw original-space
+  objectives; correct the negative-BG convexity and CRA/PI-GNN explanations.
+- Add machine-readable factor capabilities, reject non-differentiable factors
+  from pure QQA, remove guessed finite-bound fallbacks, and represent
+  unevaluated feasibility as `unknown` rather than success.
+- Standardize schema-v2 solver events, checksum-safe certificate metadata,
+  CUDA-event timing, and trusted-local-only Python/pickle execution.
+
+### Heterogeneous primal and GPU runtime
+
+- Add heterogeneous replica roles, per-replica beta/learning-rate schedules,
+  parallel-tempering exchange, curvature-aware c=2 convexification,
+  factor-aware preconditioning, residual-balanced augmented Lagrangians,
+  archive-centred restarts, multi-source warm states, and a historical
+  quality/diversity archive with lineage.
+- Add a device-resident typed factor graph for linear, quadratic, cardinality,
+  and clause factors; segmented reductions; GPU exact-k, one-hot, assignment,
+  k-flip/tabu, and 2-opt operations; bounded kernel autotuning and roofline
+  telemetry; and no-host-sync event/archive callbacks.
+
+### Primal-dual and exact integration
+
+- Add sparse CPU/CUDA PDHG with primal, dual, reduced-cost, KKT, ray-candidate,
+  and finite-only bound reporting, plus dual-simplex LP crossover and portable
+  basis statuses.
+- Add a versioned SCIP/QQA feedback bus for LP vectors, reduced costs,
+  fractionalities, branch scores, local bounds, cuts, conflicts/no-goods, and
+  incumbents; extend general QUBO probing/persistency and proof-aware result
+  adaptation without treating heuristic evidence as a certificate.
+- Preserve disposable-process isolation for native exact backends and expose
+  bounded CP-SAT scheduling and PySAT SAT/MaxSAT runtimes.
+
+### Broader models and product runtime
+
+- Add decomposition/separator detection, generic Benders, column generation,
+  progressive hedging, McCormick/spatial branch-and-bound, Wasserstein,
+  phi-divergence and moment DRO, scenario reduction, SAA intervals, and held-
+  out validation.
+- Add confidence/OOD-gated learned planning, direct QQA black-box acquisition,
+  Model Doctor, duration/goal one-call solving, Optimization Cockpit, Decision
+  Explorer, domain templates, and an audited MIPLIB/QPLIB snapshot registry.
+- Add atomic pickle-free checkpoints with model/config checks, optimizer and
+  RNG state, adaptive schedule state, population/incumbent/archive restoration;
+  checksum-protected result packages; and a bounded schema-only FastAPI job
+  service with optional bearer authentication.
+- Add the typed primal-dual runtime guide and a credential-free Colab notebook
+  covering diagnosis, events, visualization, resume, and package verification.
+
 ## [0.8.1] - 2026-08-27
 
 ### Reliability and portability

@@ -42,6 +42,7 @@ python -m pip install --upgrade "qqa[gui]"       # Streamlit studio
 python -m pip install --upgrade "qqa[benchmark]" # MIPLIB/QPLIB + SCIP
 python -m pip install --upgrade "qqa[highs]"     # HiGHS LP/MIP adapter
 python -m pip install --upgrade "qqa[cpsat]"     # OR-Tools CP-SAT adapter
+python -m pip install --upgrade "qqa[service]"   # schema-only FastAPI job service
 python -m pip install --upgrade "qqa[pignn]"     # experimental CRA/CPRA GNN
 python -m pip install --upgrade "qqa[triton]"    # optional fused CUDA kernels
 python -m pip install --upgrade "qqa[dev]"       # tests, lint, typing, docs
@@ -65,7 +66,8 @@ problem = qqa.MaximumIndependentSet(graph, penalty=2.0)
 
 result = qqa.solve(
     problem,
-    profile="balanced",
+    goal="best",
+    budget="30s",
     device="auto",
     seed=0,
 )
@@ -92,11 +94,19 @@ Legacy research calls such as `qqa.anneal`, `qqa.simulated_annealing`,
 `qqa.population_annealing`, and `qqa.discrete_langevin` remain available.
 New integrations should prefer `solve`, `plan`, and `inspect`.
 
+The one-call goal can be `best`, `feasible`, `prove`, `diverse`, or `pareto`.
+Durations accept `ms`, `s`, `m`, and `h`. `prove` enables an exact route but
+still returns a proof status only when the backend certifies the original
+model.
+
 ## Inspect and plan before solving
 
 ```python
 inspection = qqa.inspect(problem)
 print(inspection.to_dict())
+
+doctor = qqa.doctor(problem, replicas=128)
+print(doctor.explain())
 
 plan = qqa.plan(problem, profile="quality", device="cuda")
 print(plan.explain())
@@ -105,6 +115,10 @@ print(plan.explain())
 The planner reports domains, sparse factors, connected components, selected
 engine, refinements, certification route, VRAM estimate, replica count, and the
 reason for each choice. It does not execute the solver.
+
+The Model Doctor additionally checks bounds, factor capabilities, scaling,
+curvature, presolve contradictions, decomposition, and route/proof support.
+Missing real or integer bounds are never silently replaced by a guessed box.
 
 ## Profiles
 
@@ -122,6 +136,36 @@ Additional profiles:
 | `certify` | QQA incumbent generation followed by an optional exact backend |
 | `diverse` | retain a larger candidate population |
 | `pareto` | multi-objective workflows |
+
+## Checkpoint, events, and portable packages
+
+Long QQA runs can be resumed without pickle payloads:
+
+```python
+qqa.solve(
+    problem,
+    budget="10m",
+    checkpoint_path="run.qqacp",
+    checkpoint_interval=100,
+)
+result = qqa.solve(problem, budget="20m", resume_from="run.qqacp")
+```
+
+The atomic checkpoint verifies model/config fingerprints, tensor checksums,
+optimizer and RNG state, schedule state, incumbent, population, and historical
+archive. Paths stay outside result provenance. `SolveResult.events` uses the
+versioned schema-v2 stream, and `qqa.runtime.export_result_package` writes a
+checksum-protected, environment-neutral exchange bundle.
+
+Python source and pickle inputs are trusted-local features and are denied by
+default. Use `trusted=True` in Python, `--allow-unsafe-python` in the CLI, or
+`QQA_ALLOW_CUSTOM=1` for a single-user local GUI. Do not enable custom code in
+a shared deployment.
+
+The Colab-ready
+[`13_typed_primal_dual_runtime.ipynb`](examples/13_typed_primal_dual_runtime.ipynb)
+walks through diagnosis, solve events, the cockpit, checkpoint/resume, and a
+verified package without credentials or environment-specific paths.
 
 Advanced configuration is strict. Unknown or misspelled options raise an error:
 

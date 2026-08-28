@@ -53,10 +53,19 @@ def build_parser() -> argparse.ArgumentParser:
     plan_command.add_argument("model", help="Path to a supported model file.")
     plan_command.add_argument(
         "--profile",
-        choices=["fast", "balanced", "quality", "certify", "diverse", "pareto", "reproducible"],
+        choices=[
+            "fast",
+            "balanced",
+            "quality",
+            "certify",
+            "prove",
+            "diverse",
+            "pareto",
+            "reproducible",
+        ],
         default="balanced",
     )
-    plan_command.add_argument("--budget", type=float, default=None)
+    plan_command.add_argument("--budget", default=None, help="Duration such as 30s, 2m, or 0.5h.")
     plan_command.add_argument("--device", default="auto")
 
     solve = sub.add_parser("solve", help="Solve a single problem.")
@@ -70,11 +79,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     solve.add_argument(
         "--profile",
-        choices=["fast", "balanced", "quality", "certify", "diverse", "pareto", "reproducible"],
+        choices=[
+            "fast",
+            "balanced",
+            "quality",
+            "certify",
+            "prove",
+            "diverse",
+            "pareto",
+            "reproducible",
+        ],
         default="balanced",
     )
     solve.add_argument(
-        "--budget", type=float, default=None, help="Total wall-clock budget in seconds."
+        "--budget", default=None, help="Total wall-clock duration, for example 30s or 2m."
     )
     solve.add_argument(
         "--problem",
@@ -117,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
             "or a `make_problem()` factory. Lets you plug in arbitrary "
             "user-defined problems."
         ),
+    )
+    solve.add_argument(
+        "--allow-unsafe-python",
+        action="store_true",
+        help="Explicitly trust and execute a local Python problem file or pickle graph.",
     )
     solve.add_argument("--graph-file", type=str, default=None, help="Pickled NetworkX graph path.")
     solve.add_argument(
@@ -665,7 +688,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     example.add_argument("--quiet", action="store_true")
 
-    doctor = sub.add_parser("doctor", help="Check devices and optional solver/UI capabilities.")
+    doctor = sub.add_parser("doctor", help="Diagnose a model or the local runtime.")
+    doctor.add_argument(
+        "model",
+        nargs="?",
+        help="Optional supported model file; omit it for local runtime diagnostics.",
+    )
+    doctor.add_argument("--replicas", type=int, default=128)
     doctor.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     gui = sub.add_parser("gui", help="Launch the Streamlit GUI.")
@@ -691,7 +720,10 @@ def _build_problem(args: argparse.Namespace):
     if getattr(args, "problem_file", None):
         if args.problem:
             raise SystemExit("[qqa solve] pass either --problem or --problem-file, not both.")
-        return qqa.load_problem_from_file(args.problem_file)
+        return qqa.load_problem_from_file(
+            args.problem_file,
+            trusted=bool(args.allow_unsafe_python),
+        )
 
     kind = args.problem
     if kind is None:
@@ -703,6 +735,11 @@ def _build_problem(args: argparse.Namespace):
             g_path = Path(args.graph_file).expanduser().resolve()
             suffix = g_path.suffix.lower()
             if suffix in {".gpickle", ".pkl", ".pickle"}:
+                if not args.allow_unsafe_python:
+                    raise PermissionError(
+                        "Pickle graph loading requires --allow-unsafe-python; prefer GraphML "
+                        "or an edge list for untrusted data."
+                    )
                 with open(g_path, "rb") as fh:
                     g = pickle.load(fh)
             elif suffix in {".graphml", ".xml"}:

@@ -458,6 +458,87 @@ def _project_latent(
     return problem.space.encode(physical), physical
 
 
+def _surrogate_acquisition(
+    latent: torch.Tensor,
+    objective_model,
+    violation_model,
+    *,
+    acquisition: str,
+    exploration: float,
+    incumbent_value: torch.Tensor,
+    enough_feasible: bool,
+    constraint_weight: float,
+) -> torch.Tensor:
+    mean, std = objective_model.predict(latent)
+    values = (
+        mean - exploration * std
+        if acquisition == "lcb"
+        else -_expected_improvement(mean, std, incumbent_value)
+    )
+    if violation_model is not None:
+        violation_mean, violation_std = violation_model.predict(latent)
+        if enough_feasible:
+            probability_feasible = _normal_cdf(
+                -violation_mean / violation_std.clamp_min(1e-12)
+            ).clamp_min(1e-9)
+            values = values - constraint_weight * probability_feasible.log().sum(dim=1)
+        else:
+            values = violation_mean.sum(dim=1) - exploration * (
+                violation_std.square().sum(dim=1).sqrt()
+            )
+    return values
+
+
+def _direct_qqa_acquisition(
+    problem: BlackBoxProblem,
+    acquisition_function,
+    *,
+    centres: torch.Tensor,
+    radius: float,
+    replicas: int,
+    epochs: int,
+    seed: int,
+) -> torch.Tensor:
+    """Optimise a differentiable surrogate acquisition in the original latent space."""
+    generator = torch.Generator(device=centres.device)
+    generator.manual_seed(seed)
+    latent = torch.rand(
+        (replicas, problem.space.dimension),
+        generator=generator,
+        device=centres.device,
+        dtype=centres.dtype,
+    )
+    centre_rows = min(len(centres), replicas)
+    latent[:centre_rows] = centres[:centre_rows]
+    latent.requires_grad_(True)
+    optimizer = torch.optim.AdamW([latent], lr=0.04)
+    has_discrete = any(kind != "real" for kind in problem.space.kinds)
+    discrete = torch.tensor(
+        [kind != "real" for kind in problem.space.kinds],
+        device=latent.device,
+        dtype=torch.bool,
+    )
+    for epoch in range(epochs):
+        optimizer.zero_grad(set_to_none=True)
+        values = acquisition_function(latent)
+        progress = 1.0 if epochs <= 1 else epoch / (epochs - 1)
+        beta = -0.25 * (1 - progress) + 0.25 * progress
+        binarisation = (
+            (1 - (1 - 2 * latent[:, discrete]).square()).mean()
+            if has_discrete
+            else latent.new_zeros(())
+        )
+        diversity = latent.std(dim=0, correction=0).mean() if replicas > 1 else latent.new_zeros(())
+        trust = torch.cdist(latent, centres).amin(dim=1).sub(radius).clamp_min(0).square().mean()
+        loss = values.mean() + beta * binarisation - 0.01 * diversity + 10 * trust
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_([latent], 10.0)
+        optimizer.step()
+        with torch.no_grad():
+            latent.clamp_(0, 1)
+    return latent.detach()
+
+
 def blackbox_optimize(
     problem: BlackBoxProblem,
     *,
@@ -512,8 +593,8 @@ def blackbox_optimize(
         raise ValueError("candidate_pool must be an integer >= max(32, batch_size).")
     if acquisition not in {"expected_improvement", "lcb"}:
         raise ValueError("acquisition must be 'expected_improvement' or 'lcb'.")
-    if acquisition_optimizer not in {"pool", "qqa"}:
-        raise ValueError("acquisition_optimizer must be 'pool' or 'qqa'.")
+    if acquisition_optimizer not in {"pool", "qqa", "direct-qqa"}:
+        raise ValueError("acquisition_optimizer must be 'pool', 'qqa', or 'direct-qqa'.")
     for name, integer_value in (
         ("qqa_acquisition_epochs", qqa_acquisition_epochs),
         ("qqa_acquisition_replicas", qqa_acquisition_replicas),
@@ -746,41 +827,59 @@ def blackbox_optimize(
             break
         pool_latent = pool_latent[unseen_indices]
         pool_physical = pool_physical[unseen_indices]
-        mean, std = objective_model.predict(pool_latent)
-        if acquisition == "lcb":
-            acquisition_values = mean - exploration * std
-        else:
-            if feasible_before:
-                incumbent_value = sign * y_obs[best_before].to(
-                    device=compute_device,
-                    dtype=dtype,
-                )
-            else:
-                incumbent_value = model_y.amin()
-            acquisition_values = -_expected_improvement(mean, std, incumbent_value)
-        if violation_model is not None:
-            violation_mean, violation_std = violation_model.predict(pool_latent)
-            if enough_feasible:
-                probability_feasible = _normal_cdf(
-                    -violation_mean / violation_std.clamp_min(1e-12)
-                ).clamp_min(1e-9)
-                # Under the surrogate's conditional-independence
-                # approximation, log joint feasibility is the sum of the
-                # per-constraint log probabilities. Retaining each
-                # constraint separately avoids a low aggregate violation
-                # hiding one systematically difficult engineering limit.
-                acquisition_values = (
-                    acquisition_values - constraint_weight * probability_feasible.log().sum(dim=1)
-                )
-            else:
-                # Build a minimally useful feasible design before allowing the
-                # objective's units to dominate a single lucky feasible point.
-                acquisition_values = violation_mean.sum(dim=1) - exploration * (
-                    violation_std.square().sum(dim=1).sqrt()
-                )
+        incumbent_value = (
+            sign * y_obs[best_before].to(device=compute_device, dtype=dtype)
+            if feasible_before
+            else model_y.amin()
+        )
+
+        def acquisition_function(
+            points: torch.Tensor,
+            objective_model=objective_model,
+            violation_model=violation_model,
+            incumbent_value=incumbent_value,
+            enough_feasible=enough_feasible,
+        ) -> torch.Tensor:
+            return _surrogate_acquisition(
+                points,
+                objective_model,
+                violation_model,
+                acquisition=acquisition,
+                exploration=exploration,
+                incumbent_value=incumbent_value,
+                enough_feasible=enough_feasible,
+                constraint_weight=constraint_weight,
+            )
+
+        acquisition_values = acquisition_function(pool_latent)
 
         take = min(batch_size, budget - len(y_obs), len(pool_latent))
-        if acquisition_optimizer == "qqa" and take > 1:
+        if acquisition_optimizer == "direct-qqa":
+            direct_latent = _direct_qqa_acquisition(
+                problem,
+                acquisition_function,
+                centres=centres,
+                radius=float(radii.max().item()),
+                replicas=max(qqa_acquisition_replicas, take),
+                epochs=qqa_acquisition_epochs,
+                seed=seed + iteration,
+            )
+            direct_latent, direct_physical = _project_latent(problem, direct_latent)
+            direct_unseen = _unseen_indices(
+                p_obs.to(device=direct_physical.device, dtype=direct_physical.dtype),
+                direct_physical,
+            )
+            direct_latent = direct_latent[direct_unseen]
+            direct_physical = direct_physical[direct_unseen]
+            if len(direct_latent):
+                order = torch.argsort(acquisition_function(direct_latent))[:take]
+                new_latent = direct_latent[order]
+                new_physical = direct_physical[order]
+            else:
+                order = torch.argsort(acquisition_values)[:take]
+                new_latent = pool_latent[order]
+                new_physical = pool_physical[order]
+        elif acquisition_optimizer == "qqa" and take > 1:
             selected = _qqa_acquisition_batch(
                 pool_latent,
                 acquisition_values,
@@ -803,8 +902,9 @@ def blackbox_optimize(
                 )
                 working[selected] = float("inf")
 
-        new_latent = pool_latent[selected]
-        new_physical = pool_physical[selected]
+        if acquisition_optimizer != "direct-qqa":
+            new_latent = pool_latent[selected]
+            new_physical = pool_physical[selected]
         new_y, new_v, _ = _evaluate_cached(
             problem,
             new_physical,

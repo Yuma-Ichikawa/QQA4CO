@@ -330,10 +330,18 @@ class TableFactor:
 class BlackBoxFactor:
     function: Callable[[torch.Tensor], torch.Tensor]
     name: str = "black-box"
+    differentiable: bool = True
 
     def __post_init__(self) -> None:
         if not callable(self.function):
             raise TypeError("BlackBoxFactor.function must be callable.")
+        if not isinstance(self.differentiable, bool):
+            raise TypeError("BlackBoxFactor.differentiable must be boolean.")
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        """Explicit execution declaration; black boxes are never proof-safe."""
+        return ("evaluate", "differentiable") if self.differentiable else ("evaluate",)
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         result = torch.as_tensor(self.function(values), device=values.device, dtype=values.dtype)

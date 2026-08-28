@@ -122,6 +122,8 @@ def user_problem_from_source(
     name: str = "inline",
     device: str | torch.device = "cpu",
     extra_globals: dict | None = None,
+    *,
+    trusted: bool = False,
 ) -> UserProblem:
     """Build a :class:`UserProblem` by ``exec``-ing a Python snippet.
 
@@ -130,11 +132,16 @@ def user_problem_from_source(
     namespace has ``torch``, ``np`` (numpy), and any ``extra_globals`` entries
     pre-loaded, and the defined ``loss_fn`` is closed over that namespace.
 
-    .. warning::
-       This executes arbitrary Python code. Only use with trusted input
-       (e.g. the local GUI or CLI on your own machine).
+    ``trusted=True`` is mandatory because this executes arbitrary Python.
+    Remote services and shared dashboards must keep it disabled.
     """
     import numpy as np
+
+    if trusted is not True:
+        raise PermissionError(
+            "Python source execution is disabled by default; pass trusted=True only for "
+            "code you control on a local machine."
+        )
 
     ns: dict = {"torch": torch, "np": np}
     if extra_globals:
@@ -152,13 +159,18 @@ def user_problem_from_source(
     )
 
 
-def load_problem_from_file(path: str | os.PathLike[str]) -> COProblem:
+def load_problem_from_file(path: str | os.PathLike[str], *, trusted: bool = False) -> COProblem:
     """Load a user-provided problem from a Python file.
 
     The file must either define a top-level variable ``problem`` that is a
     :class:`COProblem` instance, or a callable ``make_problem()`` / ``build()``
     that returns one.
     """
+    if trusted is not True:
+        raise PermissionError(
+            "Python problem files are disabled by default; pass trusted=True only for "
+            "a local file you control."
+        )
     import importlib.util  # noqa: PLC0415
 
     p = os.fspath(path)

@@ -566,6 +566,8 @@ def build_problem(cfg: dict) -> Any:
     _validate_problem_extra(kind, extra)
 
     if kind == "custom":
+        if os.getenv("QQA_ALLOW_CUSTOM", "0") != "1":
+            raise PermissionError("Custom Python is disabled on this deployment.")
         source = extra.get("source", DEFAULT_CUSTOM_SNIPPET)
         num_vars = int(extra.get("num_vars", 32))
         variable_kind = extra.get("variable_kind", "spin")
@@ -577,6 +579,7 @@ def build_problem(cfg: dict) -> Any:
             num_category=num_category,
             name=extra.get("name", "custom"),
             device=device,
+            trusted=True,
         )
 
     size = int(cfg["size"])

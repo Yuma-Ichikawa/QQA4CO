@@ -556,6 +556,144 @@ def nb12():
     )
 
 
+def nb13():
+    """Deployable typed-runtime walkthrough without credentials or local paths."""
+    body = [
+        (
+            "md",
+            "## What this notebook verifies\n\n"
+            "This walkthrough exercises the strict typed runtime: model diagnosis, "
+            "goal/budget solving, tri-state feasibility, schema-v2 events, the "
+            "optimization cockpit, pickle-free checkpoint/resume, and a verified "
+            "result package. It needs no API key and writes only to a temporary "
+            "directory that is deleted automatically.",
+        ),
+        (
+            "code",
+            "import tempfile\n"
+            "from pathlib import Path\n"
+            "\n"
+            "import networkx as nx\n"
+            "\n"
+            "import qqa\n"
+            "from qqa.runtime import (\n"
+            "    export_result_package,\n"
+            "    fingerprint_problem,\n"
+            "    verify_result_package,\n"
+            ")\n"
+            "from qqa.visuals import decision_explorer, plot_optimization_cockpit\n"
+            "\n"
+            "qqa.fix_seed(0)\n"
+            'print("QQA version:", qqa.__version__)',
+        ),
+        (
+            "md",
+            "## 1. Build and diagnose a typed model\n\n"
+            "The facility-location template preserves assignment constraints. The "
+            "doctor checks bounds, capabilities, scaling, decomposition, routes, "
+            "and estimated resources without running a solver.",
+        ),
+        (
+            "code",
+            "model = qqa.build_template(\n"
+            '    "facility-location",\n'
+            "    opening_costs=[4.0, 5.0, 3.0],\n"
+            "    assignment_costs=[[1.0, 4.0, 2.0], [3.0, 1.0, 2.0]],\n"
+            ")\n"
+            "doctor = qqa.doctor(model, replicas=32)\n"
+            "print(doctor.explain())\n"
+            'doctor.to_dict()["solver_routes"]',
+        ),
+        (
+            "md",
+            "## 2. Solve by outcome and duration\n\n"
+            "Unknown feasibility is never displayed as feasible. Exact proof is "
+            'disabled in this short CPU example; use `goal="prove"` with a '
+            "compatible exact extra when a certificate is required.",
+        ),
+        (
+            "code",
+            "result = qqa.solve(\n"
+            "    model,\n"
+            '    goal="feasible",\n'
+            '    budget="3s",\n'
+            '    device="cpu",\n'
+            "    replicas=32,\n"
+            "    epochs=80,\n"
+            '    exact_backend="none",\n'
+            "    seed=0,\n"
+            ")\n"
+            "{\n"
+            '    "status": result.status.value,\n'
+            '    "feasibility": result.violations.status.value,\n'
+            '    "objective": result.best_obj,\n'
+            '    "events": len(result.events),\n'
+            "}",
+        ),
+        (
+            "md",
+            "## 3. Inspect dynamics and decisions\n\n"
+            "The cockpit uses the same result/event contract as other backends. The "
+            "decision table reports archive stability and binary counterfactuals.",
+        ),
+        (
+            "code",
+            'figure, _ = plot_optimization_cockpit(result, backend="matplotlib")\n'
+            "figure.show()\n"
+            "decision_explorer(result, model)[:5]",
+        ),
+        (
+            "md",
+            "## 4. Resume and verify an exchange package\n\n"
+            "Checkpoints contain JSON plus checksum-protected NumPy tensors—never "
+            "pickle. The model/config fingerprint, RNG, optimizer, schedule, "
+            "population, incumbent, and archive are validated before continuation.",
+        ),
+        (
+            "code",
+            "problem = qqa.MaxCut(nx.cycle_graph(8))\n"
+            "with tempfile.TemporaryDirectory() as temporary:\n"
+            "    root = Path(temporary)\n"
+            '    checkpoint = root / "state.qqacp"\n'
+            '    package = root / "result.qqapkg"\n'
+            "    qqa.solve(\n"
+            '        problem, profile="fast", replicas=16, epochs=4,\n'
+            '        exact_backend="none", checkpoint_path=checkpoint,\n'
+            "        checkpoint_interval=2, seed=7,\n"
+            "    )\n"
+            "    resumed = qqa.solve(\n"
+            '        problem, profile="fast", replicas=16, epochs=8,\n'
+            '        exact_backend="none", resume_from=checkpoint, seed=7,\n'
+            "    )\n"
+            "    export_result_package(\n"
+            "        resumed, package,\n"
+            '        model_summary={"name": "cycle-maxcut", "variables": 8},\n'
+            "        model_fingerprint=fingerprint_problem(problem),\n"
+            "    )\n"
+            "    manifest = verify_result_package(package)\n"
+            '    print("resumed epochs:", resumed.diagnostics["completed_epochs"])\n'
+            '    print("verified package schema:", manifest.schema_version)',
+        ),
+        (
+            "md",
+            "## Production checklist\n\n"
+            "- Use typed JSON ModelIR for untrusted/remote jobs.\n"
+            "- Keep Python source and pickle disabled on shared services.\n"
+            "- Record the package checksum, benchmark snapshot hash, seed, budget, "
+            "and exact backend.\n"
+            "- Treat `solver-reported-*` certificate metadata as a solver claim "
+            "unless an independent verifier and proof digest are present.\n"
+            "- Validate the returned solution in original space and high precision.",
+        ),
+    ]
+    return make_nb(
+        "QQA 13 – Typed primal–dual production runtime",
+        "Diagnose, solve, visualize, resume, and package a typed optimization run.",
+        body,
+        nb_filename="13_typed_primal_dual_runtime.ipynb",
+    )
+
+
 def nb00():
     """One-click Google Colab quickstart: every problem, one short cell each."""
     body = [
@@ -705,8 +843,12 @@ def _apply_ruff_format() -> None:
     """
     import shutil
     import subprocess
+    import sys
 
     ruff = shutil.which("ruff")
+    if ruff is None:
+        sibling = Path(sys.executable).with_name("ruff")
+        ruff = str(sibling) if sibling.is_file() else None
     if ruff is None:
         return  # fall back silently — ruff is only a dev dep
     subprocess.run([ruff, "format", "--quiet", str(EXAMPLES)], check=False)
@@ -724,6 +866,7 @@ def main() -> None:
         "07_hopfield_memory.ipynb": nb07,
         "08_parallel_benchmark.ipynb": nb08,
         "12_natural_language_optimization_colab.ipynb": nb12,
+        "13_typed_primal_dual_runtime.ipynb": nb13,
     }
     for name, fn in builders.items():
         save(EXAMPLES / name, fn())

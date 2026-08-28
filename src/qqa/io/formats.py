@@ -293,9 +293,8 @@ def _factor_from_json(record: dict[str, Any]):
     raise ValueError(f"Unsupported JSON ModelIR factor type {kind!r}.")
 
 
-def load_model_ir_json(path: str | Path) -> ModelIR:
-    source = Path(path)
-    payload = json.loads(source.read_text(encoding="utf-8"))
+def model_ir_from_dict(payload: dict[str, Any], *, default_name: str = "model") -> ModelIR:
+    """Validate a portable JSON-shaped mapping without executing user code."""
     if not isinstance(payload, dict):
         raise TypeError("JSON ModelIR root must be an object.")
     variable_records = payload.get("variables")
@@ -363,12 +362,18 @@ def load_model_ir_json(path: str | Path) -> ModelIR:
         constraints,
         payload.get("sense", "minimize"),
         ModelMetadata(
-            metadata.get("name", source.stem),
+            metadata.get("name", default_name),
             metadata.get("problem_class"),
             metadata.get("source_format", "json-model-ir"),
             metadata.get("attributes", {}),
         ),
     )
+
+
+def load_model_ir_json(path: str | Path) -> ModelIR:
+    source = Path(path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    return model_ir_from_dict(payload, default_name=source.stem)
 
 
 def load_portable_model(path: str | Path):
@@ -398,4 +403,5 @@ __all__ = [
     "load_opb",
     "load_portable_model",
     "load_qubo_text",
+    "model_ir_from_dict",
 ]

@@ -166,7 +166,7 @@ J.fill_diagonal_(0.0)
 def loss_fn(s):
     return -0.5 * torch.einsum("bi,ij,bj->b", s, J, s)
 """
-    problem = qqa.user_problem_from_source(src, num_vars=16, variable_kind="spin")
+    problem = qqa.user_problem_from_source(src, num_vars=16, variable_kind="spin", trusted=True)
     result = qqa.anneal(problem, sol_size=32, num_epochs=200, verbose=False)
     assert np.isfinite(result.best_obj)
 

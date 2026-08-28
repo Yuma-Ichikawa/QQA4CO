@@ -364,6 +364,7 @@ problem = qqa.MixedProblem(
         "solve",
         "--problem-file",
         str(model),
+        "--allow-unsafe-python",
         "--sol-size",
         "16",
         "--epochs",

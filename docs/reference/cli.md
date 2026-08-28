@@ -15,7 +15,7 @@ page is the explanation of how the flags interact.
 
 ```bash
 qqa version
-# 0.8.1
+# 0.9.0
 ```
 
 Prints the value of `qqa.__version__`, which is single-sourced from
@@ -26,12 +26,18 @@ installed version inside a Docker container or a CI job.
 
 ```bash
 qqa inspect model.mps
-qqa plan model.mps --profile quality --budget 60 --device auto
+qqa plan model.mps --profile quality --budget 60s --device auto
+qqa doctor model.mps --replicas 128 --json
 ```
 
 `inspect` emits solver-independent structure. `plan` previews the selected
 QQA route, repair, optional exact backend, replica count, memory estimate, and
 fallbacks without spending the solve budget.
+
+`doctor MODEL` additionally checks bounds, factor capabilities, scaling,
+curvature, contradictions, decomposition, proof routes, and resource
+estimates. `qqa doctor` without a model retains the local installation/device
+diagnostic.
 
 ## `qqa solve`
 
@@ -43,11 +49,12 @@ the legacy catalogue flags remain available for compatibility.
 | Flag | Default | What it does |
 |---|---|---|
 | positional `MODEL` | (none) | MPS, LP, QPLIB, JSON ModelIR, OPB, CNF/WCNF, QUBO, or Ising file |
-| `--profile` | `balanced` | `fast`, `balanced`, `quality`, `certify`, `diverse`, `pareto`, or `reproducible` |
-| `--budget` | (none) | Total wall-clock budget in seconds |
+| `--profile` | `balanced` | `fast`, `balanced`, `quality`, `certify`/`prove`, `diverse`, `pareto`, or `reproducible` |
+| `--budget` | (none) | Total wall-clock duration such as `250ms`, `30s`, `2m`, or `0.5h` |
 | `--problem` | (none) | Built-in catalogue problem used when positional `MODEL` is omitted |
-| `--problem-file` | (none) | Path to a Python file defining `problem` or `make_problem()` — replaces `--problem` |
-| `--graph-file` | (none) | Pickled / GraphML / edgelist NetworkX graph (graph problems only) |
+| `--problem-file` | (none) | Trusted local Python file defining `problem` or `make_problem()`; requires `--allow-unsafe-python` |
+| `--graph-file` | (none) | GraphML / edgelist NetworkX graph; pickle additionally requires `--allow-unsafe-python` |
+| `--allow-unsafe-python` | off | Explicitly permit local Python execution or pickle deserialization; never use for untrusted input |
 | `--size` | `50` | Size for synthetic problem generators |
 | `--sol-size` | profile / `100` | Parallel population size; positional models use the profile, while the legacy catalogue defaults to 100 |
 | `--epochs` | profile / `1000` | Solver steps; positional models use the profile, while the legacy catalogue defaults to 1000 |
@@ -120,27 +127,27 @@ and `qqa.pignn.train_cpra_pi_gnn` respectively. Pass an explicit
 ```bash
 # Inspect and solve a portable model through the stable API.
 qqa inspect model.mps
-qqa plan model.mps --profile balanced --budget 60
-qqa solve model.mps --profile balanced --budget 60
+qqa plan model.mps --profile balanced --budget 60s
+qqa solve model.mps --profile balanced --budget 60s
 
 # Explicit QQA warm start followed by certification.
-qqa solve model.mps --profile certify --exact-backend scip --budget 60
+qqa solve model.mps --profile certify --exact-backend scip --budget 60s
 
 # Quickest check that the install works.
 qqa solve --problem sk --size 60 --sol-size 64 --epochs 500
 
 # A real MIS solve on a saved graph.
-qqa solve --problem mis --graph-file data/my_graph.gpickle \
+qqa solve --problem mis --graph-file data/my_graph.graphml \
           --sol-size 256 --epochs 2000 --device cuda \
           --output results/mis.pkl
 
 # CRA-PI-GNN comparison run on the same graph.
-qqa solve --problem mis --graph-file data/my_graph.gpickle \
+qqa solve --problem mis --graph-file data/my_graph.graphml \
           --backend pignn --epochs 5000 --device cuda \
           --output results/mis_cra.pkl
 
 # CPRA portfolio: four MIS solutions at different penalty levels.
-qqa solve --problem mis --graph-file data/my_graph.gpickle \
+qqa solve --problem mis --graph-file data/my_graph.graphml \
           --backend cpra --cpra-num-replicas 4 \
           --cpra-penalty-levels 1.0,1.5,2.0,2.5 \
           --epochs 5000 --device cuda --output results/mis_cpra.pkl
@@ -150,7 +157,8 @@ qqa solve --problem maxcut --size 80 --backend scip --device cuda \
           --epochs 1500 --scip-time-limit 120 --scip-warm-starts 64
 
 # A user-defined problem.
-qqa solve --problem-file my_problem.py --sol-size 128 --epochs 1500 \
+qqa solve --problem-file my_problem.py --allow-unsafe-python \
+          --sol-size 128 --epochs 1500 \
           --report results/model-report.html
 ```
 

@@ -31,8 +31,12 @@ the symbol is different but the role is identical).
 
 **Why this penalty?** The function \\(\\Phi(p) = \\sum_i 1 - (1 -
 2p_i)^c\\) is concave on `[0, 1]` for even `c` and minimised at the
-binary corners `{0, 1}^N`. With negative `β` the *combined* loss is
-convex, so AdamW finds a unique soft minimum; as `β` grows the binary
+binary corners `{0, 1}^N`. A negative `β` makes the penalty contribution
+convex. It does **not** by itself make the combined objective convex or its
+minimum unique. For `c = 2`, the penalty adds the diagonal curvature
+`8 |β| I`; global convexity follows only when this dominates a valid lower
+bound on the objective Hessian. QQA uses this soft, curvature-controlled
+phase for exploration; as `β` grows the binary
 corners become attractors and the soft solution snaps onto a discrete
 solution. This is the "continuous relaxation annealing" trick that
 unifies all three solvers — see `src/qqa/relaxation.py:69-72` for the
@@ -48,8 +52,8 @@ Key ideas:
 
 1. **Lift the discrete optimisation to a continuous one** with the
    penalty above.
-2. **Run `B` replicas in parallel** with shared schedule but
-   independent latent tensors.
+2. **Run `B` replicas in parallel**, optionally with heterogeneous roles,
+   per-replica schedules, and replica exchange.
 3. **Add an explicit diversity reward** — `−div_param × Σ_i std_b(x_b)`
    — to keep replicas from collapsing into the same basin (set
    `div_param=0` for vanilla single-shot annealing).
@@ -61,7 +65,9 @@ plus `src/qqa/relaxation.py` and `src/qqa/schedule.py`.
 
 This is the **recommended default** for graph problems, spin glasses,
 permutation problems, and anything that can be formulated as a `loss_fn
-(x)`. It is fully differentiable, supports any variable kind, and runs
+(x)`. Typed factors must declare a differentiable, subgradient, or prox
+capability for the pure QQA route; non-differentiable factors are routed to
+CP/SAT/exact engines instead. Supported differentiable models run
 on CPU/CUDA/MPS.
 
 ## CRA-PI-GNN — `qqa.pignn.train_cra_pi_gnn`
@@ -108,8 +114,8 @@ so a single matmul gives \(\\Delta E\\) for every bit. Each bit is then
 flipped independently with probability
 \(\\min\\bigl(1, e^{-\\beta\\,\\Delta E_i}\\bigr)\). This is *not* a strictly
 correct single-spin Metropolis chain — proposals are not conditional on
-neighbours updated earlier in the same sweep — but in the high-`β`
-limit it converges to the same Boltzmann distribution and matches the
+neighbours updated earlier in the same sweep — and no exact Boltzmann
+stationarity claim is made for that parallel transition. It matches the
 "parallel-tempered classical SA" baseline used throughout the QQA / CPRA
 literature.
 

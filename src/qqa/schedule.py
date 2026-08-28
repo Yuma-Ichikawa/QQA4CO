@@ -33,9 +33,10 @@ class Schedule(Protocol):
 class LinearBGSchedule:
     """Endpoint-inclusive linear schedule.
 
-    When ``min_bg < 0`` and ``max_bg > 0`` the landscape transitions from
-    "convex, half-integer minima" (the quasi-quantum regime) to the discrete
-    regime where binary corners are favoured.
+    When ``min_bg < 0`` and ``max_bg > 0``, the penalty transitions from a
+    soft-centre curvature contribution to the discrete regime where binary
+    corners are favoured. Negative BG does not imply that an arbitrary
+    combined objective is globally convex or has a unique minimiser.
 
     A one-epoch run returns ``max_bg`` so that even a smoke run performs a
     discrete-facing update.

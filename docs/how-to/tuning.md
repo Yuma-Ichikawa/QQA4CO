@@ -52,8 +52,10 @@ the [Backends reference](../reference/backends.md) for the mapping.
 ## `min_bg` and `max_bg`
 
 * The interval `[min_bg, max_bg]` is the schedule's range. **Negative
-  `min_bg`** turns on the QQA convex regime (the relaxation has a
-  unique soft minimum). **Positive `max_bg`** drives the relaxation to
+  `min_bg`** contributes convex curvature from the QQA penalty. It yields a
+  globally convex or unique soft minimum only when a verified objective
+  curvature bound is dominated (for `c=2`, by `8 |min_bg|`).
+  **Positive `max_bg`** drives the relaxation to
   the binary corners.
 * If your problem is heavily constrained (lots of penalty edges),
   start with `min_bg = -5` and `max_bg = 0.5` so the soft phase

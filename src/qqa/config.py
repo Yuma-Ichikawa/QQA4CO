@@ -56,6 +56,13 @@ class SolverConfig:
     compile_core: bool = False
     sparse_kernel: Literal["auto", "torch", "triton"] = "auto"
     cuda_graphs: bool = False
+    normalize_loss: bool = True
+    robust_scaling: bool = True
+    heterogeneous_replicas: bool = True
+    replica_exchange_interval: int | None = 100
+    factor_preconditioning: bool = True
+    curvature_aware_beta: bool = True
+    archive_size: int = 64
 
     def __post_init__(self) -> None:
         if self.profile not in _PROFILE_DEFAULTS:
@@ -121,6 +128,32 @@ class SolverConfig:
         for name in ("deterministic", "compile_core", "cuda_graphs"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be boolean.")
+        if self.cuda_graphs and self.heterogeneous_replicas and self.replica_exchange_interval:
+            raise ValueError(
+                "cuda_graphs cannot be combined with heterogeneous replica exchange; "
+                "set replica_exchange_interval=None."
+            )
+        for name in (
+            "normalize_loss",
+            "robust_scaling",
+            "heterogeneous_replicas",
+            "factor_preconditioning",
+            "curvature_aware_beta",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"{name} must be boolean.")
+        if self.replica_exchange_interval is not None and (
+            isinstance(self.replica_exchange_interval, bool)
+            or not isinstance(self.replica_exchange_interval, int)
+            or self.replica_exchange_interval < 1
+        ):
+            raise ValueError("replica_exchange_interval must be a positive integer or None.")
+        if (
+            isinstance(self.archive_size, bool)
+            or not isinstance(self.archive_size, int)
+            or self.archive_size < 0
+        ):
+            raise ValueError("archive_size must be a non-negative integer.")
         if self.backend != "qqa" and (
             self.require_certificate or self.exact_backend not in {"auto", "none"}
         ):
@@ -186,6 +219,13 @@ class SolverConfig:
             "optimizer": resolved.optimizer,
             "mixed_precision": resolved.mixed_precision,
             "cuda_graphs": resolved.cuda_graphs,
+            "normalize_loss": resolved.normalize_loss,
+            "robust_scaling": resolved.robust_scaling,
+            "heterogeneous_replicas": resolved.heterogeneous_replicas,
+            "replica_exchange_interval": resolved.replica_exchange_interval,
+            "factor_preconditioning": resolved.factor_preconditioning,
+            "curvature_aware_beta": resolved.curvature_aware_beta,
+            "archive_size": resolved.archive_size,
             "verbose": False,
         }
 

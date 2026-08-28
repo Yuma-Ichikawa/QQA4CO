@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "qqa"
-version = "0.8.1"
+version = "0.9.0"
 description = "Quasi-Quantum Annealing: a GPU solver for combinatorial, spin-glass, integer, real, and mixed-variable optimization."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -89,6 +89,7 @@ triton = ["triton>=3.0; sys_platform == 'linux' and platform_machine == 'x86_64'
 scip = ["pyscipopt>=6.1"]
 highs = ["highspy>=1.9"]
 cpsat = ["ortools>=9.10"]
+service = ["fastapi>=0.110", "pydantic>=2.6", "uvicorn>=0.27"]
 # Official QPLIB parser/evaluator. Kept separate from SCIP because users may
 # inspect and validate QPLIB files without running an exact solver.
 qplib = ["pyqplib>=0.1.8,<0.2"]
@@ -113,7 +114,7 @@ dev = [
     "requests>=2.31",
 ]
 all = [
-    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,benchmark,highs,cpsat]",
+    "qqa[plotly,gui,docs,notebook,dev,pignn,discs,benchmark,highs,cpsat,service]",
 ]
 
 [project.scripts]

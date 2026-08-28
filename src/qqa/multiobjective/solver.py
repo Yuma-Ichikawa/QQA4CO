@@ -530,6 +530,7 @@ def pareto_anneal(
     weight_decay: float = 0.0,
     seed: int = 0,
     device: str | torch.device = "cpu",
+    time_limit: float | None = None,
     verbose: bool = False,
 ) -> ParetoResult:
     """Find a diverse Pareto front in one GPU-parallel optimisation run.
@@ -550,6 +551,13 @@ def pareto_anneal(
         raise ValueError("sol_size must be an integer >= the number of objectives.")
     if isinstance(num_epochs, bool) or not isinstance(num_epochs, int) or num_epochs < 0:
         raise ValueError("num_epochs must be a non-negative integer.")
+    if time_limit is not None and (
+        isinstance(time_limit, bool)
+        or not isinstance(time_limit, Real)
+        or not math.isfinite(time_limit)
+        or time_limit <= 0
+    ):
+        raise ValueError("time_limit must be finite and positive or None.")
     if (
         isinstance(learning_rate, bool)
         or not isinstance(learning_rate, Real)
@@ -695,6 +703,8 @@ def pareto_anneal(
     )
 
     for epoch in range(num_epochs):
+        if time_limit is not None and perf_counter() - started >= time_limit:
+            break
         optimizer.zero_grad(set_to_none=True)
         values = relaxation.forward(latent)
         objective_min = problem.objective_matrix(values, minimize=True)
@@ -736,8 +746,10 @@ def pareto_anneal(
         discrete_penalty = relaxation.penalty(latent, curve_rate)
         diversity = relaxation.diversity(latent)
         bg = float(schedule(epoch, num_epochs))
-        loss = (scalar + constraint_loss + bg * discrete_penalty).sum()
-        loss = loss - div_param * sol_size * diversity
+        dimensions = max(1, problem.num_vars)
+        loss = (scalar + constraint_loss).mean()
+        loss = loss + bg * discrete_penalty.mean() / dimensions
+        loss = loss - div_param * diversity / dimensions
         loss.backward()
         if gradient_clip_norm is not None:
             torch.nn.utils.clip_grad_norm_([latent], gradient_clip_norm)

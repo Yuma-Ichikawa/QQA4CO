@@ -93,8 +93,12 @@ onto a hard permutation after annealing (Sinkhorn-style projection).
 | Class / helper | Purpose |
 | -------------- | ------- |
 | `UserProblem(num_vars, variable_kind, loss_fn)` | wrap an arbitrary `loss_fn(x) -> (B,)` into a `COProblem` with the matching relaxation (`"binary"`, `"spin"`, `"categorical"`, or `"permutation"`) |
-| `user_problem_from_source(src, name=...)` | parse a Python snippet that defines `problem = UserProblem(...)` or a `make_problem()` factory |
-| `load_problem_from_file(path)` | file-based counterpart used by the CLI via `--problem-file` |
+| `user_problem_from_source(src, name=..., trusted=True)` | explicitly trust and execute a local Python snippet defining `loss_fn`, `problem`, or `make_problem()` |
+| `load_problem_from_file(path, trusted=True)` | explicitly trusted local file counterpart used by `--problem-file --allow-unsafe-python` |
+
+Both helpers deny execution unless `trusted=True`. Prefer typed `ModelIR` JSON
+for untrusted or remote input; never enable Python execution in a shared
+service process.
 
 ## Mixed binary, integer, and real models
 

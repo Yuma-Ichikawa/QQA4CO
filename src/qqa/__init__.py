@@ -38,7 +38,7 @@ from qqa.algebraic import (
     VariableType,
 )
 from qqa.annealing import AnnealResult, anneal
-from qqa.api import inspect, plan, solve
+from qqa.api import doctor, inspect, plan, solve
 from qqa.applications import (
     APPLICATIONS,
     build_application,
@@ -155,6 +155,7 @@ from qqa.reporting import save_html_report
 from qqa.result import SolveResult
 from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
+from qqa.templates import available_templates, build_template
 from qqa.tex import (
     TEX_SYSTEM_PROMPT,
     LLMAPIError,
@@ -317,6 +318,7 @@ __all__ = [
     "__version__",
     "anneal",
     "ask",
+    "available_templates",
     "blackbox_from_spec",
     "blackbox_optimize",
     "build_application",
@@ -324,9 +326,11 @@ __all__ = [
     "build_microgrid_pareto",
     "build_portfolio_pareto",
     "build_process_blackbox",
+    "build_template",
     "compile_tex",
     "compile_natural_language",
     "discrete_langevin",
+    "doctor",
     "enable_tf32",
     "execute_plan",
     "fix_seed",

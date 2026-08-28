@@ -76,3 +76,14 @@ def test_cpsat_rejects_fractional_coefficients_instead_of_rounding():
     )
     with pytest.raises(ValueError, match="integral objective coefficients"):
         solve_exact_algebraic(model, "cpsat", time_limit=1.0)
+
+
+@pytest.mark.parametrize("startup_timeout", [0.0, float("inf"), float("nan")])
+def test_exact_worker_rejects_invalid_startup_timeout(startup_timeout):
+    with pytest.raises(ValueError, match="worker_startup_timeout"):
+        solve_exact_algebraic(
+            _binary_max_model(),
+            "highs",
+            time_limit=1.0,
+            worker_startup_timeout=startup_timeout,
+        )

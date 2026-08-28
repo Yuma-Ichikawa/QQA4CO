@@ -7,6 +7,7 @@ import pickle
 import subprocess
 import sys
 import tempfile
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,8 @@ from scipy import sparse
 
 from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic, VariableType
 
-_ISOLATED_WORKER_STARTUP_GRACE_SECONDS = 120.0
+_ISOLATED_WORKER_STARTUP_TIMEOUT_SECONDS = 600.0
+_ISOLATED_WORKER_SHUTDOWN_GRACE_SECONDS = 120.0
 
 
 @dataclass(slots=True)
@@ -431,9 +433,16 @@ def solve_exact_algebraic(
     backend: str,
     *,
     isolated: bool = True,
+    worker_startup_timeout: float = _ISOLATED_WORKER_STARTUP_TIMEOUT_SECONDS,
     **kwargs: Any,
 ) -> ExactBackendResult:
-    """Dispatch an exact backend, isolated from native-library ABI conflicts."""
+    """Dispatch an exact backend, isolated from native-library ABI conflicts.
+
+    ``worker_startup_timeout`` covers interpreter/package loading and payload
+    restoration only. The backend receives ``time_limit`` unchanged after the
+    worker signals that it is ready, so cold filesystems do not consume the
+    optimisation budget.
+    """
     solvers = {
         "scip": solve_scip_algebraic,
         "cpsat": solve_cpsat_algebraic,
@@ -457,36 +466,48 @@ def solve_exact_algebraic(
     if not isolated:
         return function(model, **kwargs)
     _validate_request(model, float(kwargs.get("time_limit", 0.0)), int(kwargs.get("threads", 1)))
-    # Importing a native backend and Torch in a fresh process can dominate a
-    # tiny solve, especially on cold or contended filesystems. This grace is
-    # process-startup overhead only; the backend still receives the exact user
-    # time limit for optimisation.
-    timeout = float(kwargs["time_limit"]) + _ISOLATED_WORKER_STARTUP_GRACE_SECONDS
+    if not math.isfinite(worker_startup_timeout) or worker_startup_timeout <= 0:
+        raise ValueError("worker_startup_timeout must be finite and > 0.")
     with tempfile.TemporaryDirectory(prefix="qqa-exact-") as temporary:
         directory = Path(temporary)
         request = directory / "request.bin"
         response = directory / "response.bin"
+        ready = directory / "ready"
         with request.open("wb") as stream:
             pickle.dump((_model_payload(model), backend, kwargs), stream, protocol=5)
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "qqa.hybrid._exact_worker",
+                str(request),
+                str(response),
+                str(ready),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         try:
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "qqa.hybrid._exact_worker",
-                    str(request),
-                    str(response),
-                ],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise TimeoutError(
-                f"{backend} backend worker exceeded its isolated runtime budget."
-            ) from exc
-        if completed.returncode != 0 or not response.is_file():
+            startup_deadline = perf_counter() + worker_startup_timeout
+            while not ready.is_file() and process.poll() is None:
+                if perf_counter() >= startup_deadline:
+                    raise TimeoutError(f"{backend} backend worker failed to become ready in time.")
+                time.sleep(0.05)
+            if process.poll() is None:
+                runtime_timeout = (
+                    float(kwargs["time_limit"]) + _ISOLATED_WORKER_SHUTDOWN_GRACE_SECONDS
+                )
+                try:
+                    process.wait(timeout=runtime_timeout)
+                except subprocess.TimeoutExpired as exc:
+                    raise TimeoutError(
+                        f"{backend} backend worker exceeded its isolated runtime budget."
+                    ) from exc
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+        if process.returncode != 0 or not response.is_file():
             raise RuntimeError(f"{backend} backend worker terminated without a result envelope.")
         try:
             with response.open("rb") as stream:

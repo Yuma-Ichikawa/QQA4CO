@@ -11,6 +11,7 @@ from qqa.algebraic import AlgebraicModel
 from qqa.compile import compile_sparse_qubo
 from qqa.model import ModelIR, ObjectiveSense, VariableDomain
 from qqa.model.adapters import algebraic_to_model_ir, problem_to_model_ir
+from qqa.model.capabilities import inspect_capabilities
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +28,11 @@ class ModelInspection:
     connected_components: int
     objective_sense: str
     structure: tuple[str, ...]
+    qqa_compatible: bool = True
+    exact_compatible: bool = True
+    missing_bounds: tuple[str, ...] = ()
+    unsupported_qqa: tuple[str, ...] = ()
+    unsupported_exact: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,7 +113,10 @@ def inspect_model(model: Any) -> ModelInspection:
         structure.append("categorical")
     if any(key == "ClauseFactor" for key in factors):
         structure.append("clause")
+    if factors and set(factors) <= {"LinearFactor"}:
+        structure.append("linear")
 
+    capability_report = inspect_capabilities(ir)
     return ModelInspection(
         name=ir.metadata.name,
         num_variables=ir.num_variables,
@@ -121,6 +130,11 @@ def inspect_model(model: Any) -> ModelInspection:
         connected_components=components,
         objective_sense=ObjectiveSense(ir.sense).value,
         structure=tuple(structure),
+        qqa_compatible=capability_report.qqa_compatible,
+        exact_compatible=capability_report.exact_compatible,
+        missing_bounds=capability_report.missing_bounds,
+        unsupported_qqa=capability_report.unsupported_qqa,
+        unsupported_exact=capability_report.unsupported_exact,
     )
 
 

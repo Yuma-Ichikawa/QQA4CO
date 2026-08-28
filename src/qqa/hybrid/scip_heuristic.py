@@ -60,12 +60,14 @@ class QQAHeuristic(_HeurBase):
         completion_template_factory: Callable[[], object] | None = None,
         algebraic: AlgebraicModel | None = None,
         incumbent_provider: Callable[[], np.ndarray | None] | None = None,
+        feedback_bus=None,
     ):
         self.config = config or QQAHeuristicConfig()
         self.completion_template = completion_template
         self.completion_template_factory = completion_template_factory
         self.algebraic = algebraic
         self.incumbent_provider = incumbent_provider
+        self.feedback_bus = feedback_bus
         self.stats = QQAHeuristicStats()
         self._last_node = -(10**18)
         self._archive: set[bytes] = set()
@@ -595,6 +597,24 @@ class QQAHeuristic(_HeurBase):
         try:
             state = self._with_external_incumbent(extract_scip_state(self.model))
             disagreement = self._reference_disagreement(state)
+            if self.feedback_bus is not None:
+                self.feedback_bus.publish(
+                    lp_primal=torch.as_tensor(state.lp_values, dtype=torch.float64),
+                    reduced_costs=torch.as_tensor(state.reduced_costs, dtype=torch.float64),
+                    branch_scores=torch.as_tensor(disagreement, dtype=torch.float64),
+                    fractionalities=torch.as_tensor(
+                        np.abs(state.lp_values - np.rint(state.lp_values)),
+                        dtype=torch.float64,
+                    ),
+                    local_lower=torch.as_tensor(state.local_lower, dtype=torch.float64),
+                    local_upper=torch.as_tensor(state.local_upper, dtype=torch.float64),
+                    incumbent=(
+                        None
+                        if state.incumbent_values is None
+                        else torch.as_tensor(state.incumbent_values, dtype=torch.float64)
+                    ),
+                    metadata={"node": node_number, "source": "scip-lp"},
+                )
             references_used = min(
                 self.config.reference_pool_size,
                 len(self._reference_pool) + 1,
@@ -785,6 +805,7 @@ def include_qqa_heuristic(
     algebraic: AlgebraicModel | None = None,
     incumbent_provider: Callable[[], np.ndarray | None] | None = None,
     completion_template_factory: Callable[[], object] | None = None,
+    feedback_bus=None,
 ) -> QQAHeuristic:
     """Include conditional QQA at useful LP-node timings and return the plugin."""
     try:
@@ -806,6 +827,7 @@ def include_qqa_heuristic(
         completion_template_factory=completion_template_factory,
         algebraic=algebraic,
         incumbent_provider=incumbent_provider,
+        feedback_bus=feedback_bus,
     )
     timing = SCIP_HEURTIMING.AFTERLPNODE | SCIP_HEURTIMING.AFTERLPPLUNGE
     has_quadratic_algebraic_model = bool(

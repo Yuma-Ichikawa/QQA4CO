@@ -9,6 +9,9 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS = {
+    "ExactFeedback": ("qqa.hybrid.feedback", "ExactFeedback"),
+    "ExactFeedbackBus": ("qqa.hybrid.feedback", "ExactFeedbackBus"),
+    "LinearCut": ("qqa.hybrid.feedback", "LinearCut"),
     "ExactBackendResult": ("qqa.hybrid.exact", "ExactBackendResult"),
     "CoreSurrogate": ("qqa.hybrid.surrogate", "CoreSurrogate"),
     "QQAHeuristic": ("qqa.hybrid.scip_heuristic", "QQAHeuristic"),

@@ -112,7 +112,7 @@ def test_user_problem_from_source_requires_loss_fn():
     """Source without a ``loss_fn`` symbol must be rejected with a clear
     ValueError rather than a cryptic NameError downstream."""
     with pytest.raises(ValueError):
-        qqa.user_problem_from_source("# empty\n", num_vars=4)
+        qqa.user_problem_from_source("# empty\n", num_vars=4, trusted=True)
 
 
 def test_load_problem_from_file_supports_problem_variable(tmp_path):
@@ -124,7 +124,7 @@ def test_load_problem_from_file_supports_problem_variable(tmp_path):
         "    loss_fn=lambda x: ((x - 0.5) ** 2).sum(dim=-1),\n"
         ")\n"
     )
-    problem = qqa.load_problem_from_file(str(path))
+    problem = qqa.load_problem_from_file(str(path), trusted=True)
     assert isinstance(problem, qqa.COProblem)
     assert problem.num_vars == 8
 
@@ -139,7 +139,7 @@ def test_load_problem_from_file_supports_factory(tmp_path):
         "        loss_fn=lambda x: x.sum(dim=-1),\n"
         "    )\n"
     )
-    problem = qqa.load_problem_from_file(str(path))
+    problem = qqa.load_problem_from_file(str(path), trusted=True)
     assert isinstance(problem, qqa.COProblem)
 
 
@@ -149,7 +149,7 @@ def test_load_problem_from_file_rejects_non_problem(tmp_path):
     # ``problem`` exists but is not a COProblem ⇒ no factory either ⇒
     # AttributeError (not silent success).
     with pytest.raises(AttributeError):
-        qqa.load_problem_from_file(str(path))
+        qqa.load_problem_from_file(str(path), trusted=True)
 
 
 # ---------------------------------------------------------------------------

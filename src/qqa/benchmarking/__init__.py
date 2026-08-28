@@ -11,11 +11,14 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS = {
+    "BenchmarkRegistryEntry": ("qqa.benchmarking.registry", "BenchmarkRegistryEntry"),
     "BenchmarkComparisonResult": ("qqa.benchmarking.metrics", "BenchmarkComparisonResult"),
     "BenchmarkFailure": ("qqa.benchmarking.metrics", "BenchmarkFailure"),
     "BenchmarkResult": ("qqa.benchmarking.metrics", "BenchmarkResult"),
     "BenchmarkSuiteResult": ("qqa.benchmarking.metrics", "BenchmarkSuiteResult"),
     "IncumbentPoint": ("qqa.benchmarking.metrics", "IncumbentPoint"),
+    "audit_benchmark_snapshot": ("qqa.benchmarking.registry", "audit_benchmark_snapshot"),
+    "benchmark_registry": ("qqa.benchmarking.registry", "benchmark_registry"),
     "compare_benchmark_solvers": (
         "qqa.benchmarking.algebraic_runner",
         "compare_benchmark_solvers",

@@ -103,8 +103,24 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
         reasons.append(
             f"The factor graph has {inspection.connected_components} independent components."
         )
+    if "linear" in structure and resolved.backend == "qqa":
+        refinements = ("gpu-pdhg-relaxation", *refinements)
+        reasons.append("A linear relaxation can provide an LP warm state and dual bound.")
+    if "clause" in structure:
+        fallbacks.append("SAT/MaxSAT propagation")
+    if inspection.missing_bounds:
+        reasons.append(
+            "Pure QQA is unavailable until finite bounds are supplied for: "
+            + ", ".join(inspection.missing_bounds)
+            + "."
+        )
+    if inspection.unsupported_qqa:
+        reasons.append("The canonical model contains factors without a declared QQA derivative.")
     if resolved.require_certificate or resolved.exact_backend not in {"auto", "none"}:
-        exact = "scip" if resolved.exact_backend == "auto" else resolved.exact_backend
+        if resolved.exact_backend == "auto":
+            exact = "cpsat" if structure & {"assignment", "clause"} else "scip"
+        else:
+            exact = resolved.exact_backend
         reasons.append("An exact backend was requested for a bound or certificate.")
     elif resolved.exact_backend == "auto":
         fallbacks.append("optional exact completion")

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import torch
 
@@ -20,6 +21,7 @@ from qqa.model.presolve import PresolveResult, presolve_model
 from qqa.model.problem import ModelIRProblem
 from qqa.portfolio import ModelInspection, SolverPlan, build_plan, inspect_model
 from qqa.result import (
+    CertificateMetadata,
     ConstraintReport,
     ConstraintViolation,
     Provenance,
@@ -28,6 +30,8 @@ from qqa.result import (
     SolveStatus,
     TimingReport,
 )
+from qqa.runtime.events import EventKind, EventRecorder
+from qqa.runtime.population import WarmStateBundle
 from qqa.utils import fix_seed, resolve_device, safe_score_summary
 
 
@@ -51,14 +55,46 @@ def _load_model(model: Any) -> Any:
     return load_portable_model(path)
 
 
+SolveGoal = Literal["best", "feasible", "prove", "diverse", "pareto"]
+
+
+def _parse_budget(value: float | str | None) -> float | None:
+    if value is None or isinstance(value, (int, float)):
+        return None if value is None else float(value)
+    if not isinstance(value, str):
+        raise TypeError("budget must be seconds, a duration string, or None.")
+    match = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(ms|s|m|h)\s*", value.lower())
+    if match is None:
+        raise ValueError("budget strings must use ms, s, m, or h, for example '60s'.")
+    amount = float(match.group(1))
+    multiplier = {"ms": 1e-3, "s": 1.0, "m": 60.0, "h": 3600.0}[match.group(2)]
+    return amount * multiplier
+
+
+def _profile_for_goal(profile: str, goal: SolveGoal) -> str:
+    if goal not in {"best", "feasible", "prove", "diverse", "pareto"}:
+        raise ValueError("goal must be best, feasible, prove, diverse, or pareto.")
+    if profile != "balanced" or goal == "best":
+        return profile
+    return {
+        "feasible": "fast",
+        "prove": "certify",
+        "diverse": "diverse",
+        "pareto": "pareto",
+    }[goal]
+
+
 def _resolve_config(
     *,
     profile: str,
-    budget: float | None,
+    budget: float | str | None,
     device: str,
     config: SolverConfig | None,
     overrides: dict[str, Any],
 ) -> SolverConfig:
+    if profile == "prove":
+        profile = "certify"
+    budget = _parse_budget(budget)
     if config is None:
         values = {"profile": profile, "budget": budget, "device": device, **overrides}
         return SolverConfig.from_mapping(values)
@@ -79,17 +115,26 @@ def inspect(model: Any) -> ModelInspection:
     return inspect_model(_load_model(model))
 
 
+def doctor(model: Any, *, replicas: int = 128):
+    """Run deterministic model, route, scaling, and resource diagnostics."""
+    from qqa.model.doctor import diagnose_model
+
+    return diagnose_model(_load_model(model), replicas=replicas)
+
+
 def plan(
     model: Any,
     *,
     profile: str = "balanced",
-    budget: float | None = None,
+    budget: float | str | None = None,
     device: str = "auto",
     config: SolverConfig | None = None,
+    goal: SolveGoal = "best",
     **overrides: Any,
 ) -> SolverPlan:
     """Build an explainable plan without executing the solver."""
     loaded = _load_model(model)
+    profile = _profile_for_goal(profile, goal)
     resolved = _resolve_config(
         profile=profile,
         budget=budget,
@@ -122,12 +167,14 @@ def _constraint_report(score: dict[str, Any], *, use_raw: bool = False) -> Const
                     bool(record.get("feasible", violation <= tolerance)),
                 )
             )
-    feasible = bool(score.get("feasible", True)) if isinstance(score, dict) else True
+    declared_feasible = score.get("feasible") if isinstance(score, dict) else None
+    evaluated = bool(rows) or declared_feasible is not None
+    feasible = bool(declared_feasible) if declared_feasible is not None else False
     if use_raw and "raw_feasible" in extra:
         feasible = bool(extra["raw_feasible"])
     if not rows and not feasible:
         rows.append(ConstraintViolation("model_feasibility", 1.0, 1.0, 0.0, False))
-    return ConstraintReport(tuple(rows))
+    return ConstraintReport(tuple(rows), evaluated=evaluated)
 
 
 def _score_value(score: dict[str, Any], fallback: float) -> float:
@@ -190,7 +237,7 @@ def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
 def _legacy_status(result: Any, feasible: bool) -> tuple[SolveStatus, bool]:
     scip_status = str(getattr(result, "scip_status", "")).lower()
     if scip_status == "optimal":
-        return SolveStatus.OPTIMAL, True
+        return (SolveStatus.OPTIMAL, True) if feasible else (SolveStatus.UNKNOWN, False)
     if "infeasible" in scip_status:
         return SolveStatus.INFEASIBLE, False
     deadline = bool(getattr(result, "diagnostics", {}).get("deadline_reached", False))
@@ -203,18 +250,24 @@ def solve(
     model: Any,
     *,
     profile: str = "balanced",
-    budget: float | None = None,
+    budget: float | str | None = None,
     device: str = "auto",
     config: SolverConfig | None = None,
     initial_solution: torch.Tensor | None = None,
+    warm_states: WarmStateBundle | None = None,
+    goal: SolveGoal = "best",
+    checkpoint_path: str | Path | None = None,
+    checkpoint_interval: int | None = None,
+    resume_from: str | Path | None = None,
     **overrides: Any,
-) -> SolveResult:
+) -> Any:
     """Solve any supported model through one QQA-centred, strict API.
 
     Exact backends are opt-in through ``profile='certify'`` or
     ``exact_backend=...``.  The default path remains pure QQA.
     """
     loaded = _load_model(model)
+    profile = _profile_for_goal(profile, goal)
     resolved = _resolve_config(
         profile=profile,
         budget=budget,
@@ -225,6 +278,28 @@ def solve(
     resolved = replace(resolved, device=str(resolve_device(resolved.device))).resolved()
     fix_seed(resolved.seed)
     torch.use_deterministic_algorithms(resolved.deterministic, warn_only=True)
+    from qqa.multiobjective import MultiObjectiveProblem, pareto_anneal
+
+    if isinstance(loaded, MultiObjectiveProblem):
+        if goal != "pareto" and resolved.profile != "pareto":
+            raise TypeError("MultiObjectiveProblem requires goal='pareto' or profile='pareto'.")
+        return pareto_anneal(
+            loaded,
+            sol_size=int(resolved.replicas or 1),
+            num_epochs=int(resolved.epochs or 0),
+            learning_rate=float(resolved.learning_rate or 0.05),
+            temp=resolved.temperature,
+            min_bg=resolved.min_bg,
+            max_bg=resolved.max_bg,
+            curve_rate=resolved.curve_rate,
+            div_param=float(resolved.diversity or 0.0),
+            archive_size=max(1, resolved.archive_size),
+            gradient_clip_norm=resolved.gradient_clip_norm,
+            seed=resolved.seed,
+            device=resolved.device,
+            time_limit=resolved.budget,
+            verbose=False,
+        )
     solver_plan = build_plan(loaded, resolved)
     resolved = replace(resolved, replicas=solver_plan.replicas)
 
@@ -233,7 +308,15 @@ def solve(
     if isinstance(loaded, AlgebraicModel):
         original_ir = algebraic_to_model_ir(loaded)
         presolved = presolve_model(original_ir)
-        problem = ModelIRProblem(presolved.model)
+        try:
+            problem = ModelIRProblem(presolved.model)
+        except (NotImplementedError, ValueError):
+            if solver_plan.exact_backend is None:
+                raise
+            # Exact solvers may legitimately support infinite bounds or a
+            # factor with no differentiable QQA representation. In that case
+            # certification proceeds without fabricating a QQA warm start.
+            problem = None
     elif isinstance(loaded, ModelIR):
         original_ir = loaded
         if original_ir.structured_block is None:
@@ -255,6 +338,46 @@ def solve(
     kwargs = resolved.anneal_kwargs()
     kwargs["sol_size"] = solver_plan.replicas
     kwargs["compile_core"] = resolved.compile_core
+    event_recorder = EventRecorder(stride=max(1, int(resolved.epochs or 1) // 200))
+    event_recorder.emit(
+        EventKind.SOLVE_STARTED,
+        {"backend": solver_plan.primary_engine, "profile": resolved.profile},
+        elapsed_seconds=0.0,
+    )
+    kwargs["callbacks"] = (*kwargs.get("callbacks", ()), event_recorder)
+    if any(value is not None for value in (checkpoint_path, checkpoint_interval, resume_from)):
+        if resolved.backend != "qqa":
+            raise ValueError("Checkpoint/resume is currently supported by the QQA backend only.")
+        kwargs["checkpoint_path"] = None if checkpoint_path is None else str(checkpoint_path)
+        kwargs["checkpoint_interval"] = checkpoint_interval
+        kwargs["resume_from"] = None if resume_from is None else str(resume_from)
+    if initial_solution is not None and warm_states is not None:
+        raise ValueError("Supply initial_solution or warm_states, not both.")
+    if warm_states is not None:
+        if resolved.backend != "qqa":
+            raise ValueError("warm_states is currently supported by the QQA backend only.")
+        if not isinstance(warm_states, WarmStateBundle):
+            raise TypeError("warm_states must be a WarmStateBundle or None.")
+        if presolved is None:
+            kwargs["initial_state"] = warm_states
+        else:
+            kwargs["initial_state"] = WarmStateBundle(
+                incumbent=(
+                    None
+                    if warm_states.incumbent is None
+                    else presolved.reduce(warm_states.incumbent)
+                ),
+                lp_primal=(
+                    None
+                    if warm_states.lp_primal is None
+                    else presolved.reduce(warm_states.lp_primal)
+                ),
+                conflict_avoiding=(
+                    None
+                    if warm_states.conflict_avoiding is None
+                    else presolved.reduce(warm_states.conflict_avoiding)
+                ),
+            )
     if initial_solution is not None:
         if resolved.backend != "qqa":
             raise ValueError("initial_solution is currently supported by the QQA backend only.")
@@ -263,12 +386,69 @@ def solve(
         initial = initial_solution.detach().clone()
         kwargs["initial_state"] = presolved.reduce(initial) if presolved is not None else initial
 
-    if solver_plan.exact_backend is not None and not isinstance(loaded, AlgebraicModel):
+    lp_relaxation = None
+    if (
+        isinstance(loaded, AlgebraicModel)
+        and problem is not None
+        and resolved.backend == "qqa"
+        and resume_from is None
+        and loaded.objective.is_linear
+        and all(row.expression.is_linear for row in loaded.constraints)
+    ):
+        from qqa.dual import solve_lp_relaxation
+
+        lp_budget = min(2.0, max(1e-4, float(resolved.budget or 20.0) * 0.1))
+        lp_relaxation = solve_lp_relaxation(
+            loaded,
+            device=(resolved.device if resolved.device.startswith(("cpu", "cuda")) else "cpu"),
+            max_iterations=2000,
+            tolerance=1e-5,
+            time_limit=lp_budget,
+        )
+        lp_primal = lp_relaxation.primal_solution
+        if presolved is not None:
+            lp_primal = presolved.reduce(lp_primal)
+        existing = kwargs.get("initial_state")
+        if isinstance(existing, WarmStateBundle):
+            kwargs["initial_state"] = WarmStateBundle(
+                incumbent=existing.incumbent,
+                lp_primal=lp_primal,
+                conflict_avoiding=existing.conflict_avoiding,
+            )
+        else:
+            kwargs["initial_state"] = WarmStateBundle(
+                incumbent=existing if torch.is_tensor(existing) else None,
+                lp_primal=lp_primal,
+            )
+        event_recorder.emit(
+            EventKind.RELAXATION_UPDATED,
+            {
+                "engine": "pdhg",
+                "iterations": lp_relaxation.iterations,
+                "kkt_residual": lp_relaxation.kkt_residual,
+            },
+        )
+        if resolved.budget is not None:
+            kwargs["time_limit"] = max(1e-4, resolved.budget - (perf_counter() - started))
+
+    legacy: Any
+    if solver_plan.exact_backend == "cpsat" and isinstance(loaded, ModelIR):
+        from qqa.exact import solve_cp_model_ir
+
+        legacy = solve_cp_model_ir(
+            loaded,
+            time_limit=resolved.budget,
+            random_seed=resolved.seed,
+            workers=1,
+        )
+        # CP-SAT returns the original variable order directly.
+        presolved = None
+    elif solver_plan.exact_backend is not None and not isinstance(loaded, AlgebraicModel):
         raise NotImplementedError(
             "Stable exact completion currently requires an algebraic MPS, LP, or "
             "QPLIB model; no requested certificate was silently skipped."
         )
-    if solver_plan.exact_backend is not None and isinstance(loaded, AlgebraicModel):
+    elif solver_plan.exact_backend is not None and isinstance(loaded, AlgebraicModel):
         # QQA remains the primal generator.  The optional exact backend then
         # receives its incumbent and spends the remainder on completion and
         # certification.
@@ -276,32 +456,40 @@ def solve(
         from qqa.model.solve import solve_model_ir
 
         total_budget = float(resolved.budget or 60.0)
-        qqa_kwargs = dict(kwargs)
-        qqa_kwargs["time_limit"] = min(total_budget * 0.35, kwargs.get("time_limit") or math.inf)
-        qqa_kwargs["return_population"] = True
-        warm_result = solve_model_ir(problem, **qqa_kwargs)
-        qqa_elapsed = perf_counter() - started
+        warm_result = None
+        qqa_elapsed = 0.0
+        if problem is not None:
+            qqa_kwargs = dict(kwargs)
+            qqa_kwargs["time_limit"] = min(
+                total_budget * 0.35, kwargs.get("time_limit") or math.inf
+            )
+            qqa_kwargs["return_population"] = True
+            warm_result = solve_model_ir(problem, **qqa_kwargs)
+            qqa_elapsed = perf_counter() - started
         remaining = max(1e-3, total_budget - qqa_elapsed)
+        exact_warm_start = initial_solution
+        if warm_result is not None:
+            exact_warm_start = (
+                presolved.restore(warm_result.best_sol)
+                if presolved is not None
+                else warm_result.best_sol
+            )
         legacy = solve_exact_algebraic(
             loaded,
             solver_plan.exact_backend,
             time_limit=remaining,
-            warm_start=(
-                presolved.restore(warm_result.best_sol)
-                if presolved is not None
-                else warm_result.best_sol
-            ),
+            warm_start=exact_warm_start,
             threads=1,
             relative_gap=0.0,
             verbose=False,
         )
         legacy.runtime = perf_counter() - started
-        legacy.final_population = warm_result.final_population
+        legacy.final_population = None if warm_result is None else warm_result.final_population
         legacy.diagnostics.update(
             {
                 "qqa_warm_start_time": qqa_elapsed,
                 "certification_time": max(0.0, legacy.runtime - qqa_elapsed),
-                "qqa_warm_start": True,
+                "qqa_warm_start": warm_result is not None,
             }
         )
     elif resolved.backend == "sa":
@@ -369,13 +557,54 @@ def solve(
             legacy = anneal_components(problem, **kwargs)
         else:
             legacy = anneal(problem, **kwargs)
-    total_time = perf_counter() - started
+    search_finished = perf_counter()
 
-    reduced_raw_solution = legacy.best_sol.detach().clone()
+    raw_candidate = getattr(legacy, "best_sol", None)
+    if not torch.is_tensor(raw_candidate) or raw_candidate.numel() == 0:
+        no_incumbent_status, _ = _legacy_status(legacy, False)
+        if no_incumbent_status is not SolveStatus.INFEASIBLE_PROVEN:
+            raise RuntimeError("Solver returned no primal incumbent and no infeasibility proof.")
+        total_time = perf_counter() - started
+        event_recorder.emit(
+            EventKind.SOLVE_FINISHED,
+            {"status": no_incumbent_status.value, "feasible": "unknown"},
+            elapsed_seconds=total_time,
+        )
+        infeasibility_certificate = CertificateMetadata(
+            proof_system=str(solver_plan.exact_backend),
+            status="solver-reported-infeasible",
+            verifier=str(getattr(legacy, "backend", solver_plan.exact_backend)),
+        )
+        return SolveResult(
+            status=no_incumbent_status,
+            raw_solution=None,
+            objective_value=None,
+            internal_energy=None,
+            merit_value=None,
+            feasible=False,
+            violations=ConstraintReport.unknown(),
+            timings=TimingReport(total_time, search=total_time),
+            resources=ResourceReport(resolved.device, resolved.mixed_precision),
+            provenance=Provenance(
+                backend=f"{solver_plan.primary_engine}+{solver_plan.exact_backend}",
+                seed=resolved.seed,
+                profile=resolved.profile,
+                config=resolved.to_dict(),
+            ),
+            plan=solver_plan,
+            events=tuple(event_recorder.events),
+            certificate=infeasibility_certificate,
+            diagnostics=dict(getattr(legacy, "diagnostics", {})),
+            legacy_result=legacy,
+        )
+    reduced_raw_solution = raw_candidate.detach().clone()
     raw_solution = (
         presolved.restore(reduced_raw_solution) if presolved is not None else reduced_raw_solution
     )
-    merit_value = float(legacy.best_obj)
+    legacy_best_objective = getattr(legacy, "best_obj", None)
+    if legacy_best_objective is None:
+        raise RuntimeError("Solver returned a primal incumbent without an objective value.")
+    merit_value = float(legacy_best_objective)
     raw_score = (
         _model_ir_score(original_ir, raw_solution)
         if original_ir is not None
@@ -421,16 +650,52 @@ def solve(
                 else _objective_value(problem, repaired_solution, final_score, merit_value)
             )
     repair_time = perf_counter() - repair_started if repaired_solution is not None else 0.0
+    if repaired_solution is not None:
+        event_recorder.emit(
+            EventKind.CANDIDATE_REPAIRED,
+            {"objective": repaired_objective, "feasible": final_score.get("feasible")},
+        )
     final_report = _constraint_report(final_score)
     final_feasible = final_report.feasible
     status, proven = _legacy_status(legacy, final_feasible)
+    certificate: CertificateMetadata | None = (
+        CertificateMetadata(
+            proof_system=str(solver_plan.exact_backend),
+            status="solver-reported-optimal",
+            verifier=str(getattr(legacy, "backend", solver_plan.exact_backend)),
+        )
+        if proven and solver_plan.exact_backend is not None
+        else None
+    )
     best_bound = getattr(legacy, "dual_bound", None)
+    if best_bound is None and lp_relaxation is not None:
+        best_bound = lp_relaxation.dual_bound
     relative_gap = getattr(legacy, "gap", None)
+    if relative_gap is None and best_bound is not None and final_feasible:
+        reported_objective = repaired_objective if repaired_objective is not None else raw_objective
+        relative_gap = abs(reported_objective - best_bound) / max(
+            1.0, abs(reported_objective), abs(best_bound)
+        )
     peak_memory = (
         int(torch.cuda.max_memory_allocated(torch.device(resolved.device))) if is_cuda else None
     )
     certification_time = float(getattr(legacy, "diagnostics", {}).get("certification_time", 0.0))
-    search_time = max(0.0, total_time - repair_time - certification_time)
+    total_time = perf_counter() - started
+    if best_bound is not None:
+        event_recorder.emit(
+            EventKind.DUAL_BOUND_IMPROVED,
+            {"bound": float(best_bound), "relative_gap": relative_gap},
+        )
+    event_recorder.emit(
+        EventKind.SOLVE_FINISHED,
+        {
+            "status": status.value,
+            "objective": repaired_objective if repaired_objective is not None else raw_objective,
+            "feasible": final_report.status.value,
+        },
+        elapsed_seconds=total_time,
+    )
+    search_time = max(0.0, search_finished - started - certification_time)
     final_population = getattr(legacy, "final_population", getattr(legacy, "final_x", None))
     if presolved is not None and final_population is not None:
         final_population = presolved.restore(final_population)
@@ -448,6 +713,9 @@ def solve(
         relative_gap=relative_gap,
         proven_optimal=proven,
         population=final_population,
+        archive=getattr(legacy, "archive", None),
+        events=tuple(event_recorder.events),
+        certificate=certificate,
         timings=TimingReport(
             total_time,
             search=search_time,
@@ -479,9 +747,21 @@ def solve(
         diagnostics={
             **dict(getattr(legacy, "diagnostics", {})),
             "raw_feasible": raw_report.feasible,
+            "pdhg": (
+                None
+                if lp_relaxation is None
+                else {
+                    "iterations": lp_relaxation.iterations,
+                    "runtime": lp_relaxation.runtime,
+                    "primal_residual": lp_relaxation.primal_residual,
+                    "dual_residual": lp_relaxation.dual_residual,
+                    "kkt_residual": lp_relaxation.kkt_residual,
+                    "converged": lp_relaxation.converged,
+                }
+            ),
         },
         legacy_result=legacy,
     )
 
 
-__all__ = ["inspect", "plan", "solve"]
+__all__ = ["SolveGoal", "doctor", "inspect", "plan", "solve"]

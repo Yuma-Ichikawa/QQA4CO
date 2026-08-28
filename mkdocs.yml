@@ -38,6 +38,7 @@ nav:
   - MIPLIB and QPLIB: miplib-qplib.md
   - Benchmark results: benchmark-results.md
   - Universal optimisation: universal-optimization.md
+  - Typed primal-dual runtime: next-generation-runtime.md
   - How-to:
     - Run on GPU: how-to/gpu.md
     - Advanced opt-in runtime: how-to/advanced-runtime.md

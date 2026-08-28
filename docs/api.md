@@ -22,6 +22,12 @@ QUBO, or Ising). Configuration is strict: unknown options raise an error.
 The default route is pure QQA; exact completion is enabled explicitly with
 `profile="certify"` or `exact_backend=...`.
 
+`budget` also accepts duration strings such as `"250ms"`, `"30s"`, and
+`"2m"`. `goal="best|feasible|prove|diverse|pareto"` provides a compact
+one-call policy. Run `qqa.doctor(model)` for strict bound, capability, scaling,
+curvature, decomposition, route, and resource diagnostics before solving an
+external model.
+
 `SolveResult` keeps raw and repaired solutions separate. Its
 `objective_value` is in the original objective direction,
 `internal_energy` is the canonical minimisation value, and `merit_value` is
@@ -48,6 +54,7 @@ comparison if you only need to pick one entry point.
         - solve
         - plan
         - inspect
+        - doctor
         - SolverConfig
         - SolveResult
         - anneal
@@ -116,6 +123,18 @@ SCIP-guided completion require `pip install "qqa[scip]"`.
 
 ::: qqa.decomposition
 
+::: qqa.dual
+
+::: qqa.exact
+
+::: qqa.runtime
+
+::: qqa.service
+
+::: qqa.templates
+
+::: qqa.uncertainty
+
 ::: qqa.benchmarking
 
 ## TeX modelling
@@ -141,6 +160,8 @@ SCIP-guided completion require `pip install "qqa[scip]"`.
 ## Visualization
 
 ::: qqa.visualization
+
+::: qqa.visuals
 
 ## Optional PyG backends
 

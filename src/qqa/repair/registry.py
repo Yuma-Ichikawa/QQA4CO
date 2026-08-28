@@ -188,6 +188,41 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
             score = model.internal_energy(candidates)
             result.copy_(candidates[torch.argmin(score)])
 
+    def linear_inequality(factor: LinearFactor, sense: str) -> None:
+        """Greedily flip a binary variable only when total violation falls."""
+        indices = factor.indices.to(result.device)
+        weights = factor.weights.to(result)
+        if not len(indices) or not binary[indices].all():
+            return
+        selected = result[indices] > 0.5
+        if sense == "<=":
+            improving = (selected & (weights > 0)) | (~selected & (weights < 0))
+        else:
+            improving = (selected & (weights < 0)) | (~selected & (weights > 0))
+        eligible = indices[improving]
+        if not len(eligible):
+            return
+        candidates = result.repeat(len(eligible), 1)
+        candidates[torch.arange(len(eligible), device=result.device), eligible] = (
+            1.0 - candidates[torch.arange(len(eligible), device=result.device), eligible].round()
+        )
+
+        def total_violation(values: torch.Tensor) -> torch.Tensor:
+            rows = model.constraint_violations(values).values()
+            return torch.stack(
+                [value.reshape(values.shape[0], -1).sum(dim=-1) for value in rows]
+            ).sum(dim=0)
+
+        current_total = total_violation(result.unsqueeze(0))[0]
+        candidate_totals = total_violation(candidates)
+        minimum = candidate_totals.min()
+        if minimum >= current_total - 1e-12:
+            return
+        tied = torch.isclose(candidate_totals, minimum, atol=1e-12, rtol=0.0)
+        energies = model.internal_energy(candidates)
+        energies = torch.where(tied, energies, torch.full_like(energies, torch.inf))
+        result.copy_(candidates[torch.argmin(energies)])
+
     for _ in range(max(1, passes)):
         before = result.clone()
         for row in model.constraints:
@@ -213,6 +248,8 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
                         target = round(target_value)
                         if abs(target - target_value) <= 1e-9:
                             cardinality(indices, target)
+            elif isinstance(factor, LinearFactor) and row.sense in {"<=", ">="}:
+                linear_inequality(factor, row.sense)
             elif isinstance(factor, ClauseFactor) and row.sense == "<=" and row.rhs <= 0:
                 clause_indices = factor.indices.to(result.device)
                 signs = factor.signs.to(result.device)
