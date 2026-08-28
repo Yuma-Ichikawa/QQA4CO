@@ -191,6 +191,7 @@ def test_general_qpbo_exact_probe_matches_bruteforce() -> None:
 
 
 def test_cp_scheduling_runtime_enforces_no_overlap() -> None:
+    pytest.importorskip("ortools.sat.python.cp_model")
     starts = torch.arange(3)
     model = ModelIR(
         (VariableBlock("start", "integer", (3,), 0, 8),),
@@ -215,7 +216,10 @@ def test_checkpoint_is_pickle_free_and_checksum_protected(tmp_path) -> None:
     save_checkpoint(Checkpoint("abc", {"profile": "fast"}, 3, {"x": torch.arange(3)}, {}), target)
     loaded = load_checkpoint(target)
     assert torch.equal(loaded.tensors["x"], torch.arange(3))
-    with zipfile.ZipFile(target, "a") as bundle:
+    with (
+        pytest.warns(UserWarning, match="Duplicate name"),
+        zipfile.ZipFile(target, "a") as bundle,
+    ):
         bundle.writestr("tensors/x.npy", b"tampered")
     with pytest.raises((ValueError, zipfile.BadZipFile)):
         load_checkpoint(target)

@@ -64,6 +64,46 @@ def _prefer_feasible_incumbent(problem: MixedProblem, result: AnnealResult) -> N
     result.score = problem.score_summary(best_sol)
 
 
+def _snap_nearby_real_bounds(problem: MixedProblem, result: AnnealResult) -> int:
+    """Snap numerical boundary residue iff feasibility and objective are preserved."""
+    real_indices = [index for index, kind in enumerate(problem.space.kinds) if kind == "real"]
+    if not real_indices:
+        return 0
+    incumbent = result.best_sol.detach().clone()
+    encoded = problem.space.encode(incumbent)
+    lower = problem.space.decode(torch.zeros_like(encoded))
+    upper = problem.space.decode(torch.ones_like(encoded))
+    tolerance = math.sqrt(torch.finfo(encoded.dtype).eps)
+    with torch.no_grad():
+        incumbent_objective = float(problem.objective_values(incumbent.unsqueeze(0))[0])
+        snaps = 0
+        for index in real_indices:
+            boundary = None
+            if float(encoded[index]) <= tolerance:
+                boundary = lower[index]
+            elif float(1.0 - encoded[index]) <= tolerance:
+                boundary = upper[index]
+            if boundary is None or bool(incumbent[index] == boundary):
+                continue
+            candidate = incumbent.clone()
+            candidate[index] = boundary
+            violations = problem.constraint_violations(candidate.unsqueeze(0))
+            feasible = all(
+                float(violations[constraint.name][0]) <= constraint.tolerance
+                for constraint in problem.constraints
+            )
+            candidate_objective = float(problem.objective_values(candidate.unsqueeze(0))[0])
+            if feasible and candidate_objective <= incumbent_objective:
+                incumbent = candidate
+                incumbent_objective = candidate_objective
+                snaps += 1
+        if snaps:
+            result.best_sol = incumbent
+            result.best_obj = float(problem.loss_fn(incumbent.unsqueeze(0))[0])
+            result.score = problem.score_summary(incumbent)
+    return snaps
+
+
 def _repair_candidates(
     problem: MixedProblem,
     result: AnnealResult,
@@ -254,11 +294,13 @@ def solve_mixed(
         else {"attempted": 0, "feasible": 0, "improved": 0}
     )
     _prefer_feasible_incumbent(solving_problem, result)
+    real_bound_snaps = _snap_nearby_real_bounds(solving_problem, result)
     result.diagnostics["penalty_multiplier"] = float(solving_problem.penalty_multiplier)
     result.diagnostics["adaptive_augmented_lagrangian"] = (
         controller.diagnostics() if controller is not None else None
     )
     result.diagnostics["repair"] = repair_diagnostics
+    result.diagnostics["real_bound_snaps"] = real_bound_snaps
     result.diagnostics["constraint_archive"] = (
         archive.diagnostics() if archive is not None else None
     )
