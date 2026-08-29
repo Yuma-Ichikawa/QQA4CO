@@ -7,7 +7,10 @@ import json
 import os
 import platform
 import tempfile
+import time
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,7 +18,7 @@ import torch
 
 from qqa.compile.sparse_qubo import SparseQUBO
 
-_CACHE_FORMAT = 1
+_CACHE_FORMAT = 2
 
 
 class _SparseQUBOModule(torch.nn.Module):
@@ -63,6 +66,77 @@ def _tensor_bytes(value: torch.Tensor) -> bytes:
     return value.detach().cpu().contiguous().numpy().tobytes()
 
 
+def _package_version(name: str) -> str | None:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return None
+
+
+def _environment_metadata(example: torch.Tensor) -> dict[str, Any]:
+    cuda_capability = None
+    driver_version = None
+    if example.device.type == "cuda" and torch.cuda.is_available():
+        with suppress(RuntimeError, ValueError):
+            cuda_capability = list(torch.cuda.get_device_capability(example.device))
+        probe = getattr(torch._C, "_cuda_getDriverVersion", None)
+        if callable(probe):
+            with suppress(RuntimeError):
+                driver_version = int(probe())
+    return {
+        "torch": torch.__version__,
+        "torch_revision": getattr(torch.version, "git_version", None),
+        "python": platform.python_version(),
+        "implementation": platform.python_implementation(),
+        "device": example.device.type,
+        "cuda_capability": cuda_capability,
+        "cuda_runtime": torch.version.cuda,
+        "cuda_driver": driver_version,
+        "hip_runtime": torch.version.hip,
+        "triton": _package_version("triton"),
+        "qqa": _package_version("qqa"),
+        "aot_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@contextmanager
+def _artifact_lock(path: Path, *, timeout: float = 60.0):
+    """Cross-process lock using one atomic, cache-local lock file."""
+    started = time.monotonic()
+    descriptor: int | None = None
+    while descriptor is None:
+        try:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            try:
+                stale = time.time() - path.stat().st_mtime > max(300.0, timeout * 2)
+            except FileNotFoundError:
+                continue
+            if stale:
+                with suppress(FileNotFoundError):
+                    path.unlink()
+                continue
+            if time.monotonic() - started >= timeout:
+                raise TimeoutError(
+                    "Timed out waiting for an AOT cache artifact lock."
+                ) from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        os.close(descriptor)
+        with suppress(FileNotFoundError):
+            path.unlink()
+
+
 def _cache_key(
     qubo: SparseQUBO,
     example: torch.Tensor,
@@ -74,10 +148,7 @@ def _cache_key(
         "format": _CACHE_FORMAT,
         "backend": backend,
         "dynamic_batch": dynamic_batch,
-        "torch": torch.__version__,
-        "python": platform.python_version(),
-        "implementation": platform.python_implementation(),
-        "device": example.device.type,
+        "environment": _environment_metadata(example),
         "dtype": str(example.dtype),
         "shape": [None if dynamic_batch else example.shape[0], example.shape[1]],
         "constant": qubo.constant,
@@ -139,59 +210,78 @@ def compile_sparse_qubo_aot(
     root.mkdir(parents=True, exist_ok=True)
     artifact = root / f"{key}.pt2"
     manifest = root / f"{key}.json"
-    if not force and artifact.is_file() and manifest.is_file():
+    def load_cached():
+        if force or not artifact.is_file() or not manifest.is_file():
+            return None
         try:
             metadata = json.loads(manifest.read_text(encoding="utf-8"))
-            if metadata == {"format": _CACHE_FORMAT, "key": key, "backend": backend}:
+            if (
+                metadata.get("format") == _CACHE_FORMAT
+                and metadata.get("key") == key
+                and metadata.get("backend") == backend
+                and metadata.get("artifact_sha256") == _file_sha256(artifact)
+            ):
                 module = _load_artifact(artifact, backend, example_values.device)
                 return AOTCompiledSparseQUBO(module, artifact, key, True, backend)
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            # Rebuild stale/incompatible artifacts atomically below.
-            pass
+            pass  # Rebuild stale, corrupt, or incompatible artifacts below.
+        return None
 
-    module = _SparseQUBOModule(qubo).to(
-        device=example_values.device,
-        dtype=example_values.dtype,
-    )
-    dynamic_shapes = None
-    if dynamic_batch:
-        dynamic_shapes = ({0: torch.export.Dim("batch", min=1)},)
-    export_values = (
-        example_values.expand(2, -1).clone()
-        if dynamic_batch and example_values.shape[0] == 1
-        else example_values
-    )
-    exported = torch.export.export(
-        module,
-        (export_values,),
-        dynamic_shapes=dynamic_shapes,
-        strict=True,
-    )
-    descriptor = {"format": _CACHE_FORMAT, "key": key, "backend": backend}
-    with tempfile.TemporaryDirectory(prefix="qqa-aot-", dir=root) as temporary:
-        temporary_root = Path(temporary)
-        temporary_artifact = temporary_root / artifact.name
-        if backend == "export":
-            torch.export.save(exported, temporary_artifact)
-        else:
-            compiler = getattr(
-                getattr(torch, "_inductor", None),
-                "aoti_compile_and_package",
-                None,
-            )
-            if not callable(compiler):
-                raise RuntimeError("This PyTorch build does not provide AOTInductor packaging.")
-            # Torch 2.13 compares the returned package filename with the
-            # supplied value using strict equality; pass ``str`` so its
-            # internal string result does not spuriously differ from a Path.
-            compiler(exported, package_path=str(temporary_artifact))
-        temporary_manifest = temporary_root / manifest.name
-        temporary_manifest.write_text(
-            json.dumps(descriptor, sort_keys=True) + "\n",
-            encoding="utf-8",
+    cached = load_cached()
+    if cached is not None:
+        return cached
+
+    lock = root / f"{key}.lock"
+    with _artifact_lock(lock):
+        cached = load_cached()
+        if cached is not None:
+            return cached
+        module = _SparseQUBOModule(qubo).to(
+            device=example_values.device,
+            dtype=example_values.dtype,
         )
-        os.replace(temporary_artifact, artifact)
-        os.replace(temporary_manifest, manifest)
+        dynamic_shapes = ({0: torch.export.Dim("batch", min=1)},) if dynamic_batch else None
+        export_values = (
+            example_values.expand(2, -1).clone()
+            if dynamic_batch and example_values.shape[0] == 1
+            else example_values
+        )
+        exported = torch.export.export(
+            module,
+            (export_values,),
+            dynamic_shapes=dynamic_shapes,
+            strict=True,
+        )
+        with tempfile.TemporaryDirectory(prefix="qqa-aot-", dir=root) as temporary:
+            temporary_root = Path(temporary)
+            temporary_artifact = temporary_root / artifact.name
+            if backend == "export":
+                torch.export.save(exported, temporary_artifact)
+            else:
+                compiler = getattr(
+                    getattr(torch, "_inductor", None),
+                    "aoti_compile_and_package",
+                    None,
+                )
+                if not callable(compiler):
+                    raise RuntimeError(
+                        "This PyTorch build does not provide AOTInductor packaging."
+                    )
+                compiler(exported, package_path=str(temporary_artifact))
+            descriptor = {
+                "format": _CACHE_FORMAT,
+                "key": key,
+                "backend": backend,
+                "artifact_sha256": _file_sha256(temporary_artifact),
+                "environment": _environment_metadata(example_values),
+            }
+            temporary_manifest = temporary_root / manifest.name
+            temporary_manifest.write_text(
+                json.dumps(descriptor, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary_artifact, artifact)
+            os.replace(temporary_manifest, manifest)
 
     loaded = _load_artifact(artifact, backend, example_values.device)
     return AOTCompiledSparseQUBO(loaded, artifact, key, False, backend)

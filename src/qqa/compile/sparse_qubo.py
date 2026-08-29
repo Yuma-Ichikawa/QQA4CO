@@ -245,8 +245,10 @@ class SparseQUBO:
             for _, group in sorted(groups.items())
         )
 
-    def subqubo(self, variables: torch.Tensor, *, include_constant: bool = False) -> SparseQUBO:
-        """Extract an induced variable subproblem with local zero-based indices."""
+    def induced_subqubo(
+        self, variables: torch.Tensor, *, include_constant: bool = False
+    ) -> SparseQUBO:
+        """Extract an induced subgraph, dropping every boundary interaction."""
         variables = torch.as_tensor(variables, device=self.linear.device, dtype=torch.long).reshape(
             -1
         )
@@ -273,6 +275,102 @@ class SparseQUBO:
             self.edge_weight[keep],
             self.constant if include_constant else 0.0,
         )
+
+    def conditioned_subqubo(
+        self,
+        fixed_variables: torch.Tensor,
+        fixed_values: torch.Tensor,
+        *,
+        include_constant: bool = True,
+    ) -> SparseQUBO:
+        """Condition selected variables and preserve all boundary energy.
+
+        The returned variables follow the original order with fixed indices
+        removed. Interactions crossing the boundary become linear terms, and
+        interactions between two fixed variables become a constant.
+        """
+        fixed = torch.as_tensor(
+            fixed_variables, device=self.linear.device, dtype=torch.long
+        ).reshape(-1)
+        values = torch.as_tensor(
+            fixed_values, device=self.linear.device, dtype=self.linear.dtype
+        ).reshape(-1)
+        if fixed.numel() == 0 or fixed.shape != values.shape:
+            raise ValueError("fixed_variables and fixed_values must be aligned and non-empty.")
+        if (
+            torch.any(fixed < 0)
+            or torch.any(fixed >= self.num_variables)
+            or torch.unique(fixed).numel() != fixed.numel()
+        ):
+            raise ValueError("fixed_variables must contain unique in-range indices.")
+        if not torch.isfinite(values).all():
+            raise ValueError("fixed_values must be finite.")
+        is_fixed = torch.zeros(self.num_variables, dtype=torch.bool, device=self.linear.device)
+        is_fixed[fixed] = True
+        remaining = torch.where(~is_fixed)[0]
+        if remaining.numel() == 0:
+            raise ValueError("At least one variable must remain after conditioning.")
+        fixed_by_variable = torch.zeros_like(self.linear)
+        fixed_by_variable[fixed] = values
+        linear = self.linear[remaining].clone()
+        constant = self.constant if include_constant else 0.0
+        if include_constant:
+            constant += float((self.linear[fixed] * values).sum().item())
+        source, target = self.edge_index
+        source_fixed = is_fixed[source]
+        target_fixed = is_fixed[target]
+        both = source_fixed & target_fixed
+        if include_constant and both.any():
+            constant += float(
+                (
+                    self.edge_weight[both]
+                    * fixed_by_variable[source[both]]
+                    * fixed_by_variable[target[both]]
+                ).sum().item()
+            )
+        inverse = torch.full(
+            (self.num_variables,), -1, dtype=torch.long, device=self.linear.device
+        )
+        inverse[remaining] = torch.arange(len(remaining), device=self.linear.device)
+        source_boundary = source_fixed & ~target_fixed
+        target_boundary = target_fixed & ~source_fixed
+        if source_boundary.any():
+            linear.scatter_add_(
+                0,
+                inverse[target[source_boundary]],
+                self.edge_weight[source_boundary] * fixed_by_variable[source[source_boundary]],
+            )
+        if target_boundary.any():
+            linear.scatter_add_(
+                0,
+                inverse[source[target_boundary]],
+                self.edge_weight[target_boundary] * fixed_by_variable[target[target_boundary]],
+            )
+        free = ~source_fixed & ~target_fixed
+        return SparseQUBO(
+            linear,
+            torch.stack((inverse[source[free]], inverse[target[free]])),
+            self.edge_weight[free],
+            constant,
+        )
+
+    def component_subqubo(
+        self,
+        component: int | torch.Tensor,
+        *,
+        include_constant: bool = False,
+    ) -> SparseQUBO:
+        """Extract one connected component by index or explicit variables."""
+        variables = (
+            self.connected_components()[component]
+            if isinstance(component, int) and not isinstance(component, bool)
+            else component
+        )
+        return self.induced_subqubo(variables, include_constant=include_constant)
+
+    def subqubo(self, variables: torch.Tensor, *, include_constant: bool = False) -> SparseQUBO:
+        """Compatibility alias for :meth:`induced_subqubo`."""
+        return self.induced_subqubo(variables, include_constant=include_constant)
 
 
 def compile_sparse_qubo(problem: Any) -> SparseQUBO:

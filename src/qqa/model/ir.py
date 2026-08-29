@@ -389,6 +389,7 @@ class ConstraintIR:
     scale: float = 1.0
     tolerance: float = 1e-6
     weight: float = 1.0
+    priority: float = 1.0
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -396,11 +397,16 @@ class ConstraintIR:
         if self.sense not in {"<=", ">=", "=="}:
             raise ValueError("ConstraintIR.sense must be <=, >=, or ==.")
         if not all(
-            math.isfinite(value) for value in (self.rhs, self.scale, self.tolerance, self.weight)
+            math.isfinite(value)
+            for value in (self.rhs, self.scale, self.tolerance, self.weight, self.priority)
         ):
-            raise ValueError("Constraint rhs, scale, tolerance, and weight must be finite.")
-        if self.scale <= 0 or self.tolerance < 0 or self.weight <= 0:
-            raise ValueError("Constraint scale/weight must be > 0 and tolerance must be >= 0.")
+            raise ValueError(
+                "Constraint rhs, scale, tolerance, weight, and priority must be finite."
+            )
+        if self.scale <= 0 or self.tolerance < 0 or self.weight <= 0 or self.priority <= 0:
+            raise ValueError(
+                "Constraint scale/weight/priority must be > 0 and tolerance must be >= 0."
+            )
 
     def canonical_residual(self, values: torch.Tensor) -> torch.Tensor:
         residual = self.expression.evaluate(values) - self.rhs

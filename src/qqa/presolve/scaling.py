@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import sparse
 
-from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic
+from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic, VariableType
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +16,7 @@ class ScalingFactors:
 
     columns: np.ndarray
     rows: np.ndarray
+    preserves_integrality: bool = True
 
     def __post_init__(self) -> None:
         columns = np.asarray(self.columns, dtype=np.float64)
@@ -26,6 +27,8 @@ class ScalingFactors:
             raise ValueError("Scaling factors must be finite.")
         if np.any(columns <= 0) or np.any(rows <= 0):
             raise ValueError("Scaling factors must be positive.")
+        if not isinstance(self.preserves_integrality, bool):
+            raise TypeError("preserves_integrality must be boolean.")
         object.__setattr__(self, "columns", columns)
         object.__setattr__(self, "rows", rows)
 
@@ -63,7 +66,15 @@ def compute_scaling(
         raise ValueError("Require 0 < minimum <= 1 <= maximum.")
     magnitude = _maximum_abs_by_column(model)
     columns = np.ones(model.num_variables, dtype=np.float64)
-    nonzero = magnitude > 0
+    # x = column_scale * x_scaled changes the lattice whenever an integral
+    # variable receives a non-unit scale.  Keep every binary/integer column in
+    # original units; row scaling and continuous columns still provide the
+    # numerical conditioning benefit without changing the feasible set.
+    continuous = np.asarray(
+        [kind is VariableType.CONTINUOUS for kind in model.variable_type_values],
+        dtype=bool,
+    )
+    nonzero = (magnitude > 0) & continuous
     columns[nonzero] = np.clip(1.0 / np.sqrt(magnitude[nonzero]), minimum, maximum)
 
     rows = np.ones(model.num_constraints, dtype=np.float64)
@@ -77,7 +88,7 @@ def compute_scaling(
             1.0,
         )
         rows[index] = np.clip(1.0 / scale, minimum, maximum)
-    return ScalingFactors(columns=columns, rows=rows)
+    return ScalingFactors(columns=columns, rows=rows, preserves_integrality=True)
 
 
 def scaled_model(
@@ -90,6 +101,13 @@ def scaled_model(
         raise ValueError("Column scales do not match model dimension.")
     if factors.rows.shape != (model.num_constraints,):
         raise ValueError("Row scales do not match constraint count.")
+    integral = np.asarray([kind.integral for kind in model.variable_type_values], dtype=bool)
+    preserves_integrality = bool(np.all(factors.columns[integral] == 1.0))
+    if not preserves_integrality or not factors.preserves_integrality:
+        raise ValueError(
+            "Integral variable columns must use unit scaling; non-unit scaling changes "
+            "the discrete feasible set."
+        )
     diagonal = sparse.diags(factors.columns)
 
     def transform(expression: SparseQuadratic, row_scale: float = 1.0) -> SparseQuadratic:
@@ -120,7 +138,11 @@ def scaled_model(
         objective_sense=model.objective_sense,
         problem_type=model.problem_type,
         source_format=model.source_format,
-        metadata={**model.metadata, "scaled": True},
+        metadata={
+            **model.metadata,
+            "scaled": True,
+            "scaling_preserves_integrality": True,
+        },
     )
     return scaled, factors
 

@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,8 +29,8 @@ _ISOLATED_WORKER_SHUTDOWN_GRACE_SECONDS = 120.0
 class ExactBackendResult:
     """Legacy-compatible exact result consumed by the stable API adapter."""
 
-    best_sol: torch.Tensor
-    best_obj: float
+    best_sol: torch.Tensor | None
+    best_obj: float | None
     runtime: float
     scip_status: str
     dual_bound: float | None = None
@@ -51,6 +52,25 @@ def _canonical(model: AlgebraicModel, objective: float) -> float:
     return objective if model.objective_sense == "minimize" else -objective
 
 
+def _warm_start_candidates(
+    size: int,
+    warm_start: torch.Tensor | None,
+    warm_starts: Sequence[torch.Tensor],
+) -> tuple[torch.Tensor, ...]:
+    candidates = (() if warm_start is None else (warm_start,)) + tuple(warm_starts)
+    result = []
+    seen = set()
+    for candidate in candidates:
+        values = torch.as_tensor(candidate).detach().reshape(-1).cpu().to(torch.float64)
+        if values.numel() != size or not torch.isfinite(values).all():
+            continue
+        digest = values.numpy().tobytes()
+        if digest not in seen:
+            seen.add(digest)
+            result.append(values)
+    return tuple(result)
+
+
 def solve_scip_algebraic(
     model: AlgebraicModel,
     *,
@@ -58,6 +78,7 @@ def solve_scip_algebraic(
     threads: int = 1,
     relative_gap: float = 0.0,
     warm_start: torch.Tensor | None = None,
+    warm_starts: Sequence[torch.Tensor] = (),
     verbose: bool = False,
 ) -> ExactBackendResult:
     """Solve an algebraic LP/MIP/QP with SCIP and an optional QQA incumbent."""
@@ -70,19 +91,37 @@ def solve_scip_algebraic(
     scip.setRealParam("limits/gap", float(relative_gap))
     scip.setIntParam("parallel/maxnthreads", threads)
     scip.setIntParam("lp/threads", threads)
-    accepted_warm_start = False
-    if warm_start is not None and warm_start.numel() == model.num_variables:
-        candidate = warm_start.detach().reshape(-1).cpu().to(torch.float64)
-        if torch.isfinite(candidate).all():
-            solution = scip.createSol()
-            for variable, value in zip(variables, candidate.tolist(), strict=True):
-                scip.setSolVal(solution, variable, float(value))
-            accepted_warm_start = bool(scip.addSol(solution))
+    candidates = _warm_start_candidates(model.num_variables, warm_start, warm_starts)
+    accepted_warm_starts = 0
+    for candidate in candidates:
+        solution = scip.createSol()
+        for variable, value in zip(variables, candidate.tolist(), strict=True):
+            scip.setSolVal(solution, variable, float(value))
+        accepted_warm_starts += int(bool(scip.addSol(solution)))
     scip.optimize()
     status = str(scip.getStatus())
     best = scip.getBestSol()
     if best is None:
-        raise RuntimeError(f"{status}: exact backend returned no primal solution.")
+        try:
+            bound = float(scip.getDualbound())
+            if not math.isfinite(bound):
+                bound = None
+        except Exception:
+            bound = None
+        return ExactBackendResult(
+            None,
+            None,
+            perf_counter() - started,
+            status,
+            dual_bound=bound,
+            diagnostics={
+                "backend": "scip",
+                "accepted_warm_start": accepted_warm_starts > 0,
+                "submitted_warm_starts": len(candidates),
+                "accepted_warm_starts": accepted_warm_starts,
+                "deadline_reached": "timelimit" in status.lower().replace(" ", ""),
+            },
+        )
     values = np.asarray([scip.getSolVal(best, variable) for variable in variables])
     evaluation = model.evaluate(values)
     bound: float | None
@@ -108,7 +147,9 @@ def solve_scip_algebraic(
         gap=gap,
         diagnostics={
             "backend": "scip",
-            "accepted_warm_start": accepted_warm_start,
+            "accepted_warm_start": accepted_warm_starts > 0,
+            "submitted_warm_starts": len(candidates),
+            "accepted_warm_starts": accepted_warm_starts,
             "maximum_infeasibility": evaluation.maximum_infeasibility,
         },
     )
@@ -128,6 +169,7 @@ def solve_cpsat_algebraic(
     threads: int = 1,
     relative_gap: float = 0.0,  # noqa: ARG001 - shared adapter signature
     warm_start: torch.Tensor | None = None,
+    warm_starts: Sequence[torch.Tensor] = (),
     verbose: bool = False,
 ) -> ExactBackendResult:
     """Solve a bounded integer linear model with OR-Tools CP-SAT.
@@ -181,9 +223,10 @@ def solve_cpsat_algebraic(
         if math.isfinite(row.upper):
             upper = int(integers(np.asarray([row.upper]), f"constraint {row.name!r} upper")[0])
             cp.add(expression <= upper)
-    if warm_start is not None and warm_start.numel() == model.num_variables:
+    candidates = _warm_start_candidates(model.num_variables, warm_start, warm_starts)
+    if candidates:
         for variable, value in zip(
-            variables, warm_start.detach().reshape(-1).cpu().tolist(), strict=True
+            variables, candidates[0].tolist(), strict=True
         ):
             cp.add_hint(variable, int(round(value)))
     solver = cp_model.CpSolver()
@@ -193,7 +236,28 @@ def solve_cpsat_algebraic(
     code = solver.solve(cp)
     status = solver.status_name(code)
     if code not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
-        raise RuntimeError(f"{status}: CP-SAT returned no primal solution.")
+        try:
+            bound = float(solver.best_objective_bound)
+            if not math.isfinite(bound):
+                bound = None
+        except (AttributeError, RuntimeError):
+            bound = None
+        return ExactBackendResult(
+            None,
+            None,
+            perf_counter() - started,
+            status.lower(),
+            dual_bound=bound,
+            diagnostics={
+                "backend": "cpsat",
+                "submitted_warm_starts": len(candidates),
+                "accepted_warm_starts": int(bool(candidates)),
+                "deadline_reached": (
+                    code == cp_model.UNKNOWN
+                    and float(solver.wall_time) >= max(0.0, 0.95 * time_limit)
+                ),
+            },
+        )
     values = np.asarray([solver.value(variable) for variable in variables], dtype=np.float64)
     evaluation = model.evaluate(values)
     bound = float(solver.best_objective_bound)
@@ -207,7 +271,12 @@ def solve_cpsat_algebraic(
         status.lower(),
         dual_bound=bound,
         gap=gap,
-        diagnostics={"backend": "cpsat", "maximum_infeasibility": evaluation.maximum_infeasibility},
+        diagnostics={
+            "backend": "cpsat",
+            "maximum_infeasibility": evaluation.maximum_infeasibility,
+            "submitted_warm_starts": len(candidates),
+            "accepted_warm_starts": int(bool(candidates)),
+        },
     )
 
 
@@ -218,6 +287,7 @@ def solve_highs_algebraic(
     threads: int = 1,
     relative_gap: float = 0.0,
     warm_start: torch.Tensor | None = None,
+    warm_starts: Sequence[torch.Tensor] = (),
     verbose: bool = False,
 ) -> ExactBackendResult:
     """Solve a sparse linear LP/MIP using the optional HiGHS Python API."""
@@ -271,15 +341,44 @@ def solve_highs_algebraic(
             integer.astype(np.int32),
             np.full(len(integer), highspy.HighsVarType.kInteger),
         )
-    if warm_start is not None and warm_start.numel() == size:
-        candidate = warm_start.detach().reshape(-1).cpu().numpy().astype(np.float64)
+    candidates = _warm_start_candidates(size, warm_start, warm_starts)
+    if candidates:
+        candidate = candidates[0].numpy().astype(np.float64)
         with suppress(TypeError, RuntimeError):
             highs.setSolution(size, np.arange(size, dtype=np.int32), candidate)
     highs.run()
     solution = highs.getSolution()
     values = np.asarray(solution.col_value, dtype=np.float64)
-    if values.shape != (size,) or not np.isfinite(values).all():
-        raise RuntimeError(f"{highs.getModelStatus()}: HiGHS returned no primal solution.")
+    status = str(highs.modelStatusToString(highs.getModelStatus())).lower()
+    has_incumbent = bool(getattr(solution, "value_valid", False))
+    has_incumbent = has_incumbent and values.shape == (size,) and np.isfinite(values).all()
+    if not has_incumbent:
+        info = highs.getInfo()
+        candidate_bound = float(info.mip_dual_bound) if integer.size else None
+        bound = (
+            candidate_bound
+            if candidate_bound is not None and math.isfinite(candidate_bound)
+            else None
+        )
+        if bound is not None:
+            bound = (
+                bound + model.objective.constant
+                if model.objective_sense == "minimize"
+                else -bound + model.objective.constant
+            )
+        return ExactBackendResult(
+            None,
+            None,
+            perf_counter() - started,
+            status,
+            dual_bound=bound,
+            diagnostics={
+                "backend": "highs",
+                "submitted_warm_starts": len(candidates),
+                "accepted_warm_starts": int(bool(candidates)),
+                "deadline_reached": "timelimit" in status.replace(" ", ""),
+            },
+        )
     evaluation = model.evaluate(values)
     info = highs.getInfo()
     bound = float(info.mip_dual_bound) if integer.size else evaluation.objective
@@ -294,10 +393,15 @@ def solve_highs_algebraic(
         torch.as_tensor(values, dtype=torch.float64),
         _canonical(model, evaluation.objective),
         perf_counter() - started,
-        str(highs.modelStatusToString(highs.getModelStatus())).lower(),
+        status,
         dual_bound=bound,
         gap=gap,
-        diagnostics={"backend": "highs", "maximum_infeasibility": evaluation.maximum_infeasibility},
+        diagnostics={
+            "backend": "highs",
+            "maximum_infeasibility": evaluation.maximum_infeasibility,
+            "submitted_warm_starts": len(candidates),
+            "accepted_warm_starts": int(bool(candidates)),
+        },
     )
 
 
@@ -376,7 +480,9 @@ def _backend_functions():
 
 def _result_payload(result: ExactBackendResult) -> dict[str, Any]:
     return {
-        "best_sol": result.best_sol.detach().cpu().numpy(),
+        "best_sol": (
+            None if result.best_sol is None else result.best_sol.detach().cpu().numpy()
+        ),
         "best_obj": result.best_obj,
         "runtime": result.runtime,
         "scip_status": result.scip_status,
@@ -388,7 +494,11 @@ def _result_payload(result: ExactBackendResult) -> dict[str, Any]:
 
 def _result_from_payload(payload: dict[str, Any]) -> ExactBackendResult:
     return ExactBackendResult(
-        torch.as_tensor(payload["best_sol"], dtype=torch.float64),
+        (
+            None
+            if payload["best_sol"] is None
+            else torch.as_tensor(payload["best_sol"], dtype=torch.float64)
+        ),
         payload["best_obj"],
         payload["runtime"],
         payload["scip_status"],

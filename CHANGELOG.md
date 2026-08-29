@@ -6,6 +6,33 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-29
+
+### Semantic correctness and Factor-Split QQA
+
+- Add strict termination statuses and an independent `GuaranteeLevel`; remove
+  unknown-as-feasible presentation paths and label mathematical objective,
+  internal energy, merit, feasibility, bound, and proof separately. Exact
+  adapters preserve proven or deadline-limited no-incumbent outcomes instead
+  of replacing valid solver termination with an exception.
+- Preserve every discrete lattice during algebraic scaling; separate
+  constraint tolerance, row scale, search weight, user priority, and adaptive
+  augmented-Lagrangian state.
+- Derive factor capabilities from concrete eager, fused GPU, and exact backend
+  registrations and add immutable device-aware execution plans.
+- Correct multi-device island elite, deadline, incumbent, exchange, and final-
+  population semantics; enforce hard process-isolated SAT deadlines.
+- Split sparse QUBO induced, conditioned, and component extraction and harden
+  AOT caches with architecture/toolchain keys, locks, and artifact checksums.
+
+### QQA-centred expansion
+
+- Add a dependency- and budget-aware solve DAG with adaptive QQA/exact routing.
+- Add Study/Trial black-box campaigns with QQA batch acquisition, full noisy-
+  observation cache identity, evaluator versioning, and isolated timeouts.
+- Add portable Benchmark Hub manifests and deterministic paired bootstrap
+  summaries, plus a credential-free end-to-end notebook.
+
 ## [0.9.0] - 2026-08-28
 
 ### Mathematical and semantic foundations

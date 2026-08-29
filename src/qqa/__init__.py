@@ -51,7 +51,11 @@ from qqa.blackbox import (
     BlackBoxConstraint,
     BlackBoxProblem,
     BlackBoxResult,
+    Study,
+    Trial,
+    TrialState,
     blackbox_optimize,
+    create_study,
     plot_blackbox,
 )
 from qqa.callbacks import (
@@ -152,9 +156,10 @@ from qqa.relaxation import (
     StraightThroughBinaryRelaxation,
 )
 from qqa.reporting import save_html_report
-from qqa.result import SolveResult
+from qqa.result import FeasibilityStatus, GuaranteeLevel, SolveResult, SolveStatus
 from qqa.sa import SAResult, simulated_annealing
 from qqa.schedule import LinearBGSchedule
+from qqa.session import SessionState, SolveSession
 from qqa.templates import available_templates, build_template
 from qqa.tex import (
     TEX_SYSTEM_PROMPT,
@@ -240,6 +245,9 @@ __all__ = [
     "BlackBoxConstraint",
     "BlackBoxProblem",
     "BlackBoxResult",
+    "Study",
+    "Trial",
+    "TrialState",
     "Binary",
     "BinaryInstanceRelaxation",
     "BinaryPerceptron",
@@ -298,6 +306,11 @@ __all__ = [
     "Relaxation",
     "SAResult",
     "SolveResult",
+    "SolveSession",
+    "SessionState",
+    "SolveStatus",
+    "GuaranteeLevel",
+    "FeasibilityStatus",
     "SolverConfig",
     "SherringtonKirkpatrick",
     "SinkhornRelaxation",
@@ -321,6 +334,7 @@ __all__ = [
     "available_templates",
     "blackbox_from_spec",
     "blackbox_optimize",
+    "create_study",
     "build_application",
     "build_microgrid_dispatch",
     "build_microgrid_pareto",

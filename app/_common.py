@@ -509,11 +509,13 @@ def render_score_card(
     """
     if not isinstance(score, dict) or not score:
         return
-    feas = bool(score.get("feasible", True))
+    feasibility = score.get("feasible")
     badge = (
         '<span class="qqa-badge ok">feasible</span>'
-        if feas
+        if feasibility is True
         else '<span class="qqa-badge warn">infeasible</span>'
+        if feasibility is False
+        else '<span class="qqa-badge">feasibility unknown</span>'
     )
     value = score.get("value", "-")
     value_s = f"{value:.4g}" if isinstance(value, int | float) else str(value)
@@ -536,7 +538,7 @@ def render_score_card(
             f"<b>{delta:.4g}</b> "
             f'<span class="muted">(pre-polish = {float(pre_polish):.4g})</span></div>'
         )
-    value_cls = "value" if feas else "value infeasible"
+    value_cls = "value infeasible" if feasibility is False else "value"
     st.markdown(
         f'<div class="qqa-score">'
         f'<div class="label">{score.get("label", "score")} · {badge}</div>'

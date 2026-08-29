@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import torch
 import torch.distributed as dist
@@ -111,20 +112,36 @@ def anneal_distributed_island(
 
     total_epochs = int(anneal_kwargs.pop("num_epochs", 10_000))
     total_time = anneal_kwargs.pop("time_limit", None)
+    if total_time is not None and (
+        isinstance(total_time, bool) or not isinstance(total_time, (int, float)) or total_time <= 0
+    ):
+        raise ValueError("time_limit must be positive or None.")
+    deadline = None if total_time is None else perf_counter() + float(total_time)
+    effective_rounds = min(rounds, max(1, total_epochs))
     final_polish = bool(anneal_kwargs.pop("polish", True))
     initial_state = anneal_kwargs.pop("initial_state", None)
     best_solution = None
     best_objective = torch.inf
     result = None
     exchanges = 0
-    for round_index in range(rounds):
-        round_epochs = total_epochs // rounds + int(round_index < total_epochs % rounds)
+    completed_rounds = 0
+    for round_index in range(effective_rounds):
+        remaining = None if deadline is None else deadline - perf_counter()
+        if remaining is not None and remaining <= 0 and result is not None:
+            break
+        round_epochs = total_epochs // effective_rounds + int(
+            round_index < total_epochs % effective_rounds
+        )
         result = anneal(
             problem,
             **anneal_kwargs,
             sol_size=sol_size,
             num_epochs=round_epochs,
-            time_limit=None if total_time is None else float(total_time) / rounds,
+            time_limit=(
+                None
+                if remaining is None
+                else max(1e-6, remaining / max(1, effective_rounds - round_index))
+            ),
             initial_state=initial_state,
             polish=final_polish and round_index == rounds - 1,
             return_population=True,
@@ -139,6 +156,11 @@ def anneal_distributed_island(
             raise RuntimeError("QQA did not return its final population.")
         with torch.no_grad():
             objectives = problem.loss_fn(population).reshape(-1)
+        completed_rounds += 1
+        if round_index == effective_rounds - 1 or (
+            deadline is not None and perf_counter() >= deadline
+        ):
+            break
         migrants = select_diverse_migrants(
             population,
             objectives,
@@ -161,16 +183,29 @@ def anneal_distributed_island(
         exchanges += 1
 
     assert result is not None and best_solution is not None
-    result.best_sol = best_solution
-    result.best_obj = float(best_objective)
-    result.final_population = initial_state
+    objective_tensor = torch.tensor(
+        [best_objective], device=best_solution.device, dtype=torch.float64
+    )
+    gathered_objectives = [torch.empty_like(objective_tensor) for _ in range(dist.get_world_size(group))]
+    gathered_solutions = [torch.empty_like(best_solution) for _ in range(dist.get_world_size(group))]
+    dist.all_gather(gathered_objectives, objective_tensor, group=group)
+    dist.all_gather(gathered_solutions, best_solution.contiguous(), group=group)
+    winner = int(torch.argmin(torch.cat(gathered_objectives)).item())
+    result.best_sol = gathered_solutions[winner].detach().clone()
+    result.best_obj = float(gathered_objectives[winner].item())
+    # The final population is the population actually evaluated in the final
+    # round, never an unevaluated post-migration pool.
+    result.final_population = population
     result.diagnostics.update(
         {
             "distributed_backend": dist.get_backend(group),
             "distributed_world_size": dist.get_world_size(group),
             "distributed_rounds": rounds,
+            "distributed_effective_rounds": effective_rounds,
+            "distributed_completed_rounds": completed_rounds,
             "distributed_exchanges": exchanges,
             "migration_size": migration_size,
+            "deadline_reached": deadline is not None and perf_counter() >= deadline,
         }
     )
     return result

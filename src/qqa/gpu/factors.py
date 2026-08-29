@@ -64,6 +64,12 @@ class CompiledFactorGraph:
     constraint_tolerances: torch.Tensor = field(
         default_factory=lambda: torch.empty(0, dtype=torch.float64)
     )
+    constraint_weights: torch.Tensor = field(
+        default_factory=lambda: torch.empty(0, dtype=torch.float64)
+    )
+    constraint_priorities: torch.Tensor = field(
+        default_factory=lambda: torch.empty(0, dtype=torch.float64)
+    )
 
     def to(
         self,
@@ -147,6 +153,21 @@ class CompiledFactorGraph:
             )
             result[name] = violation / self.constraint_scales[index].to(values)
         return result
+
+    def constraint_penalty(self, values: torch.Tensor) -> torch.Tensor:
+        """Return the declared weighted search penalty, separate from tolerance.
+
+        ``constraint_tolerances`` are used only for mathematical feasibility;
+        row scaling, search weights, and user priorities remain independent.
+        """
+        violations = self.constraint_violations(values)
+        if not violations:
+            return values.new_zeros(values.shape[:-1])
+        matrix = torch.stack(
+            [violations[name] for name in self.constraint_names],
+            dim=-1,
+        )
+        return (matrix.square() * self.constraint_weights.to(values)).sum(dim=-1)
 
 
 def _scope(factor: Any) -> torch.Tensor:
@@ -266,6 +287,12 @@ def compile_factor_graph(model: ModelIR) -> CompiledFactorGraph:
     )
     values["constraint_tolerances"] = torch.tensor(
         [row.tolerance for row in model.constraints], dtype=torch.float64
+    )
+    values["constraint_weights"] = torch.tensor(
+        [row.weight for row in model.constraints], dtype=torch.float64
+    )
+    values["constraint_priorities"] = torch.tensor(
+        [row.priority for row in model.constraints], dtype=torch.float64
     )
     return CompiledFactorGraph(**values)
 

@@ -15,6 +15,7 @@ from typing import Any
 import torch
 
 from qqa.model.ir import ModelIR, VariableDomain
+from qqa.result import GuaranteeLevel
 
 
 class FactorCapability(str, Enum):
@@ -29,6 +30,56 @@ class FactorCapability(str, Enum):
     LOWER_BOUND = "lower_bound"
     EXACT_ENCODE = "exact_encode"
     PROOF_SAFE = "proof_safe"
+
+
+@dataclass(frozen=True, slots=True)
+class FactorBackend:
+    """One executable backend registration for a factor type.
+
+    Capability reports are assembled from these registrations, so a backend
+    cannot be advertised merely because a factor class exists in the IR.
+    Third-party packages may register additional implementations explicitly.
+    """
+
+    name: str
+    factor_type: str
+    capabilities: frozenset[FactorCapability]
+    supported_dtypes: tuple[str, ...] = ("float32", "float64")
+    deterministic: bool = True
+    guarantee: GuaranteeLevel = GuaranteeLevel.HEURISTIC
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.factor_type:
+            raise ValueError("Factor backend name and factor_type must be non-empty.")
+        object.__setattr__(
+            self,
+            "capabilities",
+            frozenset(FactorCapability(item) for item in self.capabilities),
+        )
+        if not self.supported_dtypes or any(not item for item in self.supported_dtypes):
+            raise ValueError("supported_dtypes must contain non-empty dtype names.")
+        object.__setattr__(self, "guarantee", GuaranteeLevel(self.guarantee))
+
+
+_BACKENDS: dict[str, dict[str, FactorBackend]] = {}
+
+
+def register_factor_backend(backend: FactorBackend, *, replace: bool = False) -> None:
+    """Register an executable factor backend under an explicit unique name."""
+    if not isinstance(backend, FactorBackend):
+        raise TypeError("backend must be a FactorBackend.")
+    registrations = _BACKENDS.setdefault(backend.factor_type, {})
+    if backend.name in registrations and not replace:
+        raise ValueError(
+            f"Backend {backend.name!r} is already registered for {backend.factor_type}."
+        )
+    registrations[backend.name] = backend
+
+
+def factor_backend_registrations(factor: Any | type | str) -> tuple[FactorBackend, ...]:
+    """Return deterministic registrations for a factor instance/type/name."""
+    name = factor if isinstance(factor, str) else factor.__name__ if isinstance(factor, type) else type(factor).__name__
+    return tuple(_BACKENDS.get(name, {}).get(key) for key in sorted(_BACKENDS.get(name, {})))
 
 
 _C = FactorCapability
@@ -178,6 +229,56 @@ _BUILTIN_CAPABILITIES: dict[str, frozenset[FactorCapability]] = {
 }
 
 
+def _register_builtin_backends() -> None:
+    # Eager implementations define the differentiable/subgradient/projection
+    # contract. GPU and exact claims are deliberately added only for types
+    # that their concrete lowerers currently handle.
+    backend_specific = {_C.GPU_KERNEL, _C.EXACT_ENCODE, _C.PROOF_SAFE}
+    for factor_type, capabilities in _BUILTIN_CAPABILITIES.items():
+        register_factor_backend(
+            FactorBackend(
+                "torch-eager",
+                factor_type,
+                frozenset(capabilities - backend_specific),
+                deterministic=True,
+                guarantee=GuaranteeLevel.HEURISTIC,
+            )
+        )
+    for factor_type in ("LinearFactor", "QuadraticEdgeFactor", "CardinalityFactor", "ClauseFactor"):
+        register_factor_backend(
+            FactorBackend(
+                "torch-fused",
+                factor_type,
+                frozenset({_C.EVALUATE, _C.DIFFERENTIABLE, _C.GPU_KERNEL}),
+                supported_dtypes=("float32", "float64", "bfloat16"),
+                deterministic=True,
+            )
+        )
+    for factor_type in (
+        "LinearFactor",
+        "CardinalityFactor",
+        "ClauseFactor",
+        "AllDifferentFactor",
+        "AssignmentFactor",
+        "PrecedenceFactor",
+        "NoOverlapFactor",
+        "CumulativeResourceFactor",
+    ):
+        register_factor_backend(
+            FactorBackend(
+                "ortools-cpsat",
+                factor_type,
+                frozenset({_C.EXACT_ENCODE, _C.PROOF_SAFE}),
+                supported_dtypes=("int64",),
+                deterministic=False,
+                guarantee=GuaranteeLevel.EXACT,
+            )
+        )
+
+
+_register_builtin_backends()
+
+
 def factor_capabilities(factor: Any) -> frozenset[FactorCapability]:
     """Return conservative capabilities for one factor instance.
 
@@ -192,9 +293,13 @@ def factor_capabilities(factor: Any) -> frozenset[FactorCapability]:
     declared = getattr(factor, "capabilities", None)
     if declared is not None:
         return frozenset(FactorCapability(item) for item in declared)
-    known = _BUILTIN_CAPABILITIES.get(type(factor).__name__)
-    if known is not None:
-        return known
+    registrations = factor_backend_registrations(factor)
+    if registrations:
+        return frozenset(
+            capability
+            for registration in registrations
+            for capability in registration.capabilities
+        )
     return frozenset({_C.EVALUATE}) if callable(getattr(factor, "evaluate", None)) else frozenset()
 
 
@@ -205,6 +310,7 @@ class FactorCapabilityRecord:
     capabilities: tuple[str, ...]
     qqa_compatible: bool
     exact_compatible: bool
+    backends: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -254,6 +360,7 @@ def inspect_capabilities(model: ModelIR) -> ModelCapabilityReport:
                     tuple(sorted(item.value for item in capabilities)),
                     qqa,
                     exact,
+                    tuple(item.name for item in factor_backend_registrations(factor)),
                 )
             )
 
@@ -306,8 +413,11 @@ def require_qqa_capabilities(model: ModelIR) -> ModelCapabilityReport:
 __all__ = [
     "FactorCapability",
     "FactorCapabilityRecord",
+    "FactorBackend",
     "ModelCapabilityReport",
     "factor_capabilities",
+    "factor_backend_registrations",
     "inspect_capabilities",
     "require_qqa_capabilities",
+    "register_factor_backend",
 ]

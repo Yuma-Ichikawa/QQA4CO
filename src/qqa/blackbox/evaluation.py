@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import multiprocessing as mp
 import sqlite3
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -39,6 +41,9 @@ class EvaluationRecord:
     timestamp: float = 0.0
     seed: int = 0
     worker: int | None = None
+    fidelity: str = "default"
+    replicate: int = 0
+    evaluator_version: str = "1"
 
 
 def point_hash(point: torch.Tensor) -> str:
@@ -47,7 +52,12 @@ def point_hash(point: torch.Tensor) -> str:
 
 
 class EvaluationDatabase:
-    """SQLite-backed cache keyed by problem fingerprint and encoded point."""
+    """SQLite observations keyed by full experimental identity.
+
+    Point, problem, seed, fidelity, replicate, and evaluator version are all
+    part of the identity. Repeated noisy observations therefore coexist rather
+    than overwriting one another.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path).expanduser()
@@ -72,18 +82,53 @@ class EvaluationDatabase:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS evaluation_observations (
+                    problem TEXT NOT NULL,
+                    point_hash TEXT NOT NULL,
+                    seed INTEGER NOT NULL,
+                    fidelity TEXT NOT NULL,
+                    replicate INTEGER NOT NULL,
+                    evaluator_version TEXT NOT NULL,
+                    point TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    objective REAL,
+                    violations TEXT NOT NULL,
+                    runtime REAL NOT NULL,
+                    exception_category TEXT,
+                    timestamp REAL NOT NULL,
+                    worker INTEGER,
+                    PRIMARY KEY(
+                        problem, point_hash, seed, fidelity, replicate, evaluator_version
+                    )
+                )
+                """
+            )
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=30.0)
 
-    def get(self, problem: str, point: torch.Tensor) -> EvaluationRecord | None:
+    def get(
+        self,
+        problem: str,
+        point: torch.Tensor,
+        *,
+        seed: int = 0,
+        fidelity: str = "default",
+        replicate: int = 0,
+        evaluator_version: str = "1",
+    ) -> EvaluationRecord | None:
         digest = point_hash(point)
         with self._lock, self._connect() as connection:
             row = connection.execute(
                 """SELECT point_hash, point, status, objective, violations, runtime,
-                          exception_category, timestamp, seed, worker
-                   FROM evaluations WHERE problem=? AND point_hash=?""",
-                (problem, digest),
+                          exception_category, timestamp, seed, worker, fidelity,
+                          replicate, evaluator_version
+                   FROM evaluation_observations
+                   WHERE problem=? AND point_hash=? AND seed=? AND fidelity=?
+                         AND replicate=? AND evaluator_version=?""",
+                (problem, digest, seed, fidelity, replicate, evaluator_version),
             ).fetchone()
         if row is None:
             return None
@@ -98,18 +143,26 @@ class EvaluationDatabase:
             row[7],
             row[8],
             row[9],
+            row[10],
+            row[11],
+            row[12],
         )
 
     def put(self, problem: str, record: EvaluationRecord) -> None:
         with self._lock, self._connect() as connection:
             connection.execute(
-                """INSERT OR REPLACE INTO evaluations
-                   (problem, point_hash, point, status, objective, violations, runtime,
-                    exception_category, timestamp, seed, worker)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT OR REPLACE INTO evaluation_observations
+                   (problem, point_hash, seed, fidelity, replicate, evaluator_version,
+                    point, status, objective, violations, runtime, exception_category,
+                    timestamp, worker)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     problem,
                     record.point_hash,
+                    record.seed,
+                    record.fidelity,
+                    record.replicate,
+                    record.evaluator_version,
                     json.dumps(record.point),
                     record.status.value,
                     record.objective,
@@ -117,10 +170,17 @@ class EvaluationDatabase:
                     record.runtime,
                     record.exception_category,
                     record.timestamp,
-                    record.seed,
                     record.worker,
                 ),
             )
+
+
+def _isolated_evaluate(problem: BlackBoxProblem, point: torch.Tensor, output) -> None:
+    try:
+        objective, violations, _ = problem.evaluate_one(point)
+        output.put(("ok", objective, tuple(violations)))
+    except Exception as exc:  # noqa: BLE001 - explicit worker boundary
+        output.put(("error", type(exc).__name__))
 
 
 class AsynchronousEvaluationScheduler:
@@ -134,6 +194,9 @@ class AsynchronousEvaluationScheduler:
         database: EvaluationDatabase | None = None,
         problem_fingerprint: str | None = None,
         seed: int = 0,
+        fidelity: str = "default",
+        evaluator_version: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
             raise ValueError("workers must be a positive integer.")
@@ -141,6 +204,15 @@ class AsynchronousEvaluationScheduler:
         self.database = database
         self.problem_fingerprint = problem_fingerprint or problem.name
         self.seed = seed
+        if not isinstance(fidelity, str) or not fidelity:
+            raise ValueError("fidelity must be a non-empty string.")
+        if timeout is not None and (
+            isinstance(timeout, bool) or not math.isfinite(timeout) or timeout <= 0
+        ):
+            raise ValueError("timeout must be finite and positive or None.")
+        self.fidelity = fidelity
+        self.evaluator_version = evaluator_version or problem.evaluator_version
+        self.timeout = timeout
         self._executor = ThreadPoolExecutor(max_workers=workers)
         self._futures: dict[Future, EvaluationRecord] = {}
 
@@ -150,7 +222,38 @@ class AsynchronousEvaluationScheduler:
             self.database.put(self.problem_fingerprint, running)
         started = perf_counter()
         try:
-            objective, violations, _ = self.problem.evaluate_one(point)
+            if self.timeout is None:
+                objective, violations, _ = self.problem.evaluate_one(point)
+            else:
+                methods = mp.get_all_start_methods()
+                context = mp.get_context("fork" if "fork" in methods else "spawn")
+                output = context.Queue(maxsize=1)
+                process = context.Process(
+                    target=_isolated_evaluate,
+                    args=(self.problem, point, output),
+                    daemon=True,
+                )
+                process.start()
+                process.join(timeout=self.timeout)
+                if process.is_alive():
+                    process.terminate()
+                    process.join()
+                    output.close()
+                    record = replace(
+                        pending,
+                        status=EvaluationStatus.TIMED_OUT,
+                        runtime=perf_counter() - started,
+                        exception_category="TimeoutError",
+                        timestamp=time(),
+                    )
+                    if self.database is not None:
+                        self.database.put(self.problem_fingerprint, record)
+                    return record
+                envelope = output.get(timeout=0.25)
+                output.close()
+                if envelope[0] != "ok":
+                    raise RuntimeError(f"Isolated evaluator failed ({envelope[1]}).")
+                objective, violations = envelope[1], envelope[2]
             record = EvaluationRecord(
                 pending.point_hash,
                 pending.point,
@@ -161,6 +264,9 @@ class AsynchronousEvaluationScheduler:
                 timestamp=time(),
                 seed=pending.seed,
                 worker=pending.worker,
+                fidelity=pending.fidelity,
+                replicate=pending.replicate,
+                evaluator_version=pending.evaluator_version,
             )
         except Exception as exc:
             record = EvaluationRecord(
@@ -172,14 +278,36 @@ class AsynchronousEvaluationScheduler:
                 timestamp=time(),
                 seed=pending.seed,
                 worker=pending.worker,
+                fidelity=pending.fidelity,
+                replicate=pending.replicate,
+                evaluator_version=pending.evaluator_version,
             )
         if self.database is not None:
             self.database.put(self.problem_fingerprint, record)
         return record
 
-    def submit(self, point: torch.Tensor, *, worker: int | None = None) -> Future:
+    def submit(
+        self,
+        point: torch.Tensor,
+        *,
+        worker: int | None = None,
+        replicate: int = 0,
+    ) -> Future:
+        if isinstance(replicate, bool) or not isinstance(replicate, int) or replicate < 0:
+            raise ValueError("replicate must be a non-negative integer.")
         cpu = point.detach().reshape(-1).cpu().to(torch.float64)
-        cached = self.database.get(self.problem_fingerprint, cpu) if self.database else None
+        cached = (
+            self.database.get(
+                self.problem_fingerprint,
+                cpu,
+                seed=self.seed,
+                fidelity=self.fidelity,
+                replicate=replicate,
+                evaluator_version=self.evaluator_version,
+            )
+            if self.database
+            else None
+        )
         if cached is not None and cached.status is EvaluationStatus.COMPLETED:
             future: Future = Future()
             future.set_result(cached)
@@ -191,6 +319,9 @@ class AsynchronousEvaluationScheduler:
             timestamp=time(),
             seed=self.seed,
             worker=worker,
+            fidelity=self.fidelity,
+            replicate=replicate,
+            evaluator_version=self.evaluator_version,
         )
         if self.database is not None:
             self.database.put(self.problem_fingerprint, pending)
@@ -219,6 +350,9 @@ class AsynchronousEvaluationScheduler:
                             timestamp=time(),
                             seed=pending.seed,
                             worker=pending.worker,
+                            fidelity=pending.fidelity,
+                            replicate=pending.replicate,
+                            evaluator_version=pending.evaluator_version,
                         ),
                     )
         self._executor.shutdown(wait=not cancel_pending, cancel_futures=cancel_pending)

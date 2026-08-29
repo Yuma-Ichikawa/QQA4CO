@@ -159,7 +159,7 @@ class ModelIRProblem(COProblem):
             return internal + controller.penalty(self, self.model_ir._validate_values(values))
         penalty = torch.zeros_like(internal)
         for row in self.model_ir.constraints:
-            penalty = penalty + (row.violation(values) / row.scale).square()
+            penalty = penalty + row.weight * (row.violation(values) / row.scale).square()
         return internal + self.penalty_multiplier * penalty
 
     def score_summary(self, x_disc: torch.Tensor) -> dict:
@@ -180,6 +180,8 @@ class ModelIRProblem(COProblem):
                 "violation": violation,
                 "scaled_violation": violation / constraint.scale,
                 "tolerance": constraint.tolerance,
+                "search_weight": constraint.weight,
+                "priority": constraint.priority,
                 "feasible": satisfied,
             }
         return {

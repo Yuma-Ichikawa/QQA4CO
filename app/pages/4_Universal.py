@@ -368,7 +368,13 @@ with ask_tab:
                 summary_a.metric("Objective", f"{value:,.6g}")
                 summary_b.metric(
                     "Feasible",
-                    "Yes" if result.score.get("feasible", True) else "No",
+                    (
+                        "Yes"
+                        if result.score.get("feasible") is True
+                        else "No"
+                        if result.score.get("feasible") is False
+                        else "Unknown"
+                    ),
                 )
                 summary_c.metric("Runtime", f"{result.runtime:.2f} s")
                 if hasattr(result, "scip_status"):
@@ -695,7 +701,7 @@ with tex_tab:
             else:
                 st.success(
                     f"Objective: {result.score.get('value', result.best_obj):,.6g} · "
-                    f"Feasible: {result.score.get('feasible', True)}"
+                    f"Feasible: {result.score.get('feasible', 'unknown')}"
                 )
                 st.json(result.score)
         st.download_button(

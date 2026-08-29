@@ -13,6 +13,7 @@ from time import perf_counter
 import torch
 
 from qqa.blackbox.problem import BlackBoxProblem
+from qqa.runtime.security import validate_portable_payload
 from qqa.utils import require_cuda_if_requested, resolve_device
 
 
@@ -230,8 +231,10 @@ def _evaluate_cached(
     database,
     fingerprint: str,
     seed: int,
+    fidelity: str,
+    evaluation_timeout: float | None,
 ) -> tuple[torch.Tensor, torch.Tensor, list[dict]]:
-    if database is None:
+    if database is None and evaluation_timeout is None:
         return problem.evaluate_batch(values, workers=workers)
     from qqa.blackbox.evaluation import (  # noqa: PLC0415
         AsynchronousEvaluationScheduler,
@@ -244,6 +247,8 @@ def _evaluate_cached(
         database=database,
         problem_fingerprint=fingerprint,
         seed=seed,
+        fidelity=fidelity,
+        timeout=evaluation_timeout,
     ) as scheduler:
         futures = [
             scheduler.submit(row, worker=index % workers) for index, row in enumerate(values)
@@ -266,6 +271,7 @@ def _problem_signature(problem: BlackBoxProblem) -> dict[str, object]:
     """Return stable metadata used to reject incompatible campaign resumes."""
     return {
         "name": problem.name,
+        "evaluator_version": problem.evaluator_version,
         "direction": problem.direction,
         "variables": problem.space.describe(),
         "constraints": [
@@ -565,6 +571,8 @@ def blackbox_optimize(
     surrogate_dtype: str = "auto",
     evaluation_database: str | Path | object | None = None,
     problem_fingerprint: str | None = None,
+    fidelity: str = "default",
+    evaluation_timeout: float | None = None,
     seed: int = 0,
     device: str | torch.device = "cpu",
     verbose: bool = False,
@@ -580,6 +588,16 @@ def blackbox_optimize(
     """
     if not isinstance(problem, BlackBoxProblem):
         raise TypeError("problem must be a BlackBoxProblem.")
+    if not isinstance(fidelity, str) or not fidelity:
+        raise ValueError("fidelity must be a non-empty string.")
+    validate_portable_payload(fidelity)
+    if evaluation_timeout is not None and (
+        isinstance(evaluation_timeout, bool)
+        or not isinstance(evaluation_timeout, Real)
+        or not math.isfinite(evaluation_timeout)
+        or evaluation_timeout <= 0
+    ):
+        raise ValueError("evaluation_timeout must be finite and positive or None.")
     for name, value in (("budget", budget), ("batch_size", batch_size), ("workers", workers)):
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f"{name} must be a positive integer.")
@@ -686,6 +704,8 @@ def blackbox_optimize(
             database=database,
             fingerprint=fingerprint,
             seed=seed,
+            fidelity=fidelity,
+            evaluation_timeout=evaluation_timeout,
         )
         x_obs = latent.cpu()
         p_obs = physical.cpu()
@@ -912,6 +932,8 @@ def blackbox_optimize(
             database=database,
             fingerprint=fingerprint,
             seed=seed,
+            fidelity=fidelity,
+            evaluation_timeout=evaluation_timeout,
         )
         x_obs = torch.cat([x_obs, new_latent.cpu()])
         p_obs = torch.cat([p_obs, new_physical.cpu()])
@@ -991,6 +1013,8 @@ def blackbox_optimize(
             "cumulative_runtime": runtime if resume_from is None else resume_from.runtime + runtime,
             "problem_signature": problem_signature,
             "evaluation_cache": database is not None,
+            "fidelity": fidelity,
+            "evaluation_timeout": evaluation_timeout,
         },
     )
 

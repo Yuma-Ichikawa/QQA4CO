@@ -388,7 +388,7 @@ def render_tsp(problem, result, cfg) -> None:
     dist = float(result.score.get("value", 0.0))
     extra = (result.score or {}).get("extra", {}) or {}
     snapped = bool(extra.get("snapped", False))
-    raw_feasible = bool(extra.get("raw_feasible", True))
+    raw_feasible = extra.get("raw_feasible")
 
     fig = go.Figure()
     # Faint "potential edges" backdrop — every city pair, opacity ∝ 1/distance.
@@ -473,8 +473,10 @@ def render_tsp(problem, result, cfg) -> None:
 
     badge = (
         " <span style='color:#16a34a'>● raw permutation</span>"
-        if raw_feasible
+        if raw_feasible is True
         else " <span style='color:#b45309'>● Hungarian-snapped</span>"
+        if raw_feasible is False
+        else " <span style='color:#64748b'>● raw feasibility unknown</span>"
     )
     extra_note = " (snapped to nearest permutation)" if snapped else ""
     fig.update_layout(

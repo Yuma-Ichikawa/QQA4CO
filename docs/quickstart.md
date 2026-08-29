@@ -79,6 +79,8 @@ qqa gui
 - `examples/06_binary_perceptron.ipynb`
 - `examples/13_typed_primal_dual_runtime.ipynb` — Model Doctor, goal/budget
   solve, cockpit, checkpoint/resume, and verified result package
+- `examples/14_factor_split_qqa_study.ipynb` — factor-split execution,
+  guarantees, QQA Study/Trial campaigns, and Benchmark Hub statistics
 - …
 - `notebooks/cra_pignn_example.ipynb` — CRA-PI-GNN walkthrough across
   every supported graph problem

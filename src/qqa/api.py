@@ -223,6 +223,8 @@ def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
             "violation": violation,
             "scaled_violation": violation / row.scale,
             "tolerance": row.tolerance,
+            "search_weight": row.weight,
+            "priority": row.priority,
             "feasible": satisfied,
         }
     return {
@@ -236,14 +238,124 @@ def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
 
 def _legacy_status(result: Any, feasible: bool) -> tuple[SolveStatus, bool]:
     scip_status = str(getattr(result, "scip_status", "")).lower()
-    if scip_status == "optimal":
+    compact_status = re.sub(r"[^a-z0-9]+", "", scip_status)
+    if compact_status == "optimal":
         return (SolveStatus.OPTIMAL, True) if feasible else (SolveStatus.UNKNOWN, False)
-    if "infeasible" in scip_status:
-        return SolveStatus.INFEASIBLE, False
+    if compact_status == "inforunbd" or (
+        "infeasible" in compact_status and "unbounded" in compact_status
+    ):
+        return SolveStatus.INFEASIBLE_OR_UNBOUNDED, False
+    if "infeasible" in compact_status:
+        return SolveStatus.INFEASIBLE_PROVEN, False
+    if "unbounded" in compact_status:
+        return SolveStatus.UNBOUNDED_PROVEN, False
+    if "invalid" in compact_status:
+        return SolveStatus.MODEL_INVALID, False
+    if any(token in compact_status for token in ("numerical", "nan", "singular")):
+        return SolveStatus.NUMERICAL_FAILURE, False
+    if any(token in compact_status for token in ("interrupt", "cancel")):
+        return SolveStatus.INTERRUPTED, False
     deadline = bool(getattr(result, "diagnostics", {}).get("deadline_reached", False))
-    if "timelimit" in scip_status or deadline:
-        return SolveStatus.TIME_LIMIT, False
+    limit_reached = deadline or any(
+        token in compact_status
+        for token in (
+            "timelimit",
+            "nodelimit",
+            "memlimit",
+            "gaplimit",
+            "sollimit",
+            "restartlimit",
+            "iterationlimit",
+        )
+    )
+    if limit_reached:
+        return (
+            SolveStatus.LIMIT_REACHED_WITH_INCUMBENT
+            if getattr(result, "best_sol", None) is not None
+            else SolveStatus.LIMIT_REACHED_NO_INCUMBENT,
+            False,
+        )
+    if getattr(result, "best_sol", None) is None:
+        return SolveStatus.NO_SOLUTION_FOUND, False
     return (SolveStatus.FEASIBLE if feasible else SolveStatus.UNKNOWN), False
+
+
+def _diverse_algebraic_warm_starts(
+    model: AlgebraicModel,
+    candidates: list[torch.Tensor],
+    *,
+    count: int = 16,
+) -> tuple[torch.Tensor, ...]:
+    """Rank exact warm starts by feasibility/quality, then retain diversity."""
+    rows = []
+    seen = set()
+    for candidate in candidates:
+        tensor = torch.as_tensor(candidate).detach().cpu().to(torch.float64)
+        tensor = tensor.reshape(1, -1) if tensor.ndim == 1 else tensor.reshape(-1, tensor.shape[-1])
+        for row in tensor:
+            if row.numel() != model.num_variables or not torch.isfinite(row).all():
+                continue
+            digest = row.numpy().tobytes()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            evaluation = model.evaluate(row.numpy())
+            canonical = (
+                evaluation.objective
+                if model.objective_sense == "minimize"
+                else -evaluation.objective
+            )
+            rows.append((row.clone(), evaluation.maximum_infeasibility, canonical))
+    if not rows:
+        return ()
+    rows.sort(key=lambda item: (item[1] > 1e-6, item[1], item[2]))
+    shortlist = rows[: max(count, min(len(rows), count * 8))]
+    selected = [0]
+    values = torch.stack([item[0] for item in shortlist])
+    scale = values.amax(dim=0) - values.amin(dim=0)
+    scale = scale.clamp_min(1.0)
+    normalised = values / scale
+    while len(selected) < min(count, len(shortlist)):
+        remaining = [index for index in range(len(shortlist)) if index not in selected]
+        separation = torch.cdist(normalised[remaining], normalised[selected], p=1).amin(dim=1)
+        quality = torch.tensor(
+            [1.0 - rank / max(1, len(shortlist) - 1) for rank in remaining],
+            dtype=separation.dtype,
+        )
+        chosen = int(torch.argmax(separation + 0.05 * quality).item())
+        selected.append(remaining[chosen])
+    return tuple(shortlist[index][0] for index in selected)
+
+
+def _retain_verified_warm_incumbent(
+    model: AlgebraicModel,
+    exact_result: Any,
+    candidate: torch.Tensor | None,
+) -> bool:
+    """Keep a verified QQA incumbent when an interrupted exact run returns none."""
+    if getattr(exact_result, "best_sol", None) is not None or candidate is None:
+        return False
+    compact_status = re.sub(
+        r"[^a-z0-9]+", "", str(getattr(exact_result, "scip_status", "")).lower()
+    )
+    if compact_status == "optimal" or compact_status == "inforunbd" or any(
+        token in compact_status for token in ("infeasible", "unbounded", "invalid")
+    ):
+        return False
+    values = torch.as_tensor(candidate).detach().reshape(-1).cpu().to(torch.float64)
+    if values.numel() != model.num_variables or not torch.isfinite(values).all():
+        return False
+    evaluation = model.evaluate(values.numpy())
+    if not evaluation.feasible:
+        return False
+    exact_result.best_sol = values
+    exact_result.best_obj = (
+        evaluation.objective
+        if model.objective_sense == "minimize"
+        else -evaluation.objective
+    )
+    exact_result.diagnostics["verified_warm_incumbent_retained"] = True
+    return True
 
 
 def solve(
@@ -459,37 +571,54 @@ def solve(
         warm_result = None
         qqa_elapsed = 0.0
         if problem is not None:
+            qqa_started = perf_counter()
             qqa_kwargs = dict(kwargs)
+            qqa_stage = solver_plan.stage("qqa-primal")
+            qqa_fraction = 0.35 if qqa_stage is None else qqa_stage.budget_fraction
             qqa_kwargs["time_limit"] = min(
-                total_budget * 0.35, kwargs.get("time_limit") or math.inf
+                total_budget * qqa_fraction, kwargs.get("time_limit") or math.inf
             )
             qqa_kwargs["return_population"] = True
             warm_result = solve_model_ir(problem, **qqa_kwargs)
-            qqa_elapsed = perf_counter() - started
-        remaining = max(1e-3, total_budget - qqa_elapsed)
-        exact_warm_start = initial_solution
+            qqa_elapsed = perf_counter() - qqa_started
+        remaining = max(1e-3, total_budget - (perf_counter() - started))
+        exact_candidates = [] if initial_solution is None else [initial_solution]
         if warm_result is not None:
-            exact_warm_start = (
+            qqa_best = (
                 presolved.restore(warm_result.best_sol)
                 if presolved is not None
                 else warm_result.best_sol
             )
+            exact_candidates.append(qqa_best)
+            if warm_result.final_population is not None:
+                qqa_population = (
+                    presolved.restore(warm_result.final_population)
+                    if presolved is not None
+                    else warm_result.final_population
+                )
+                exact_candidates.append(qqa_population)
+        exact_warm_starts = _diverse_algebraic_warm_starts(loaded, exact_candidates)
+        exact_warm_start = exact_warm_starts[0] if exact_warm_starts else None
         legacy = solve_exact_algebraic(
             loaded,
             solver_plan.exact_backend,
             time_limit=remaining,
             warm_start=exact_warm_start,
+            warm_starts=exact_warm_starts[1:],
             threads=1,
             relative_gap=0.0,
             verbose=False,
         )
+        _retain_verified_warm_incumbent(loaded, legacy, exact_warm_start)
         legacy.runtime = perf_counter() - started
         legacy.final_population = None if warm_result is None else warm_result.final_population
         legacy.diagnostics.update(
             {
                 "qqa_warm_start_time": qqa_elapsed,
+                "qqa_budget_fraction": qqa_fraction,
                 "certification_time": max(0.0, legacy.runtime - qqa_elapsed),
                 "qqa_warm_start": warm_result is not None,
+                "qqa_warm_start_candidates": len(exact_warm_starts),
             }
         )
     elif resolved.backend == "sa":
@@ -562,18 +691,20 @@ def solve(
     raw_candidate = getattr(legacy, "best_sol", None)
     if not torch.is_tensor(raw_candidate) or raw_candidate.numel() == 0:
         no_incumbent_status, _ = _legacy_status(legacy, False)
-        if no_incumbent_status is not SolveStatus.INFEASIBLE_PROVEN:
-            raise RuntimeError("Solver returned no primal incumbent and no infeasibility proof.")
         total_time = perf_counter() - started
         event_recorder.emit(
             EventKind.SOLVE_FINISHED,
             {"status": no_incumbent_status.value, "feasible": "unknown"},
             elapsed_seconds=total_time,
         )
-        infeasibility_certificate = CertificateMetadata(
-            proof_system=str(solver_plan.exact_backend),
-            status="solver-reported-infeasible",
-            verifier=str(getattr(legacy, "backend", solver_plan.exact_backend)),
+        infeasibility_certificate = (
+            CertificateMetadata(
+                proof_system=str(solver_plan.exact_backend),
+                status="solver-reported-infeasible",
+                verifier=str(getattr(legacy, "backend", solver_plan.exact_backend)),
+            )
+            if no_incumbent_status is SolveStatus.INFEASIBLE_PROVEN
+            else None
         )
         return SolveResult(
             status=no_incumbent_status,
@@ -583,6 +714,7 @@ def solve(
             merit_value=None,
             feasible=False,
             violations=ConstraintReport.unknown(),
+            best_bound=getattr(legacy, "dual_bound", None),
             timings=TimingReport(total_time, search=total_time),
             resources=ResourceReport(resolved.device, resolved.mixed_precision),
             provenance=Provenance(

@@ -72,6 +72,8 @@ def test_single_rank_gloo_exchange(tmp_path):
             polish=False,
         )
         assert island.diagnostics["distributed_rounds"] == 2
+        assert island.diagnostics["distributed_completed_rounds"] == 2
+        assert island.diagnostics["distributed_exchanges"] == 1
         assert island.final_population.shape == (4, 3)
     finally:
         dist.destroy_process_group()

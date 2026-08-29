@@ -11,13 +11,18 @@ from __future__ import annotations
 from importlib import import_module
 
 _EXPORTS = {
+    "BenchmarkInstance": ("qqa.benchmarking.hub", "BenchmarkInstance"),
+    "BenchmarkManifest": ("qqa.benchmarking.hub", "BenchmarkManifest"),
+    "BenchmarkTrack": ("qqa.benchmarking.hub", "BenchmarkTrack"),
     "BenchmarkRegistryEntry": ("qqa.benchmarking.registry", "BenchmarkRegistryEntry"),
     "BenchmarkComparisonResult": ("qqa.benchmarking.metrics", "BenchmarkComparisonResult"),
     "BenchmarkFailure": ("qqa.benchmarking.metrics", "BenchmarkFailure"),
     "BenchmarkResult": ("qqa.benchmarking.metrics", "BenchmarkResult"),
     "BenchmarkSuiteResult": ("qqa.benchmarking.metrics", "BenchmarkSuiteResult"),
     "IncumbentPoint": ("qqa.benchmarking.metrics", "IncumbentPoint"),
+    "PairedMetricSummary": ("qqa.benchmarking.hub", "PairedMetricSummary"),
     "audit_benchmark_snapshot": ("qqa.benchmarking.registry", "audit_benchmark_snapshot"),
+    "builtin_benchmark_manifest": ("qqa.benchmarking.hub", "builtin_benchmark_manifest"),
     "benchmark_registry": ("qqa.benchmarking.registry", "benchmark_registry"),
     "compare_benchmark_solvers": (
         "qqa.benchmarking.algebraic_runner",
@@ -26,10 +31,12 @@ _EXPORTS = {
     "detect_format": ("qqa.benchmarking.algebraic_runner", "detect_format"),
     "fetch_benchmark": ("qqa.benchmarking.download", "fetch_benchmark"),
     "fetch_instance": ("qqa.benchmarking.download", "fetch_instance"),
+    "holm_adjust": ("qqa.benchmarking.hub", "holm_adjust"),
     "load_reference_values": (
         "qqa.benchmarking.algebraic_runner",
         "load_reference_values",
     ),
+    "load_benchmark_manifest": ("qqa.benchmarking.hub", "load_benchmark_manifest"),
     "merge_benchmark_campaigns": (
         "qqa.benchmarking.merge",
         "merge_benchmark_campaigns",
@@ -42,6 +49,7 @@ _EXPORTS = {
         "qqa.benchmarking.publication",
         "publish_benchmark_campaigns",
     ),
+    "paired_metric_summary": ("qqa.benchmarking.hub", "paired_metric_summary"),
     "run_benchmark_instance": (
         "qqa.benchmarking.algebraic_runner",
         "run_benchmark_instance",

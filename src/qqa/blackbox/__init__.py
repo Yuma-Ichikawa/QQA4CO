@@ -8,6 +8,7 @@ from qqa.blackbox.evaluation import (
 )
 from qqa.blackbox.problem import BlackBoxConstraint, BlackBoxProblem
 from qqa.blackbox.solver import BlackBoxResult, blackbox_optimize
+from qqa.blackbox.study import Study, Trial, TrialState, create_study
 from qqa.blackbox.visualization import plot_blackbox
 
 __all__ = [
@@ -18,6 +19,10 @@ __all__ = [
     "EvaluationDatabase",
     "EvaluationRecord",
     "EvaluationStatus",
+    "Study",
+    "Trial",
+    "TrialState",
     "blackbox_optimize",
+    "create_study",
     "plot_blackbox",
 ]

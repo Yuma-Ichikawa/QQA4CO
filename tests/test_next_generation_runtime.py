@@ -22,6 +22,7 @@ from qqa.gpu import (
 )
 from qqa.learned import OODGate
 from qqa.model import (
+    AllDifferentFactor,
     BlackBoxFactor,
     CardinalityFactor,
     ClauseFactor,
@@ -32,7 +33,8 @@ from qqa.model import (
     ObjectiveIR,
     VariableBlock,
 )
-from qqa.model.capabilities import inspect_capabilities
+from qqa.model.capabilities import factor_backend_registrations, inspect_capabilities
+from qqa.model.execution import compile_execution_plan
 from qqa.model.problem import ModelIRProblem
 from qqa.polish import greedy_spin_flip
 from qqa.presolve import general_qpbo_persistency
@@ -88,6 +90,54 @@ def test_compiled_factor_graph_matches_typed_expression() -> None:
     compiled = compile_factor_graph(model)
     values = torch.tensor([[0.0, 1.0, 0.0], [1.0, 0.0, 1.0]])
     assert torch.allclose(compiled.evaluate(values), objective.evaluate(values))
+
+
+def test_factor_capabilities_come_from_concrete_backend_registrations() -> None:
+    assert {item.name for item in factor_backend_registrations(LinearFactor)} == {
+        "ortools-cpsat",
+        "torch-eager",
+        "torch-fused",
+    }
+    assert "torch-fused" not in {
+        item.name for item in factor_backend_registrations(AllDifferentFactor)
+    }
+
+
+def test_factor_split_execution_plan_has_value_gradient_parity() -> None:
+    model = ModelIR(
+        (VariableBlock("x", "binary", (2,)),),
+        ObjectiveIR((LinearFactor(torch.arange(2), torch.tensor([2.0, -1.0])),)),
+    )
+    execution = compile_execution_plan(model)
+    point = torch.tensor([[0.25, 0.75]])
+    value, gradient = execution.internal_value_and_grad(point)
+    assert torch.allclose(value, model.internal_energy(point))
+    assert torch.allclose(gradient, torch.tensor([[2.0, -1.0]]))
+    assert execution.buckets[0].backend == "torch-eager"
+
+
+def test_compiled_constraint_weight_is_separate_from_tolerance_and_priority() -> None:
+    model = ModelIR(
+        (VariableBlock("x", "binary", (2,)),),
+        ObjectiveIR(()),
+        (
+            ConstraintIR(
+                "weighted",
+                ObjectiveIR((LinearFactor(torch.arange(2), torch.ones(2)),)),
+                "<=",
+                0.0,
+                scale=2.0,
+                tolerance=0.25,
+                weight=3.0,
+                priority=7.0,
+            ),
+        ),
+    )
+    compiled = compile_factor_graph(model)
+    values = torch.tensor([[1.0, 1.0]])
+    assert compiled.constraint_penalty(values).item() == pytest.approx(3.0)
+    assert compiled.constraint_tolerances.tolist() == [0.25]
+    assert compiled.constraint_priorities.tolist() == [7.0]
 
 
 def test_device_resident_repairs_and_flip_delta() -> None:

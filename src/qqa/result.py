@@ -24,11 +24,29 @@ class SolveStatus(str, Enum):
     INFEASIBLE_PROVEN = "infeasible_proven"
     INFEASIBLE = "infeasible_proven"  # backwards-compatible alias
     UNBOUNDED_PROVEN = "unbounded_proven"
+    INFEASIBLE_OR_UNBOUNDED = "infeasible_or_unbounded"
+    NO_SOLUTION_FOUND = "no_solution_found"
+    LIMIT_REACHED_WITH_INCUMBENT = "limit_reached_with_incumbent"
+    LIMIT_REACHED_NO_INCUMBENT = "limit_reached_no_incumbent"
+    MODEL_INVALID = "model_invalid"
+    NUMERICAL_FAILURE = "numerical_failure"
+    INTERRUPTED = "interrupted"
     LOCALLY_OPTIMAL = "locally_optimal"
     TIME_LIMIT = "time_limit"
     ITERATION_LIMIT = "iteration_limit"
     ERROR = "error"
     FAILED = "error"  # backwards-compatible alias
+    UNKNOWN = "unknown"
+
+
+class GuaranteeLevel(str, Enum):
+    """Strength of the claim made by a result, independent of termination."""
+
+    EXACT = "exact"
+    CERTIFIED_BOUND = "certified_bound"
+    VERIFIED_FEASIBLE = "verified_feasible"
+    APPROXIMATE = "approximate"
+    HEURISTIC = "heuristic"
     UNKNOWN = "unknown"
 
 
@@ -192,6 +210,7 @@ class SolveResult:
     timings: TimingReport
     resources: ResourceReport
     provenance: Provenance
+    guarantee_level: GuaranteeLevel | None = None
     plan: Any = None
     repaired_solution: torch.Tensor | None = None
     repaired_objective_value: float | None = None
@@ -208,6 +227,23 @@ class SolveResult:
 
     def __post_init__(self) -> None:
         self.status = SolveStatus(self.status)
+        if self.guarantee_level is None:
+            if self.status in {
+                SolveStatus.OPTIMAL,
+                SolveStatus.INFEASIBLE_PROVEN,
+                SolveStatus.UNBOUNDED_PROVEN,
+            }:
+                self.guarantee_level = GuaranteeLevel.EXACT
+            elif self.best_bound is not None:
+                self.guarantee_level = GuaranteeLevel.CERTIFIED_BOUND
+            elif self.violations.status is FeasibilityStatus.FEASIBLE:
+                self.guarantee_level = GuaranteeLevel.VERIFIED_FEASIBLE
+            elif self.raw_solution is not None:
+                self.guarantee_level = GuaranteeLevel.HEURISTIC
+            else:
+                self.guarantee_level = GuaranteeLevel.UNKNOWN
+        else:
+            self.guarantee_level = GuaranteeLevel(self.guarantee_level)
         for name in ("objective_value", "internal_energy", "merit_value"):
             value = getattr(self, name)
             if value is not None and not math.isfinite(float(value)):
@@ -229,6 +265,14 @@ class SolveResult:
             raise ValueError("feasible must agree with violations.feasible.")
         if self.proven_optimal and self.status is not SolveStatus.OPTIMAL:
             raise ValueError("proven_optimal requires status='optimal'.")
+        if self.proven_optimal and self.guarantee_level is not GuaranteeLevel.EXACT:
+            raise ValueError("proven_optimal requires guarantee_level='exact'.")
+        if self.guarantee_level is GuaranteeLevel.EXACT and self.status not in {
+            SolveStatus.OPTIMAL,
+            SolveStatus.INFEASIBLE_PROVEN,
+            SolveStatus.UNBOUNDED_PROVEN,
+        }:
+            raise ValueError("An exact guarantee requires a proven terminal status.")
         self.events = tuple(self.events)
 
     @property
@@ -263,6 +307,7 @@ class SolveResult:
         """Return a JSON-oriented, environment-neutral representation."""
         payload: dict[str, Any] = {
             "status": self.status.value,
+            "guarantee_level": self.guarantee_level.value,
             "objective_value": self.objective_value,
             "repaired_objective_value": self.repaired_objective_value,
             "internal_energy": self.internal_energy,
@@ -307,6 +352,7 @@ __all__ = [
     "ConstraintViolation",
     "CertificateMetadata",
     "FeasibilityStatus",
+    "GuaranteeLevel",
     "Provenance",
     "ResourceReport",
     "SolveResult",

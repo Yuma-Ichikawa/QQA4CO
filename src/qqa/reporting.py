@@ -42,8 +42,9 @@ def save_html_report(
     if not hasattr(figure, "to_html"):
         raise ImportError("HTML reports require Plotly. Install with `pip install qqa[plotly]`.")
     payload = serialisable_summary(result, problem)
-    status = "FEASIBLE" if payload["feasible"] else "INFEASIBLE"
-    status_class = "ok" if payload["feasible"] else "bad"
+    feasibility_status = str(payload.get("feasibility_status", "unknown"))
+    status = feasibility_status.upper()
+    status_class = "ok" if feasibility_status == "feasible" else "bad" if feasibility_status == "infeasible" else "neutral"
     chart = figure.to_html(
         full_html=False,
         include_plotlyjs=include_plotlyjs,
@@ -64,6 +65,7 @@ def save_html_report(
     .badge {{ padding: .4rem .7rem; border-radius: 999px; font-weight: 700; font-size: .8rem; }}
     .ok {{ color: #065f46; background: #d1fae5; }}
     .bad {{ color: #9f1239; background: #ffe4e6; }}
+    .neutral {{ color: #334155; background: #e2e8f0; }}
     .meta {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: 1.2rem 0; }}
     .card {{ background: white; border: 1px solid #e2e8f0; border-radius: .8rem; padding: .9rem; box-shadow: 0 1px 2px #0f172a12; }}
     .label {{ color: #64748b; font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }}
@@ -77,8 +79,8 @@ def save_html_report(
 <body>
   <header><h1>{html.escape(report_title)}</h1><span class="badge {status_class}">{status}</span></header>
   <section class="meta">
-    <div class="card"><div class="label">Best penalised objective</div><div class="value">{html.escape(str(payload["best_obj"]))}</div></div>
-    <div class="card"><div class="label">Reported score</div><div class="value">{html.escape(str(payload["score"].get("value", "n/a")))}</div></div>
+    <div class="card"><div class="label">Mathematical objective</div><div class="value">{html.escape(str(payload["best_obj"]))}</div></div>
+    <div class="card"><div class="label">Status · guarantee</div><div class="value">{html.escape(str(payload["solve_status"]))} · {html.escape(str(payload["guarantee_level"]))}</div></div>
     <div class="card"><div class="label">Runtime</div><div class="value">{payload["runtime_seconds"]:.4f} s</div></div>
   </section>
   <main>{chart}</main>

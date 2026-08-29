@@ -40,6 +40,9 @@ def plot_optimization_cockpit(
     objective_number = 0.0 if objective_value is None else float(objective_value)
     status = getattr(result, "status", "unknown")
     status_text = str(getattr(status, "value", status))
+    guarantee = getattr(result, "guarantee_level", "unknown")
+    guarantee_text = str(getattr(guarantee, "value", guarantee))
+    feasibility = getattr(getattr(violations, "status", None), "value", "unknown")
 
     if backend == "plotly":
         try:
@@ -99,7 +102,9 @@ def plot_optimization_cockpit(
                 value=objective_number,
                 number={"valueformat": ".6g"},
                 delta={"reference": float(getattr(result, "best_bound", 0.0) or 0.0)},
-                title={"text": f"{status_text}<br>objective / bound"},
+                title={
+                    "text": f"{status_text} · {guarantee_text}<br>objective / bound"
+                },
             ),
             row=2,
             col=2,
@@ -140,7 +145,7 @@ def plot_optimization_cockpit(
         0.5,
         0.55,
         f"status: {status_text}\nobjective: {objective_number:.6g}\n"
-        f"feasible: {getattr(result, 'feasible', False)}",
+        f"feasibility: {feasibility}\nguarantee: {guarantee_text}",
         ha="center",
         va="center",
         fontsize=14,

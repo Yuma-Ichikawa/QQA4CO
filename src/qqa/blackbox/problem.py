@@ -12,6 +12,7 @@ from typing import Literal
 import torch
 
 from qqa.mixed.variables import VariableSpace, VariableSpec
+from qqa.runtime.security import validate_portable_payload
 
 ScalarPoint = Mapping[str, float | int | list[float] | list[int]]
 ScalarFunction = Callable[[ScalarPoint], float]
@@ -94,6 +95,7 @@ class BlackBoxProblem:
         constraints: Sequence[BlackBoxConstraint] = (),
         direction: Direction = "min",
         name: str = "black-box-problem",
+        evaluator_version: str = "1",
     ):
         if not callable(objective):
             raise TypeError("objective must be callable.")
@@ -101,6 +103,9 @@ class BlackBoxProblem:
             raise ValueError("direction must be 'min' or 'max'.")
         if not isinstance(name, str) or not name.strip():
             raise ValueError("name must be a non-empty string.")
+        if not isinstance(evaluator_version, str) or not evaluator_version.strip():
+            raise ValueError("evaluator_version must be a non-empty string.")
+        validate_portable_payload({"name": name, "evaluator_version": evaluator_version})
         self.space = VariableSpace(tuple(variables))
         self.variables = self.space.variables
         self.objective = objective
@@ -112,6 +117,7 @@ class BlackBoxProblem:
             raise ValueError("constraint names must be unique.")
         self.direction = direction
         self.name = name
+        self.evaluator_version = evaluator_version
 
     def _named_point(self, values: torch.Tensor) -> dict:
         named = self.space.unpack(values)

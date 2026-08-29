@@ -166,6 +166,9 @@ The Colab-ready
 [`13_typed_primal_dual_runtime.ipynb`](examples/13_typed_primal_dual_runtime.ipynb)
 walks through diagnosis, solve events, the cockpit, checkpoint/resume, and a
 verified package without credentials or environment-specific paths.
+[`14_factor_split_qqa_study.ipynb`](examples/14_factor_split_qqa_study.ipynb)
+adds factor backend inspection, guarantee-aware results, a QQA Study/Trial
+campaign, and paired Benchmark Hub statistics.
 
 Advanced configuration is strict. Unknown or misspelled options raise an error:
 
@@ -297,10 +300,24 @@ result = problem.solve(
 )
 ```
 
-The optional evaluation database caches encoded points and records
-pending/running/completed/failed/timed-out/cancelled states. Large campaigns can
-select random-Fourier-feature surrogates; discrete batch acquisition can opt into
-QQA with `acquisition_optimizer="qqa"`.
+The evaluation database keys every observation by problem, point, seed,
+fidelity, replicate, and evaluator version, so noisy repeats are not silently
+overwritten. It records pending/running/completed/failed/timed-out/cancelled
+states. A hard per-evaluation timeout uses an isolated process.
+
+For resumable campaigns, `Study` keeps QQA as the default diverse-batch
+acquisition engine:
+
+```python
+study = qqa.create_study(problem, storage="observations.sqlite", seed=0)
+result = study.optimize(budget=100, batch_size=4)
+print(study.best_trial.point, study.best_trial.value)
+```
+
+The execution contract is inspectable with
+`qqa.model.compile_execution_plan(model_ir)`. Capability claims come from
+registered eager, fused GPU, and exact factor backends. `SolveResult.status`,
+`SolveResult.guarantee_level`, and tri-state feasibility are separate fields.
 
 ## Feature status
 
@@ -312,12 +329,14 @@ QQA with `acquisition_optimizer="qqa"`.
 | Persistent torch.export/AOTInductor sparse-model cache | Experimental, opt-in |
 | Dense QUBO compatibility view | Deprecated for large models |
 | Stable `solve` / `plan` / `inspect` contract | Stable |
+| Factor-split execution plan and backend registry | Beta |
 | Mixed-variable QQA and ModelIR presolve | Beta |
 | MPS, QPLIB, OPB, DIMACS, QUBO, Ising inputs | Beta |
 | SCIP hybrid and exact certification | Beta, optional |
 | RENS/RINS/GINS/local-branching/trust-region portfolio | Beta, optional |
 | HiGHS and CP-SAT adapters | Beta, optional |
 | Black-box trust-region solver | Beta |
+| QQA Study/Trial orchestration and Benchmark Hub schema | Beta |
 | Multi-objective and uncertainty extensions | Beta |
 | Multi-device replica islands | Experimental, opt-in |
 | CRA/CPRA graph GNN backend | Experimental, opt-in |

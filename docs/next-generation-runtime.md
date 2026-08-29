@@ -1,6 +1,6 @@
 # Typed primal–dual runtime
 
-QQA4CO 0.9 introduces a typed, proof-aware runtime around QQA. The central
+QQA4CO 0.10 extends the typed, proof-aware runtime around QQA. The central
 rule is that representation, differentiable primal search, repair, and exact
 proof are separate capabilities. A factor being readable as `ModelIR` does not
 automatically make it valid for every solver.
@@ -52,6 +52,28 @@ Feasibility has three states: `feasible`, `infeasible`, and `unknown`. An empty
 constraint report is unknown unless it was explicitly created with
 `ConstraintReport.unconstrained()`.
 
+Termination and guarantee strength are independent. For example,
+`limit_reached_with_incumbent` can still carry `verified_feasible`, while only
+a proven terminal state may carry `exact`. The stable guarantee vocabulary is
+`exact`, `certified_bound`, `verified_feasible`, `approximate`, `heuristic`, and
+`unknown`. A valid exact-backend termination with no incumbent remains a typed
+result—such as `infeasible_proven` or `limit_reached_no_incumbent`—and retains
+any certified bound the backend supplied.
+
+## Factor-Split QQA and the solve DAG
+
+`qqa.model.compile_execution_plan(model_ir)` groups factors by concrete
+backend registration. CUDA selects a fused backend only where a real lowering
+exists; unsupported factors remain eager or fail explicitly. The returned
+immutable plan exposes value/gradient and constraint operations without
+changing the immutable `ModelIR`.
+
+`qqa.plan(...)` now exposes a budgeted stage DAG. `qqa-primal` is always the
+population primal-search stage. LP relaxation, repair/LNS, and exact
+certification depend on it and are labelled as warm-state, feasibility, bound,
+or proof roles. Exact budget allocation adapts to model scale and structure
+rather than using one fixed percentage.
+
 ## Scale-stable heterogeneous QQA
 
 The default stable profiles use robust median/MAD objective scaling. Replica
@@ -92,6 +114,15 @@ Distributed islands exchange only bounded elites. Replica, model, and scenario
 partitioning remain distinct policies; QQA4CO does not all-gather the full
 population as an implicit default.
 
+Island deadlines include migration overhead. Elites are objective-ranked and
+diversity-filtered, the historical incumbent survives all rounds, no migration
+occurs after the final round, and the returned final population is always one
+that was actually evaluated.
+
+Integral algebraic columns are never scaled. Row scaling and continuous-column
+scaling remain available, and `ScalingFactors.preserves_integrality` makes the
+invariant machine-readable.
+
 ## Primal, dual, and exact feedback
 
 For sparse linear algebraic models, `qqa.dual.solve_lp_relaxation` runs PDHG on
@@ -130,7 +161,26 @@ The opt-in exact layer includes:
   held-out validation;
 - direct QQA acquisition optimization for black-box trust regions;
 - confidence/OOD-gated learned planning that always falls back to a
-  deterministic planner outside its training distribution.
+deterministic planner outside its training distribution.
+
+SAT/MaxSAT calls with a deadline run in a disposable process and terminate it
+at the hard wall-clock limit. Sparse QUBO neighbourhood APIs distinguish
+induced, conditioned, and connected-component subproblems, preventing dropped
+boundary energy from being mistaken for conditioning.
+
+## Study/Trial and Benchmark Hub
+
+`qqa.create_study` provides resumable black-box campaigns with QQA selected by
+default for diverse batch acquisition. Cache identity includes seed, fidelity,
+replicate, and evaluator version; an optional evaluation timeout isolates and
+terminates a failed simulator process.
+
+Benchmark Hub TOML/JSON manifests declare tracks, instances, checksums,
+budgets, seeds, solvers, and metrics without retaining local paths. Paired
+comparisons report wins/ties/losses, median differences, and deterministic
+bootstrap confidence intervals plus an exact paired sign test; `holm_adjust`
+controls family-wise error across declared comparisons. The portable starter
+manifest is `benchmarks/manifests/qqa-core.toml`.
 
 Unsupported coefficients, domains, factors, or proof semantics raise an
 explicit exception. No route silently rounds coefficients, drops rows, or

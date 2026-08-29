@@ -62,6 +62,7 @@ from qqa.io import load_mps, load_qplib
 from qqa.mixed import ConstraintArchive
 from qqa.mixed.augmented_lagrangian import AdaptiveAugmentedLagrangian
 from qqa.presolve import SCIPState, build_scip_model, scaled_model
+from qqa.presolve.scaling import ScalingFactors
 
 
 def _algebraic_fixture() -> AlgebraicModel:
@@ -228,6 +229,18 @@ def test_sparse_scaling_is_reversible_and_preserves_model_values():
         assert after.expression.value(transformed) == pytest.approx(
             factors.rows[index] * before.expression.value(original)
         )
+
+
+def test_sparse_scaling_preserves_the_discrete_lattice():
+    model = _algebraic_fixture()
+    scaled, factors = scaled_model(model)
+    np.testing.assert_array_equal(factors.columns[:2], np.ones(2))
+    assert factors.preserves_integrality
+    assert scaled.lower_bounds[:2].tolist() == model.lower_bounds[:2].tolist()
+    assert scaled.upper_bounds[:2].tolist() == model.upper_bounds[:2].tolist()
+    unsafe = ScalingFactors(np.asarray([2.0, 1.0, 1.0]), np.ones(1))
+    with pytest.raises(ValueError, match="Integral variable columns"):
+        scaled_model(model, unsafe)
 
 
 @pytest.mark.parametrize("lower,upper", [(0, 1), (-2, 3), (0, 15), (-100, 100)])

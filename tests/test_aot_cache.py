@@ -35,7 +35,11 @@ def test_export_cache_has_eager_parity_and_reuses_artifact(tmp_path) -> None:
     assert torch.allclose(second(values), qubo.energy(values))
 
     manifest = json.loads(first.artifact.with_suffix(".json").read_text(encoding="utf-8"))
-    assert manifest == {"backend": "export", "format": 1, "key": first.key}
+    assert manifest["backend"] == "export"
+    assert manifest["format"] == 2
+    assert manifest["key"] == first.key
+    assert len(manifest["artifact_sha256"]) == 64
+    assert "torch_revision" in manifest["environment"]
 
 
 def test_export_cache_dynamic_batch_parity(tmp_path) -> None:
@@ -43,3 +47,13 @@ def test_export_cache_dynamic_batch_parity(tmp_path) -> None:
     artifact = qubo.compile_aot(torch.rand((1, 3)), cache_dir=tmp_path)
     values = torch.rand((4, 3))
     assert torch.allclose(artifact(values), qubo.energy(values))
+
+
+def test_export_cache_rebuilds_a_checksum_mismatch(tmp_path) -> None:
+    qubo = _qubo()
+    first = qubo.compile_aot(torch.rand((1, 3)), cache_dir=tmp_path)
+    first.artifact.write_bytes(b"corrupt")
+    rebuilt = qubo.compile_aot(torch.rand((1, 3)), cache_dir=tmp_path)
+    assert rebuilt.cache_hit is False
+    values = torch.rand((2, 3))
+    assert torch.allclose(rebuilt(values), qubo.energy(values))

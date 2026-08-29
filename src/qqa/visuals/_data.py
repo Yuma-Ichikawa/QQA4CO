@@ -95,13 +95,24 @@ def serialisable_summary(result: Any, problem: Any | None = None) -> dict[str, A
         return value
 
     rows = constraint_rows(result, problem)
+    report = getattr(result, "violations", None)
+    report_status = getattr(getattr(report, "status", None), "value", None)
+    declared = getattr(result, "score", {}).get("feasible")
+    feasibility_status = report_status or (
+        "feasible" if declared is True else "infeasible" if declared is False else "unknown"
+    )
+    guarantee = getattr(getattr(result, "guarantee_level", None), "value", "unknown")
+    solve_status = getattr(getattr(result, "status", None), "value", "unknown")
     return {
         "problem": getattr(
             problem, "name", type(problem).__name__ if problem is not None else None
         ),
         "best_obj": convert(result.best_obj),
         "runtime_seconds": float(result.runtime),
-        "feasible": bool(getattr(result, "score", {}).get("feasible", True)),
+        "feasible": feasibility_status == "feasible",
+        "feasibility_status": feasibility_status,
+        "solve_status": solve_status,
+        "guarantee_level": guarantee,
         "score": convert(getattr(result, "score", {})),
         "solution": convert(result.best_sol),
         "variables": solution_rows(result, problem),

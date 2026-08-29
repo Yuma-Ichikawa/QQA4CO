@@ -12,6 +12,24 @@ from qqa.portfolio.inspector import ModelInspection, inspect_model
 
 
 @dataclass(frozen=True, slots=True)
+class PlanStage:
+    """One node in the explainable solve-plan DAG."""
+
+    name: str
+    engine: str
+    role: str
+    depends_on: tuple[str, ...] = ()
+    budget_fraction: float = 0.0
+    optional: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name or not self.engine or not self.role:
+            raise ValueError("Plan stage name, engine, and role must be non-empty.")
+        if not 0.0 <= self.budget_fraction <= 1.0:
+            raise ValueError("Plan stage budget_fraction must be in [0, 1].")
+
+
+@dataclass(frozen=True, slots=True)
 class SolverPlan:
     model: ModelInspection
     profile: str
@@ -22,6 +40,10 @@ class SolverPlan:
     estimated_memory_bytes: int
     reasons: tuple[str, ...]
     fallbacks: tuple[str, ...] = ()
+    stages: tuple[PlanStage, ...] = ()
+
+    def stage(self, name: str) -> PlanStage | None:
+        return next((item for item in self.stages if item.name == name), None)
 
     def explain(self) -> str:
         """Return a concise, deterministic plan suitable for CLI/UI preview."""
@@ -40,6 +62,14 @@ class SolverPlan:
         lines.extend(f"Reason: {reason}" for reason in self.reasons)
         if self.fallbacks:
             lines.append(f"Fallbacks: {', '.join(self.fallbacks)}")
+        if self.stages:
+            lines.append("Execution DAG:")
+            lines.extend(
+                f"  {stage.name}: {stage.engine} ({stage.role}, "
+                f"budget={stage.budget_fraction:.0%}, "
+                f"after={','.join(stage.depends_on) or 'root'})"
+                for stage in self.stages
+            )
         return "\n".join(lines)
 
 
@@ -126,6 +156,64 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
         fallbacks.append("optional exact completion")
     if replicas < requested:
         reasons.append(f"Replica count was reduced from {requested} to fit the memory budget.")
+    relaxation_fraction = 0.08 if "linear" in structure and resolved.backend == "qqa" else 0.0
+    if exact is None:
+        qqa_fraction = 0.90 - relaxation_fraction
+        refinement_fraction = 0.10
+        exact_fraction = 0.0
+    else:
+        qqa_fraction = 0.25
+        if inspection.num_variables >= 1000:
+            qqa_fraction += 0.10
+        if structure & {"mixed-domain", "constrained", "sparse-qubo"}:
+            qqa_fraction += 0.10
+        if resolved.profile != "certify" and not resolved.require_certificate:
+            qqa_fraction += 0.05
+        qqa_fraction = min(0.60, qqa_fraction)
+        refinement_fraction = 0.07
+        exact_fraction = max(0.10, 1.0 - relaxation_fraction - qqa_fraction - refinement_fraction)
+    stages = [PlanStage("compile", "factor-registry", "lowering")]
+    previous = "compile"
+    if relaxation_fraction:
+        stages.append(
+            PlanStage(
+                "relaxation",
+                "gpu-pdhg",
+                "bound-and-warm-state",
+                ("compile",),
+                relaxation_fraction,
+                optional=True,
+            )
+        )
+        previous = "relaxation"
+    stages.append(
+        PlanStage(
+            "qqa-primal",
+            primary,
+            "population-primal-search",
+            (previous,),
+            qqa_fraction,
+        )
+    )
+    stages.append(
+        PlanStage(
+            "repair-and-lns",
+            "+".join(refinements) or "domain-repair",
+            "feasibility-and-incumbent-improvement",
+            ("qqa-primal",),
+            refinement_fraction,
+        )
+    )
+    if exact is not None:
+        stages.append(
+            PlanStage(
+                "certificate",
+                exact,
+                "completion-bound-and-proof",
+                ("qqa-primal", "repair-and-lns"),
+                exact_fraction,
+            )
+        )
     return SolverPlan(
         inspection,
         resolved.profile,
@@ -136,7 +224,8 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
         estimated,
         tuple(reasons),
         tuple(fallbacks),
+        tuple(stages),
     )
 
 
-__all__ = ["SolverPlan", "build_plan"]
+__all__ = ["PlanStage", "SolverPlan", "build_plan"]

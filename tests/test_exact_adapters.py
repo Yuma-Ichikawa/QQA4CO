@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic, VariableType
-from qqa.hybrid.exact import solve_exact_algebraic
+from qqa.api import _retain_verified_warm_incumbent
+from qqa.hybrid.exact import ExactBackendResult, solve_exact_algebraic
 
 
 def _binary_max_model() -> AlgebraicModel:
@@ -25,6 +26,23 @@ def _binary_max_model() -> AlgebraicModel:
         objective,
         (capacity,),
         objective_sense="maximize",
+    )
+
+
+def _infeasible_binary_model() -> AlgebraicModel:
+    impossible = AlgebraicConstraint(
+        "impossible",
+        SparseQuadratic.linear_expression([1.0]),
+        lower=2.0,
+    )
+    return AlgebraicModel(
+        "infeasible-binary",
+        ("x",),
+        (VariableType.BINARY,),
+        (0.0,),
+        (1.0,),
+        SparseQuadratic.linear_expression([1.0]),
+        (impossible,),
     )
 
 
@@ -56,6 +74,37 @@ def test_cpsat_adapter_preserves_maximize_objective_and_bound():
     assert result.best_obj == pytest.approx(-8.0)
     assert result.dual_bound == pytest.approx(8.0)
     assert result.gap == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize("backend, dependency", [("highs", "highspy"), ("cpsat", "ortools")])
+def test_exact_adapter_returns_proven_no_incumbent_without_exception(backend, dependency):
+    pytest.importorskip(dependency)
+    result = solve_exact_algebraic(
+        _infeasible_binary_model(),
+        backend,
+        time_limit=5.0,
+        threads=1,
+    )
+    assert result.best_sol is None
+    assert result.best_obj is None
+    assert "infeasible" in result.scip_status
+
+
+def test_verified_qqa_incumbent_survives_an_exact_time_limit_without_incumbent():
+    model = _binary_max_model()
+    result = ExactBackendResult(None, None, 1.0, "time limit reached")
+    assert _retain_verified_warm_incumbent(model, result, np_to_tensor([1.0, 0.0]))
+    assert result.best_sol is not None
+    assert result.best_obj == pytest.approx(-8.0)
+    assert result.diagnostics["verified_warm_incumbent_retained"] is True
+
+
+def test_warm_incumbent_never_overrides_an_exact_infeasibility_proof():
+    result = ExactBackendResult(None, None, 1.0, "infeasible")
+    assert not _retain_verified_warm_incumbent(
+        _binary_max_model(), result, np_to_tensor([1.0, 0.0])
+    )
+    assert result.best_sol is None
 
 
 def np_to_tensor(values: list[float]):
