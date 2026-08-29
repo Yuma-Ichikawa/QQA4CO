@@ -67,9 +67,7 @@ def run_replica_islands(
     epochs = int(anneal_kwargs.pop("num_epochs", 1500))
     total_time = anneal_kwargs.pop("time_limit", None)
     if total_time is not None and (
-        isinstance(total_time, bool)
-        or not isinstance(total_time, (int, float))
-        or total_time <= 0
+        isinstance(total_time, bool) or not isinstance(total_time, (int, float)) or total_time <= 0
     ):
         raise ValueError("time_limit must be positive or None.")
     effective_rounds = min(rounds, max(1, epochs))

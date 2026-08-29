@@ -44,7 +44,13 @@ def save_html_report(
     payload = serialisable_summary(result, problem)
     feasibility_status = str(payload.get("feasibility_status", "unknown"))
     status = feasibility_status.upper()
-    status_class = "ok" if feasibility_status == "feasible" else "bad" if feasibility_status == "infeasible" else "neutral"
+    status_class = (
+        "ok"
+        if feasibility_status == "feasible"
+        else "bad"
+        if feasibility_status == "infeasible"
+        else "neutral"
+    )
     chart = figure.to_html(
         full_html=False,
         include_plotlyjs=include_plotlyjs,

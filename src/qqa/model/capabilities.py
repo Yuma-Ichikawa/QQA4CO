@@ -78,8 +78,15 @@ def register_factor_backend(backend: FactorBackend, *, replace: bool = False) ->
 
 def factor_backend_registrations(factor: Any | type | str) -> tuple[FactorBackend, ...]:
     """Return deterministic registrations for a factor instance/type/name."""
-    name = factor if isinstance(factor, str) else factor.__name__ if isinstance(factor, type) else type(factor).__name__
-    return tuple(_BACKENDS.get(name, {}).get(key) for key in sorted(_BACKENDS.get(name, {})))
+    name = (
+        factor
+        if isinstance(factor, str)
+        else factor.__name__
+        if isinstance(factor, type)
+        else type(factor).__name__
+    )
+    registrations = _BACKENDS.get(name, {})
+    return tuple(registrations[key] for key in sorted(registrations))
 
 
 _C = FactorCapability
@@ -296,9 +303,7 @@ def factor_capabilities(factor: Any) -> frozenset[FactorCapability]:
     registrations = factor_backend_registrations(factor)
     if registrations:
         return frozenset(
-            capability
-            for registration in registrations
-            for capability in registration.capabilities
+            capability for registration in registrations for capability in registration.capabilities
         )
     return frozenset({_C.EVALUATE}) if callable(getattr(factor, "evaluate", None)) else frozenset()
 

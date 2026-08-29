@@ -326,11 +326,11 @@ class SparseQUBO:
                     self.edge_weight[both]
                     * fixed_by_variable[source[both]]
                     * fixed_by_variable[target[both]]
-                ).sum().item()
+                )
+                .sum()
+                .item()
             )
-        inverse = torch.full(
-            (self.num_variables,), -1, dtype=torch.long, device=self.linear.device
-        )
+        inverse = torch.full((self.num_variables,), -1, dtype=torch.long, device=self.linear.device)
         inverse[remaining] = torch.arange(len(remaining), device=self.linear.device)
         source_boundary = source_fixed & ~target_fixed
         target_boundary = target_fixed & ~source_fixed
@@ -361,10 +361,10 @@ class SparseQUBO:
         include_constant: bool = False,
     ) -> SparseQUBO:
         """Extract one connected component by index or explicit variables."""
+        if isinstance(component, bool):
+            raise TypeError("component must be an integer index or a tensor of variables.")
         variables = (
-            self.connected_components()[component]
-            if isinstance(component, int) and not isinstance(component, bool)
-            else component
+            self.connected_components()[component] if isinstance(component, int) else component
         )
         return self.induced_subqubo(variables, include_constant=include_constant)
 

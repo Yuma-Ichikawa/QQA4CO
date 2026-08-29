@@ -102,18 +102,19 @@ def solve_scip_algebraic(
     status = str(scip.getStatus())
     best = scip.getBestSol()
     if best is None:
+        no_incumbent_bound: float | None
         try:
-            bound = float(scip.getDualbound())
-            if not math.isfinite(bound):
-                bound = None
+            no_incumbent_bound = float(scip.getDualbound())
+            if not math.isfinite(no_incumbent_bound):
+                no_incumbent_bound = None
         except Exception:
-            bound = None
+            no_incumbent_bound = None
         return ExactBackendResult(
             None,
             None,
             perf_counter() - started,
             status,
-            dual_bound=bound,
+            dual_bound=no_incumbent_bound,
             diagnostics={
                 "backend": "scip",
                 "accepted_warm_start": accepted_warm_starts > 0,
@@ -225,9 +226,7 @@ def solve_cpsat_algebraic(
             cp.add(expression <= upper)
     candidates = _warm_start_candidates(model.num_variables, warm_start, warm_starts)
     if candidates:
-        for variable, value in zip(
-            variables, candidates[0].tolist(), strict=True
-        ):
+        for variable, value in zip(variables, candidates[0].tolist(), strict=True):
             cp.add_hint(variable, int(round(value)))
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = float(time_limit)
@@ -236,18 +235,19 @@ def solve_cpsat_algebraic(
     code = solver.solve(cp)
     status = solver.status_name(code)
     if code not in {cp_model.OPTIMAL, cp_model.FEASIBLE}:
+        no_incumbent_bound: float | None
         try:
-            bound = float(solver.best_objective_bound)
-            if not math.isfinite(bound):
-                bound = None
+            no_incumbent_bound = float(solver.best_objective_bound)
+            if not math.isfinite(no_incumbent_bound):
+                no_incumbent_bound = None
         except (AttributeError, RuntimeError):
-            bound = None
+            no_incumbent_bound = None
         return ExactBackendResult(
             None,
             None,
             perf_counter() - started,
             status.lower(),
-            dual_bound=bound,
+            dual_bound=no_incumbent_bound,
             diagnostics={
                 "backend": "cpsat",
                 "submitted_warm_starts": len(candidates),
@@ -351,7 +351,7 @@ def solve_highs_algebraic(
     values = np.asarray(solution.col_value, dtype=np.float64)
     status = str(highs.modelStatusToString(highs.getModelStatus())).lower()
     has_incumbent = bool(getattr(solution, "value_valid", False))
-    has_incumbent = has_incumbent and values.shape == (size,) and np.isfinite(values).all()
+    has_incumbent = bool(has_incumbent and values.shape == (size,) and np.isfinite(values).all())
     if not has_incumbent:
         info = highs.getInfo()
         candidate_bound = float(info.mip_dual_bound) if integer.size else None
@@ -478,11 +478,21 @@ def _backend_functions():
     }
 
 
+def _prepare_backend_import(backend: str) -> None:
+    """Load one optional native backend before a worker declares readiness."""
+    if backend == "scip":
+        from pyscipopt import Model, quicksum  # noqa: F401
+    elif backend == "cpsat":
+        from ortools.sat.python import cp_model  # noqa: F401
+    elif backend == "highs":
+        import highspy  # noqa: F401
+    else:
+        raise ValueError(f"Unknown exact backend {backend!r}.")
+
+
 def _result_payload(result: ExactBackendResult) -> dict[str, Any]:
     return {
-        "best_sol": (
-            None if result.best_sol is None else result.best_sol.detach().cpu().numpy()
-        ),
+        "best_sol": (None if result.best_sol is None else result.best_sol.detach().cpu().numpy()),
         "best_obj": result.best_obj,
         "runtime": result.runtime,
         "scip_status": result.scip_status,

@@ -188,7 +188,8 @@ def solve_qqa_scip(
             accepted += 1
 
     remaining = float(time_limit) - (perf_counter() - started)
-    if remaining > 1e-3:
+    scip_ran = remaining > 1e-3
+    if scip_ran:
         model.setRealParam("limits/time", remaining)
         scip_started = perf_counter()
         model.optimize()
@@ -213,18 +214,21 @@ def solve_qqa_scip(
             best_sol = scip_sol
             best_obj = scip_obj
 
-    try:
-        dual_bound = float(model.getDualbound())
-        if not math.isfinite(dual_bound):
+    dual_bound: float | None = None
+    gap: float | None = None
+    if scip_ran:
+        try:
+            dual_bound = float(model.getDualbound())
+            if not math.isfinite(dual_bound):
+                dual_bound = None
+        except Exception:  # pragma: no cover - SCIP status dependent
             dual_bound = None
-    except Exception:  # pragma: no cover - SCIP status dependent
-        dual_bound = None
-    try:
-        gap = float(model.getGap())
-        if not math.isfinite(gap):
+        try:
+            gap = float(model.getGap())
+            if not math.isfinite(gap):
+                gap = None
+        except Exception:  # pragma: no cover - SCIP status dependent
             gap = None
-    except Exception:  # pragma: no cover - SCIP status dependent
-        gap = None
 
     score = safe_score_summary(problem, best_sol, fallback_obj=best_obj)
     return SCIPHybridResult(

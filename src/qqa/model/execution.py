@@ -51,9 +51,7 @@ class CompiledExecutionPlan:
             )
         return self.model.internal_energy(values)
 
-    def internal_value_and_grad(
-        self, values: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def internal_value_and_grad(self, values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Return QQA energy and its gradient without mutating caller tensors."""
         differentiable = values.detach().clone().requires_grad_(True)
         energy = self.internal_value(differentiable)
@@ -154,9 +152,7 @@ def compile_execution_plan(
         for (backend_name, factor_type), item in sorted(grouped.items())
     )
     fused_graph = None
-    if selected and all(
-        FactorCapability.GPU_KERNEL in item.capabilities for item in selected
-    ):
+    if selected and all(FactorCapability.GPU_KERNEL in item.capabilities for item in selected):
         from qqa.gpu.factors import compile_factor_graph
 
         fused_graph = compile_factor_graph(model).to(resolved, dtype)

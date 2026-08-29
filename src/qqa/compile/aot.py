@@ -125,9 +125,7 @@ def _artifact_lock(path: Path, *, timeout: float = 60.0):
                     path.unlink()
                 continue
             if time.monotonic() - started >= timeout:
-                raise TimeoutError(
-                    "Timed out waiting for an AOT cache artifact lock."
-                ) from None
+                raise TimeoutError("Timed out waiting for an AOT cache artifact lock.") from None
             time.sleep(0.05)
     try:
         yield
@@ -210,6 +208,7 @@ def compile_sparse_qubo_aot(
     root.mkdir(parents=True, exist_ok=True)
     artifact = root / f"{key}.pt2"
     manifest = root / f"{key}.json"
+
     def load_cached():
         if force or not artifact.is_file() or not manifest.is_file():
             return None
@@ -264,9 +263,7 @@ def compile_sparse_qubo_aot(
                     None,
                 )
                 if not callable(compiler):
-                    raise RuntimeError(
-                        "This PyTorch build does not provide AOTInductor packaging."
-                    )
+                    raise RuntimeError("This PyTorch build does not provide AOTInductor packaging.")
                 compiler(exported, package_path=str(temporary_artifact))
             descriptor = {
                 "format": _CACHE_FORMAT,

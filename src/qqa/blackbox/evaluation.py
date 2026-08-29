@@ -228,7 +228,7 @@ class AsynchronousEvaluationScheduler:
                 methods = mp.get_all_start_methods()
                 context = mp.get_context("fork" if "fork" in methods else "spawn")
                 output = context.Queue(maxsize=1)
-                process = context.Process(
+                process = context.Process(  # type: ignore[attr-defined]
                     target=_isolated_evaluate,
                     args=(self.problem, point, output),
                     daemon=True,

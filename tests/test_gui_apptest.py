@@ -28,7 +28,32 @@ pytest.importorskip("streamlit", minversion="1.29.0")
 # Shared helpers — see ``tests/conftest.py``.
 from conftest import APP, PAGE_DIR, make_problem_config  # noqa: E402
 from conftest import set_slider as _set_slider
-from streamlit.testing.v1 import AppTest  # noqa: E402
+from streamlit.testing.v1 import AppTest as _StreamlitAppTest  # noqa: E402
+
+
+def _app_test_timeout(default: int) -> int:
+    """Allow slow filesystems to extend, but never shorten, UI test limits."""
+    raw = os.environ.get("QQA_TEST_APP_TIMEOUT_SECONDS", str(default))
+    try:
+        configured = int(raw)
+    except ValueError:
+        configured = default
+    return max(default, configured)
+
+
+class AppTest:
+    """Test-local proxy that applies the optional slow-filesystem timeout."""
+
+    @staticmethod
+    def from_file(
+        script_path: str,
+        *,
+        default_timeout: int = 3,
+    ) -> _StreamlitAppTest:
+        return _StreamlitAppTest.from_file(
+            script_path,
+            default_timeout=_app_test_timeout(default_timeout),
+        )
 
 
 def test_home_page_renders_default_problem():
@@ -474,8 +499,18 @@ def test_solve_page_survives_old_qqa_without_population_annealing(monkeypatch):
     """
     import qqa as _qqa  # noqa: PLC0415
 
-    monkeypatch.delattr(_qqa, "population_annealing", raising=False)
-    monkeypatch.delattr(_qqa, "PAResult", raising=False)
+    # Warm the non-PA modules used by the page before simulating an old wheel.
+    # On network filesystems a cold torch import can legitimately exceed the
+    # AppTest render timeout; that startup cost is unrelated to this capability
+    # regression and older QQA wheels imported these modules eagerly anyway.
+    _ = _qqa.Ising1D
+    from qqa.callbacks import Callback as _Callback  # noqa: PLC0415
+
+    assert _Callback is not None
+    lazy_exports = getattr(_qqa, "_EXPORTS", {})
+    for name in ("population_annealing", "PAResult"):
+        monkeypatch.delitem(lazy_exports, name, raising=False)
+        monkeypatch.delattr(_qqa, name, raising=False)
 
     at = AppTest.from_file(str(PAGE_DIR / "1_Solve.py"), default_timeout=60)
     at.session_state["problem_config"] = make_problem_config("ising1d", 6)
@@ -506,6 +541,7 @@ def test_visualize_page_survives_old_qqa_without_pa_result(monkeypatch):
     """
     import qqa as _qqa  # noqa: PLC0415
 
+    monkeypatch.delitem(getattr(_qqa, "_EXPORTS", {}), "PAResult", raising=False)
     monkeypatch.delattr(_qqa, "PAResult", raising=False)
 
     at = AppTest.from_file(str(PAGE_DIR / "2_Visualize.py"), default_timeout=60)

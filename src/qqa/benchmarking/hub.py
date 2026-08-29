@@ -15,7 +15,7 @@ from typing import Any
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.10
-    import tomli as tomllib
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from qqa.runtime.security import validate_portable_payload
 
@@ -107,7 +107,9 @@ def load_benchmark_manifest(path: str | Path) -> BenchmarkManifest:
 
 def builtin_benchmark_manifest(name: str = "qqa-core") -> BenchmarkManifest:
     """Load a wheel-packaged manifest by public logical name."""
-    if not name or any(character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in name):
+    if not name or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for character in name
+    ):
         raise ValueError("Manifest name must use lowercase letters, digits, '-' or '_'.")
     resource = files("qqa.benchmarking").joinpath("manifests", f"{name}.toml")
     with resource.open("rb") as stream:
@@ -139,7 +141,9 @@ def paired_metric_summary(
         raise ValueError("candidate and baseline must be aligned and non-empty.")
     if not 0 < confidence < 1 or bootstrap_samples < 100:
         raise ValueError("confidence must be in (0, 1) and bootstrap_samples >= 100.")
-    differences = [float(left) - float(right) for left, right in zip(candidate, baseline, strict=True)]
+    differences = [
+        float(left) - float(right) for left, right in zip(candidate, baseline, strict=True)
+    ]
     if any(not math.isfinite(item) for item in differences):
         raise ValueError("Paired metrics must be finite.")
     tolerance = 1e-12

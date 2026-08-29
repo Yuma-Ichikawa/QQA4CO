@@ -696,6 +696,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument("--replicas", type=int, default=128)
     doctor.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    doctor.add_argument(
+        "--probe-timeout",
+        type=float,
+        default=30.0,
+        help="Maximum seconds for isolated Torch and accelerator diagnostics.",
+    )
 
     gui = sub.add_parser("gui", help="Launch the Streamlit GUI.")
     gui.add_argument("--port", type=int, default=8501)
@@ -1337,20 +1343,20 @@ def _cmd_benchmark(args: argparse.Namespace) -> int:
 
 
 def _cmd_example(args: argparse.Namespace) -> int:
-    import qqa
-
+    descriptions = {
+        "microgrid-dispatch": "mixed unit commitment, storage, reserve, and dispatch",
+        "microgrid-pareto": "cost/emissions/resilience Pareto planning",
+        "portfolio-pareto": "risk/return/turnover allocation with cardinality",
+        "process-blackbox": "constrained simulator-style process tuning",
+    }
     if args.action == "list":
-        descriptions = {
-            "microgrid-dispatch": "mixed unit commitment, storage, reserve, and dispatch",
-            "microgrid-pareto": "cost/emissions/resilience Pareto planning",
-            "portfolio-pareto": "risk/return/turnover allocation with cardinality",
-            "process-blackbox": "constrained simulator-style process tuning",
-        }
-        for name in qqa.APPLICATIONS:
-            print(f"{name:<22} {descriptions[name]}")
+        for name, description in descriptions.items():
+            print(f"{name:<22} {description}")
         return 0
     if args.name is None:
         raise SystemExit("[qqa example] `run` requires an application name.")
+
+    import qqa
 
     device = _resolve_device(args.device)
     qqa.fix_seed(args.seed)

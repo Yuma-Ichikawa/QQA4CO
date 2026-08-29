@@ -33,6 +33,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Add portable Benchmark Hub manifests and deterministic paired bootstrap
   summaries, plus a credential-free end-to-end notebook.
 
+### Deployment and native-boundary reliability
+
+- Preserve the complete top-level API through lazy exports so metadata and
+  discovery commands no longer import Torch or optional solver stacks; retain
+  historical submodule access such as `qqa.tex`.
+- Bound `qqa doctor` accelerator probes and native benchmark workers, start
+  exact-solver budgets only after optional backend imports, and avoid querying
+  SCIP solution-stage metrics when its solve phase did not run.
+- Stabilize the sparse performance gate with steady-state warmups while
+  retaining the existing runtime and storage regression thresholds.
+
 ## [0.9.0] - 2026-08-28
 
 ### Mathematical and semantic foundations

@@ -73,7 +73,7 @@ result = qqa.solve(
 )
 
 print(result.status.value)
-print(result.best_obj)      # original mathematical objective
+print(result.best_obj)  # original mathematical objective
 print(result.feasible)
 print(result.runtime)
 ```
@@ -275,7 +275,7 @@ drop, or reinterpret constraints.
 problem = qqa.TSP(N=30, seed=0)  # Sinkhorn permutation relaxation
 result = qqa.solve(problem, profile="quality")
 
-print(result.raw_solution)       # untouched optimiser output
+print(result.raw_solution)  # untouched optimiser output
 print(result.repaired_solution)  # Hungarian projection + 2-opt, when changed
 ```
 

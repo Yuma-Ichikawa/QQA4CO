@@ -11,8 +11,12 @@ import torch
 from qqa.compile import SparseQUBO
 
 
-def _median_runtime(function, *, repeats: int = 7) -> float:
-    function()
+def _median_runtime(function, *, warmups: int = 15, repeats: int = 15) -> float:
+    # Torch CPU kernels can take several calls to settle their thread-pool and
+    # allocator state on shared CI hosts.  Measure only the steady state so a
+    # one-sided cold start cannot masquerade as a sparse-core regression.
+    for _ in range(warmups):
+        function()
     samples = []
     for _ in range(repeats):
         started = perf_counter()

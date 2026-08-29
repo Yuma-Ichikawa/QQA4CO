@@ -13,10 +13,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     request, response, ready = map(Path, arguments)
     try:
-        from qqa.hybrid.exact import _run_backend_payload, _safe_error
+        from qqa.hybrid.exact import _prepare_backend_import, _run_backend_payload, _safe_error
 
         with request.open("rb") as stream:
             payload, backend, kwargs = pickle.load(stream)
+        _prepare_backend_import(backend)
         ready.touch(exist_ok=False)
         envelope = _run_backend_payload(payload, backend, kwargs)
     except Exception as exc:  # noqa: BLE001 - final native-process boundary

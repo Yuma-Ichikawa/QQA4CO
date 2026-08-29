@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import os
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -1144,6 +1145,7 @@ def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
             "verbose": False,
         },
         common_import=True,
+        worker_timeout=float(os.environ.get("QQA_TEST_WORKER_TIMEOUT_SECONDS", "300")),
     )
     assert result.status == "optimal"
     assert result.feasible

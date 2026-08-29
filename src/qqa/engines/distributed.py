@@ -186,8 +186,12 @@ def anneal_distributed_island(
     objective_tensor = torch.tensor(
         [best_objective], device=best_solution.device, dtype=torch.float64
     )
-    gathered_objectives = [torch.empty_like(objective_tensor) for _ in range(dist.get_world_size(group))]
-    gathered_solutions = [torch.empty_like(best_solution) for _ in range(dist.get_world_size(group))]
+    gathered_objectives = [
+        torch.empty_like(objective_tensor) for _ in range(dist.get_world_size(group))
+    ]
+    gathered_solutions = [
+        torch.empty_like(best_solution) for _ in range(dist.get_world_size(group))
+    ]
     dist.all_gather(gathered_objectives, objective_tensor, group=group)
     dist.all_gather(gathered_solutions, best_solution.contiguous(), group=group)
     winner = int(torch.argmin(torch.cat(gathered_objectives)).item())

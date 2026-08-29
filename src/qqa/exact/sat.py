@@ -71,7 +71,9 @@ def _solve_with_deadline(
     methods = mp.get_all_start_methods()
     context = mp.get_context("fork" if "fork" in methods else "spawn")
     output = context.Queue(maxsize=1)
-    process = context.Process(target=_rc2_worker, args=(hard, soft, output), daemon=True)
+    process = context.Process(  # type: ignore[attr-defined]
+        target=_rc2_worker, args=(hard, soft, output), daemon=True
+    )
     process.start()
     process.join(timeout=time_limit)
     if process.is_alive():
@@ -87,9 +89,7 @@ def _solve_with_deadline(
         output.close()
     if envelope[0] == "error":
         if envelope[1] == "ImportError":
-            raise ImportError(
-                "Install `qqa[discs]` (python-sat) to use the SAT/MaxSAT runtime."
-            )
+            raise ImportError("Install `qqa[discs]` (python-sat) to use the SAT/MaxSAT runtime.")
         raise RuntimeError(f"SAT worker failed ({envelope[1]}).")
     return envelope[1], False
 

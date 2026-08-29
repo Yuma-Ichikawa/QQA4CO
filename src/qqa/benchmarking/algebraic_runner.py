@@ -238,6 +238,7 @@ def run_benchmark_instance(
     reference_file: str | Path | None = None,
     qqa_config: QQAHeuristicConfig | None = None,
     verbose: bool = False,
+    worker_timeout: float | None = None,
     _algebraic: AlgebraicModel | None = None,
     _reference_records: dict[str, tuple[str, float | None]] | None = None,
     _defer_cleanup: bool = False,
@@ -260,6 +261,10 @@ def run_benchmark_instance(
         raise ValueError("threads must be a positive integer.")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("seed must be a non-negative integer.")
+    if worker_timeout is not None and (
+        isinstance(worker_timeout, bool) or not math.isfinite(worker_timeout) or worker_timeout <= 0
+    ):
+        raise ValueError("worker_timeout must be finite and > 0, or None.")
 
     if resolved_format == "qplib" and _algebraic is None and not _isolated_worker:
         return _run_isolated_benchmark_instance(
@@ -278,6 +283,7 @@ def run_benchmark_instance(
                 "verbose": verbose,
             },
             common_import=False,
+            worker_timeout=worker_timeout,
         )
 
     started = perf_counter()
@@ -511,8 +517,13 @@ def _run_isolated_benchmark_instance(
     reference_records: dict[str, tuple[str, float | None]] | None,
     run_kwargs: dict,
     common_import: bool,
+    worker_timeout: float | None = None,
 ) -> BenchmarkResult:
     """Execute one QPLIB run behind a native-process fault boundary."""
+    if worker_timeout is not None and (
+        isinstance(worker_timeout, bool) or not math.isfinite(worker_timeout) or worker_timeout <= 0
+    ):
+        raise ValueError("worker_timeout must be finite and > 0, or None.")
     with tempfile.TemporaryDirectory(prefix="qqa-benchmark-") as directory:
         request = Path(directory) / "request.json"
         output = Path(directory) / "result.json"
@@ -548,8 +559,9 @@ def _run_isolated_benchmark_instance(
             ]
         )
         time_limit = float(run_kwargs.get("time_limit", 60.0))
+        timeout = max(300.0, time_limit + 120.0) if worker_timeout is None else worker_timeout
         try:
-            process.wait(timeout=max(300.0, time_limit + 120.0))
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
@@ -644,6 +656,9 @@ def compare_benchmark_solvers(
         "time_limit": float(kwargs.get("time_limit", 60.0)),
         "relative_gap_limit": float(kwargs.get("relative_gap_limit", 0.0)),
         "threads": int(kwargs.get("threads", 1)),
+        "worker_timeout": (
+            float(kwargs["worker_timeout"]) if kwargs.get("worker_timeout") is not None else None
+        ),
         "thread_policy": {
             "scip_parallel": int(kwargs.get("threads", 1)),
             "scip_lp": int(kwargs.get("threads", 1)),
@@ -831,6 +846,7 @@ def compare_benchmark_solvers(
                             reference_records=reference_records,
                             run_kwargs=dict(kwargs),
                             common_import=True,
+                            worker_timeout=kwargs.get("worker_timeout"),
                         )
                     else:
                         result = run_benchmark_instance(

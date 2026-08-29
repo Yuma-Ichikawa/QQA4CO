@@ -338,8 +338,10 @@ def _retain_verified_warm_incumbent(
     compact_status = re.sub(
         r"[^a-z0-9]+", "", str(getattr(exact_result, "scip_status", "")).lower()
     )
-    if compact_status == "optimal" or compact_status == "inforunbd" or any(
-        token in compact_status for token in ("infeasible", "unbounded", "invalid")
+    if (
+        compact_status == "optimal"
+        or compact_status == "inforunbd"
+        or any(token in compact_status for token in ("infeasible", "unbounded", "invalid"))
     ):
         return False
     values = torch.as_tensor(candidate).detach().reshape(-1).cpu().to(torch.float64)
@@ -350,9 +352,7 @@ def _retain_verified_warm_incumbent(
         return False
     exact_result.best_sol = values
     exact_result.best_obj = (
-        evaluation.objective
-        if model.objective_sense == "minimize"
-        else -evaluation.objective
+        evaluation.objective if model.objective_sense == "minimize" else -evaluation.objective
     )
     exact_result.diagnostics["verified_warm_incumbent_retained"] = True
     return True

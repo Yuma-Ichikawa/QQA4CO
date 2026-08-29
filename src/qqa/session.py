@@ -39,7 +39,7 @@ class SolveSession:
         self.state = SessionState.CREATED
         self.result = None
         self.error_type: str | None = None
-        self._plan = None
+        self._plan: Any = None
         self._lock = Lock()
         self._executor: ThreadPoolExecutor | None = None
 

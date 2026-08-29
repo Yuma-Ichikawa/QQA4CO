@@ -84,34 +84,46 @@ def plot_optimization_cockpit(
                 col=1,
             )
         figure.add_trace(go.Bar(x=phases, y=phase_values, name="Seconds"), row=1, col=2)
-        figure.add_trace(
-            go.Bar(
-                x=constraint_values or [0.0],
-                y=constraint_labels or ["none"],
-                customdata=constraint_names or ["none"],
-                orientation="h",
-                hovertemplate="%{customdata}<br>scaled residual=%{x:.4g}<extra></extra>",
-                name="Scaled residual",
-            ),
-            row=2,
-            col=1,
-        )
+        if constraint_values:
+            figure.add_trace(
+                go.Bar(
+                    x=constraint_values,
+                    y=constraint_labels,
+                    customdata=constraint_names,
+                    orientation="h",
+                    hovertemplate="%{customdata}<br>scaled residual=%{x:.4g}<extra></extra>",
+                    name="Scaled residual",
+                ),
+                row=2,
+                col=1,
+            )
+        else:
+            figure.add_annotation(
+                text="No declared constraints<br>Feasibility verified",
+                showarrow=False,
+                font={"size": 16, "color": "#475569"},
+                row=2,
+                col=1,
+            )
         figure.add_trace(
             go.Indicator(
                 mode="number+delta",
                 value=objective_number,
                 number={"valueformat": ".6g"},
                 delta={"reference": float(getattr(result, "best_bound", 0.0) or 0.0)},
-                title={
-                    "text": f"{status_text} · {guarantee_text}<br>objective / bound"
-                },
+                title={"text": f"{status_text} · {guarantee_text}<br>objective / bound"},
             ),
             row=2,
             col=2,
         )
         figure.update_layout(title={"text": title, "x": 0.5}, template="plotly_white", height=720)
         figure.update_xaxes(title_text="Elapsed seconds", row=1, col=1)
-        figure.update_xaxes(title_text="Scaled residual", row=2, col=1)
+        figure.update_xaxes(
+            title_text="Scaled residual" if constraint_values else None,
+            visible=bool(constraint_values),
+            row=2,
+            col=1,
+        )
         if show:
             figure.show()
         return figure
@@ -136,10 +148,22 @@ def plot_optimization_cockpit(
         axes[0, 0].legend()
     axes[0, 1].bar(phases, phase_values, color="#2563eb")
     axes[0, 1].tick_params(axis="x", rotation=25)
-    axes[1, 0].barh(constraint_labels or ["none"], constraint_values or [0.0], color="#dc2626")
-    axes[1, 0].set_xlabel("Scaled residual")
-    axes[1, 0].tick_params(axis="y", labelsize=8)
-    axes[1, 0].invert_yaxis()
+    if constraint_values:
+        axes[1, 0].barh(constraint_labels, constraint_values, color="#dc2626")
+        axes[1, 0].set_xlabel("Scaled residual")
+        axes[1, 0].tick_params(axis="y", labelsize=8)
+        axes[1, 0].invert_yaxis()
+    else:
+        axes[1, 0].axis("off")
+        axes[1, 0].text(
+            0.5,
+            0.55,
+            "No declared constraints\nFeasibility verified",
+            ha="center",
+            va="center",
+            color="#475569",
+            fontsize=14,
+        )
     axes[1, 1].axis("off")
     axes[1, 1].text(
         0.5,

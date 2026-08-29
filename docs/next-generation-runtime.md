@@ -18,8 +18,8 @@ print(report.explain())
 
 result = qqa.solve(
     model,
-    goal="feasible",       # best | feasible | prove | diverse | pareto
-    budget="30s",          # ms, s, m, and h are accepted
+    goal="feasible",  # best | feasible | prove | diverse | pareto
+    budget="30s",  # ms, s, m, and h are accepted
     device="auto",
     seed=0,
 )

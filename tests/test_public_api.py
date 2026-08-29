@@ -102,6 +102,27 @@ NEW_PUBLIC_NAMES = [
 ]
 
 
+def test_metadata_only_import_does_not_load_torch() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; import qqa; print(qqa.__version__); print('torch' in sys.modules)",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    assert completed.stdout.splitlines()[-1] == "False"
+
+
+def test_tex_submodule_remains_available_from_package_root() -> None:
+    """Preserve the historical ``qqa.tex.DEFAULT_*`` access pattern."""
+    assert isinstance(qqa.tex.DEFAULT_BASE_URL, str)
+    assert isinstance(qqa.tex.DEFAULT_MODEL, str)
+
+
 @pytest.mark.parametrize("name", LEGACY_PUBLIC_NAMES + NEW_PUBLIC_NAMES)
 def test_top_level_export_exists(name: str) -> None:
     assert hasattr(qqa, name), f"qqa.{name} must be importable from the top level"

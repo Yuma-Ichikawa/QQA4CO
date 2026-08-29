@@ -334,3 +334,7 @@ def test_ood_gate_handles_one_feature_and_decision_explorer_counterfactuals() ->
     rows = decision_explorer(result, model)
     assert len(rows) == 2
     assert all(row["objective_delta"] is not None for row in rows)
+    figure, axes = plot_optimization_cockpit(result, backend="matplotlib")
+    assert axes[1, 0].axison is False
+    assert "No declared constraints" in axes[1, 0].texts[0].get_text()
+    figure.clear()

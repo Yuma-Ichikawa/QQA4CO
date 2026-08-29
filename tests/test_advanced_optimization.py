@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 
 import networkx as nx
 import pytest
@@ -141,7 +142,7 @@ def test_qqa_scip_certifies_qubo_optimum():
     result = qqa.solve_qqa_scip(
         problem,
         qqa_kwargs={"sol_size": 32, "num_epochs": 10, "verbose": False},
-        time_limit=10,
+        time_limit=float(os.environ.get("QQA_TEST_SCIP_TIME_LIMIT_SECONDS", "10")),
     )
     assert result.best_obj == pytest.approx(brute)
     assert result.proven_optimal
@@ -431,7 +432,7 @@ def test_scip_solves_safe_mixed_nonlinear_model_exactly():
     result = qqa.solve_spec_scip(
         spec,
         qqa_kwargs={"sol_size": 32, "num_epochs": 20, "verbose": False},
-        time_limit=10,
+        time_limit=float(os.environ.get("QQA_TEST_SCIP_TIME_LIMIT_SECONDS", "10")),
     )
     assert result.proven_optimal
     assert result.score["feasible"]

@@ -40,6 +40,23 @@ def test_conditioned_subqubo_preserves_every_completion_energy() -> None:
         assert conditioned.energy(free).item() == pytest.approx(qubo.energy(full).item())
 
 
+def test_component_subqubo_matches_explicit_induced_subqubo() -> None:
+    qubo = SparseQUBO(
+        torch.tensor([1.0, 2.0, -1.0, 0.5]),
+        torch.tensor([[0, 2], [1, 3]]),
+        torch.tensor([3.0, -2.0]),
+        4.0,
+    )
+    assert [component.tolist() for component in qubo.connected_components()] == [[0, 1], [2, 3]]
+    component = qubo.component_subqubo(1, include_constant=True)
+    explicit = qubo.induced_subqubo(torch.tensor([2, 3]), include_constant=True)
+    for values in itertools.product((0.0, 1.0), repeat=2):
+        point = torch.tensor([values])
+        assert component.energy(point).item() == pytest.approx(explicit.energy(point).item())
+    with pytest.raises(TypeError, match="integer index"):
+        qubo.component_subqubo(True)
+
+
 def test_sat_deadline_rejects_invalid_values_before_optional_import() -> None:
     model = ModelIR((VariableBlock("x", "binary", (1,)),), ObjectiveIR(()))
     with pytest.raises(ValueError, match="time_limit"):
@@ -64,22 +81,28 @@ def test_blackbox_cache_identity_includes_seed_fidelity_replicate_and_version(tm
         repeated = scheduler.submit(point, replicate=1).result()
     assert first.status is EvaluationStatus.COMPLETED
     assert repeated.status is EvaluationStatus.COMPLETED
-    assert database.get(
-        problem.name,
-        point,
-        seed=7,
-        fidelity="high",
-        replicate=0,
-        evaluator_version="v2",
-    ) == first
-    assert database.get(
-        problem.name,
-        point,
-        seed=8,
-        fidelity="high",
-        replicate=0,
-        evaluator_version="v2",
-    ) is None
+    assert (
+        database.get(
+            problem.name,
+            point,
+            seed=7,
+            fidelity="high",
+            replicate=0,
+            evaluator_version="v2",
+        )
+        == first
+    )
+    assert (
+        database.get(
+            problem.name,
+            point,
+            seed=8,
+            fidelity="high",
+            replicate=0,
+            evaluator_version="v2",
+        )
+        is None
+    )
 
 
 def test_blackbox_hard_timeout_terminates_an_isolated_evaluation() -> None:

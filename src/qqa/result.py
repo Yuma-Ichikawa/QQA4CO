@@ -305,9 +305,12 @@ class SolveResult:
 
     def to_dict(self, *, include_solutions: bool = False) -> dict[str, Any]:
         """Return a JSON-oriented, environment-neutral representation."""
+        guarantee_level = self.guarantee_level
+        if guarantee_level is None:  # Defensive guard for bypassed dataclass initialisation.
+            raise RuntimeError("SolveResult guarantee level has not been initialised.")
         payload: dict[str, Any] = {
             "status": self.status.value,
-            "guarantee_level": self.guarantee_level.value,
+            "guarantee_level": guarantee_level.value,
             "objective_value": self.objective_value,
             "repaired_objective_value": self.repaired_objective_value,
             "internal_energy": self.internal_energy,

@@ -133,7 +133,10 @@ class Study:
         state: TrialState = TrialState.COMPLETE,
     ) -> Trial:
         """Complete a reserved trial with strict finite observations."""
-        if not any(candidate is trial for candidate in self.trials) or trial.state is not TrialState.RUNNING:
+        if (
+            not any(candidate is trial for candidate in self.trials)
+            or trial.state is not TrialState.RUNNING
+        ):
             raise ValueError("trial must be one running trial owned by this study.")
         state = TrialState(state)
         if state is TrialState.COMPLETE:
@@ -159,7 +162,7 @@ class Study:
             key=lambda trial: (
                 not bool(trial.feasible),
                 sum(trial.violations),
-                sign * float(trial.value),
+                sign * float(trial.value) if trial.value is not None else math.inf,
                 trial.number,
             ),
         )

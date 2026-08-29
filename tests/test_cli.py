@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -9,7 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 
-def _run(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+def _run(*args: str, timeout: int | None = None) -> subprocess.CompletedProcess:
+    if timeout is None:
+        timeout = int(os.environ.get("QQA_TEST_SUBPROCESS_TIMEOUT_SECONDS", "120"))
     return subprocess.run(
         [sys.executable, "-m", "qqa.cli", *args],
         capture_output=True,
@@ -208,6 +211,19 @@ def test_cli_lists_realistic_examples_and_doctor_json():
     assert '"recommended_device"' in doctor.stdout
 
 
+def test_doctor_returns_portable_fallback_when_runtime_probe_times_out(monkeypatch):
+    from qqa.commands import system
+
+    def time_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired([sys.executable], timeout=0.01)
+
+    monkeypatch.setattr(system.subprocess, "run", time_out)
+    payload = system._probe_runtime(0.01)
+    assert payload["probe_status"] == "timed_out"
+    assert payload["recommended_device"] == "cpu"
+    assert payload["cuda_available"] is None
+
+
 def test_cli_solve_small_mis():
     out = _run(
         "solve",
@@ -393,7 +409,7 @@ def test_cli_scip_backend_reports_proof():
         "--epochs",
         "10",
         "--scip-time-limit",
-        "10",
+        os.environ.get("QQA_TEST_SCIP_TIME_LIMIT_SECONDS", "10"),
         "--quiet",
     )
     assert out.returncode == 0, out.stderr

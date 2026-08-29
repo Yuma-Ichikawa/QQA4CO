@@ -29,149 +29,158 @@ from importlib import import_module
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
-from qqa import polish, warmstart
-from qqa.algebraic import (
-    AlgebraicConstraint,
-    AlgebraicEvaluation,
-    AlgebraicModel,
-    SparseQuadratic,
-    VariableType,
-)
-from qqa.annealing import AnnealResult, anneal
-from qqa.api import doctor, inspect, plan, solve
-from qqa.applications import (
-    APPLICATIONS,
-    build_application,
-    build_microgrid_dispatch,
-    build_microgrid_pareto,
-    build_portfolio_pareto,
-    build_process_blackbox,
-)
-from qqa.blackbox import (
-    BlackBoxConstraint,
-    BlackBoxProblem,
-    BlackBoxResult,
-    Study,
-    Trial,
-    TrialState,
-    blackbox_optimize,
-    create_study,
-    plot_blackbox,
-)
-from qqa.callbacks import (
-    AutoDivTuner,
-    Callback,
-    CallbackState,
-    HistoryRecorder,
-    PopulationTracker,
-    TrajectoryTracker,
-)
-from qqa.config import SolverConfig
-from qqa.isco import ISCOResult, discrete_langevin, isco_anneal
-from qqa.mixed import (
-    Binary,
-    BinaryVariable,
-    Constraint,
-    Integer,
-    IntegerVariable,
-    MixedProblem,
-    MixedRelaxation,
-    Real,
-    RealVariable,
-    RepairResult,
-    VariableSpace,
-    repair_mixed_solution,
-    solve_mixed,
-)
-from qqa.model import ModelIR
-from qqa.multiobjective import (
-    MultiObjectiveProblem,
-    Objective,
-    ParetoResult,
-    pareto_anneal,
-    plot_pareto,
-    plot_pareto_diagnostics,
-)
-from qqa.natural_language import (
-    MODEL_SYSTEM_PROMPT,
-    AskResult,
-    OptimizationPlan,
-    ask,
-    blackbox_from_spec,
-    compile_natural_language,
-    execute_plan,
-    plan_spec,
-)
-from qqa.pa import PAResult, population_annealing
-from qqa.problems import (
-    QAP,
-    TSP,
-    BalancedGraphPartition,
-    BinaryPerceptron,
-    Coloring,
-    COProblem,
-    EdwardsAnderson,
-    GraphBisection,
-    HopfieldMemory,
-    IntegerFactorizationIsing,
-    Ising1D,
-    Knapsack,
-    MaxClique,
-    MaxCliqueInstance,
-    MaxCut,
-    MaxCutInstance,
-    MaximumIndependentSet,
-    MaximumIndependentSetInstance,
-    MaxSAT3,
-    MinimumDominatingSet,
-    NormalizedCut,
-    NormCut,
-    NQueens,
-    NumberPartitioning,
-    PSpinGlass,
-    QUBOProblem,
-    RandomFieldIsing,
-    SherringtonKirkpatrick,
-    SpinProblem,
-    UserProblem,
-    VertexCover,
-    load_problem_from_file,
-    random_factorization_problems,
-    random_prime,
-    random_semiprime,
-    user_problem_from_source,
-)
-from qqa.relaxation import (
-    BinaryInstanceRelaxation,
-    BinaryRelaxation,
-    CategoricalRelaxation,
-    EntropicCategoricalRelaxation,
-    MirrorDescentCategoricalRelaxation,
-    Relaxation,
-    SinkhornRelaxation,
-    SoftmaxCategoricalRelaxation,
-    SparseCategoricalRelaxation,
-    SpinRelaxation,
-    StochasticBinaryRelaxation,
-    StraightThroughBinaryRelaxation,
-)
-from qqa.reporting import save_html_report
-from qqa.result import FeasibilityStatus, GuaranteeLevel, SolveResult, SolveStatus
-from qqa.sa import SAResult, simulated_annealing
-from qqa.schedule import LinearBGSchedule
-from qqa.session import SessionState, SolveSession
-from qqa.templates import available_templates, build_template
-from qqa.tex import (
-    TEX_SYSTEM_PROMPT,
-    LLMAPIError,
-    ModelSpec,
-    OpenAICompatibleClient,
-    TexSolveResult,
-    compile_tex,
-    problem_from_spec,
-    solve_tex,
-)
-from qqa.utils import enable_tf32, fix_seed, generate_graph, resolve_device
+# Keep ``import qqa`` and metadata-only CLI commands lightweight. Public
+# objects retain their historical top-level names and are loaded on first
+# explicit access through PEP 562's module ``__getattr__`` hook.
+_EXPORTS: dict[str, tuple[str, str | None]] = {
+    "AlgebraicConstraint": ("qqa.algebraic", "AlgebraicConstraint"),
+    "AlgebraicEvaluation": ("qqa.algebraic", "AlgebraicEvaluation"),
+    "AlgebraicModel": ("qqa.algebraic", "AlgebraicModel"),
+    "SparseQuadratic": ("qqa.algebraic", "SparseQuadratic"),
+    "VariableType": ("qqa.algebraic", "VariableType"),
+    "AnnealResult": ("qqa.annealing", "AnnealResult"),
+    "anneal": ("qqa.annealing", "anneal"),
+    "doctor": ("qqa.api", "doctor"),
+    "inspect": ("qqa.api", "inspect"),
+    "plan": ("qqa.api", "plan"),
+    "solve": ("qqa.api", "solve"),
+    "APPLICATIONS": ("qqa.applications", "APPLICATIONS"),
+    "build_application": ("qqa.applications", "build_application"),
+    "build_microgrid_dispatch": ("qqa.applications", "build_microgrid_dispatch"),
+    "build_microgrid_pareto": ("qqa.applications", "build_microgrid_pareto"),
+    "build_portfolio_pareto": ("qqa.applications", "build_portfolio_pareto"),
+    "build_process_blackbox": ("qqa.applications", "build_process_blackbox"),
+    "BlackBoxConstraint": ("qqa.blackbox", "BlackBoxConstraint"),
+    "BlackBoxProblem": ("qqa.blackbox", "BlackBoxProblem"),
+    "BlackBoxResult": ("qqa.blackbox", "BlackBoxResult"),
+    "Study": ("qqa.blackbox", "Study"),
+    "Trial": ("qqa.blackbox", "Trial"),
+    "TrialState": ("qqa.blackbox", "TrialState"),
+    "blackbox_optimize": ("qqa.blackbox", "blackbox_optimize"),
+    "create_study": ("qqa.blackbox", "create_study"),
+    "plot_blackbox": ("qqa.blackbox", "plot_blackbox"),
+    "AutoDivTuner": ("qqa.callbacks", "AutoDivTuner"),
+    "Callback": ("qqa.callbacks", "Callback"),
+    "CallbackState": ("qqa.callbacks", "CallbackState"),
+    "HistoryRecorder": ("qqa.callbacks", "HistoryRecorder"),
+    "PopulationTracker": ("qqa.callbacks", "PopulationTracker"),
+    "TrajectoryTracker": ("qqa.callbacks", "TrajectoryTracker"),
+    "SolverConfig": ("qqa.config", "SolverConfig"),
+    "ISCOResult": ("qqa.isco", "ISCOResult"),
+    "discrete_langevin": ("qqa.isco", "discrete_langevin"),
+    "isco_anneal": ("qqa.isco", "isco_anneal"),
+    "Binary": ("qqa.mixed", "Binary"),
+    "BinaryVariable": ("qqa.mixed", "BinaryVariable"),
+    "Constraint": ("qqa.mixed", "Constraint"),
+    "Integer": ("qqa.mixed", "Integer"),
+    "IntegerVariable": ("qqa.mixed", "IntegerVariable"),
+    "MixedProblem": ("qqa.mixed", "MixedProblem"),
+    "MixedRelaxation": ("qqa.mixed", "MixedRelaxation"),
+    "Real": ("qqa.mixed", "Real"),
+    "RealVariable": ("qqa.mixed", "RealVariable"),
+    "RepairResult": ("qqa.mixed", "RepairResult"),
+    "VariableSpace": ("qqa.mixed", "VariableSpace"),
+    "repair_mixed_solution": ("qqa.mixed", "repair_mixed_solution"),
+    "solve_mixed": ("qqa.mixed", "solve_mixed"),
+    "ModelIR": ("qqa.model", "ModelIR"),
+    "MultiObjectiveProblem": ("qqa.multiobjective", "MultiObjectiveProblem"),
+    "Objective": ("qqa.multiobjective", "Objective"),
+    "ParetoResult": ("qqa.multiobjective", "ParetoResult"),
+    "pareto_anneal": ("qqa.multiobjective", "pareto_anneal"),
+    "plot_pareto": ("qqa.multiobjective", "plot_pareto"),
+    "plot_pareto_diagnostics": ("qqa.multiobjective", "plot_pareto_diagnostics"),
+    "MODEL_SYSTEM_PROMPT": ("qqa.natural_language", "MODEL_SYSTEM_PROMPT"),
+    "AskResult": ("qqa.natural_language", "AskResult"),
+    "OptimizationPlan": ("qqa.natural_language", "OptimizationPlan"),
+    "ask": ("qqa.natural_language", "ask"),
+    "blackbox_from_spec": ("qqa.natural_language", "blackbox_from_spec"),
+    "compile_natural_language": ("qqa.natural_language", "compile_natural_language"),
+    "execute_plan": ("qqa.natural_language", "execute_plan"),
+    "plan_spec": ("qqa.natural_language", "plan_spec"),
+    "PAResult": ("qqa.pa", "PAResult"),
+    "population_annealing": ("qqa.pa", "population_annealing"),
+    "QAP": ("qqa.problems", "QAP"),
+    "TSP": ("qqa.problems", "TSP"),
+    "BalancedGraphPartition": ("qqa.problems", "BalancedGraphPartition"),
+    "BinaryPerceptron": ("qqa.problems", "BinaryPerceptron"),
+    "Coloring": ("qqa.problems", "Coloring"),
+    "COProblem": ("qqa.problems", "COProblem"),
+    "EdwardsAnderson": ("qqa.problems", "EdwardsAnderson"),
+    "GraphBisection": ("qqa.problems", "GraphBisection"),
+    "HopfieldMemory": ("qqa.problems", "HopfieldMemory"),
+    "IntegerFactorizationIsing": ("qqa.problems", "IntegerFactorizationIsing"),
+    "Ising1D": ("qqa.problems", "Ising1D"),
+    "Knapsack": ("qqa.problems", "Knapsack"),
+    "MaxClique": ("qqa.problems", "MaxClique"),
+    "MaxCliqueInstance": ("qqa.problems", "MaxCliqueInstance"),
+    "MaxCut": ("qqa.problems", "MaxCut"),
+    "MaxCutInstance": ("qqa.problems", "MaxCutInstance"),
+    "MaximumIndependentSet": ("qqa.problems", "MaximumIndependentSet"),
+    "MaximumIndependentSetInstance": ("qqa.problems", "MaximumIndependentSetInstance"),
+    "MaxSAT3": ("qqa.problems", "MaxSAT3"),
+    "MinimumDominatingSet": ("qqa.problems", "MinimumDominatingSet"),
+    "NormalizedCut": ("qqa.problems", "NormalizedCut"),
+    "NormCut": ("qqa.problems", "NormCut"),
+    "NQueens": ("qqa.problems", "NQueens"),
+    "NumberPartitioning": ("qqa.problems", "NumberPartitioning"),
+    "PSpinGlass": ("qqa.problems", "PSpinGlass"),
+    "QUBOProblem": ("qqa.problems", "QUBOProblem"),
+    "RandomFieldIsing": ("qqa.problems", "RandomFieldIsing"),
+    "SherringtonKirkpatrick": ("qqa.problems", "SherringtonKirkpatrick"),
+    "SpinProblem": ("qqa.problems", "SpinProblem"),
+    "UserProblem": ("qqa.problems", "UserProblem"),
+    "VertexCover": ("qqa.problems", "VertexCover"),
+    "load_problem_from_file": ("qqa.problems", "load_problem_from_file"),
+    "random_factorization_problems": ("qqa.problems", "random_factorization_problems"),
+    "random_prime": ("qqa.problems", "random_prime"),
+    "random_semiprime": ("qqa.problems", "random_semiprime"),
+    "user_problem_from_source": ("qqa.problems", "user_problem_from_source"),
+    "BinaryInstanceRelaxation": ("qqa.relaxation", "BinaryInstanceRelaxation"),
+    "BinaryRelaxation": ("qqa.relaxation", "BinaryRelaxation"),
+    "CategoricalRelaxation": ("qqa.relaxation", "CategoricalRelaxation"),
+    "EntropicCategoricalRelaxation": ("qqa.relaxation", "EntropicCategoricalRelaxation"),
+    "MirrorDescentCategoricalRelaxation": (
+        "qqa.relaxation",
+        "MirrorDescentCategoricalRelaxation",
+    ),
+    "Relaxation": ("qqa.relaxation", "Relaxation"),
+    "SinkhornRelaxation": ("qqa.relaxation", "SinkhornRelaxation"),
+    "SoftmaxCategoricalRelaxation": ("qqa.relaxation", "SoftmaxCategoricalRelaxation"),
+    "SparseCategoricalRelaxation": ("qqa.relaxation", "SparseCategoricalRelaxation"),
+    "SpinRelaxation": ("qqa.relaxation", "SpinRelaxation"),
+    "StochasticBinaryRelaxation": ("qqa.relaxation", "StochasticBinaryRelaxation"),
+    "StraightThroughBinaryRelaxation": (
+        "qqa.relaxation",
+        "StraightThroughBinaryRelaxation",
+    ),
+    "save_html_report": ("qqa.reporting", "save_html_report"),
+    "FeasibilityStatus": ("qqa.result", "FeasibilityStatus"),
+    "GuaranteeLevel": ("qqa.result", "GuaranteeLevel"),
+    "SolveResult": ("qqa.result", "SolveResult"),
+    "SolveStatus": ("qqa.result", "SolveStatus"),
+    "SAResult": ("qqa.sa", "SAResult"),
+    "simulated_annealing": ("qqa.sa", "simulated_annealing"),
+    "LinearBGSchedule": ("qqa.schedule", "LinearBGSchedule"),
+    "SessionState": ("qqa.session", "SessionState"),
+    "SolveSession": ("qqa.session", "SolveSession"),
+    "available_templates": ("qqa.templates", "available_templates"),
+    "build_template": ("qqa.templates", "build_template"),
+    "TEX_SYSTEM_PROMPT": ("qqa.tex", "TEX_SYSTEM_PROMPT"),
+    "LLMAPIError": ("qqa.tex", "LLMAPIError"),
+    "ModelSpec": ("qqa.tex", "ModelSpec"),
+    "OpenAICompatibleClient": ("qqa.tex", "OpenAICompatibleClient"),
+    "TexSolveResult": ("qqa.tex", "TexSolveResult"),
+    "compile_tex": ("qqa.tex", "compile_tex"),
+    "problem_from_spec": ("qqa.tex", "problem_from_spec"),
+    "solve_tex": ("qqa.tex", "solve_tex"),
+    "tex": ("qqa.tex", None),
+    "enable_tf32": ("qqa.utils", "enable_tf32"),
+    "fix_seed": ("qqa.utils", "fix_seed"),
+    "generate_graph": ("qqa.utils", "generate_graph"),
+    "resolve_device": ("qqa.utils", "resolve_device"),
+    "polish": ("qqa.polish", None),
+    "warmstart": ("qqa.warmstart", None),
+}
 
 # Exact-solver and public-benchmark integrations are deliberately absent from
 # the eager package graph.  Explicit legacy access such as
@@ -207,18 +216,21 @@ _OPTIONAL_EXPORTS: dict[str, tuple[str, str]] = {
 
 
 def __getattr__(name: str):
-    """Resolve backwards-compatible optional exports on explicit access."""
-    target = _OPTIONAL_EXPORTS.get(name)
+    """Resolve public and backwards-compatible exports on explicit access."""
+    target: tuple[str, str | None] | None = _EXPORTS.get(name)
+    if target is None:
+        target = _OPTIONAL_EXPORTS.get(name)
     if target is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     module_name, attribute = target
-    value = getattr(import_module(module_name), attribute)
+    module = import_module(module_name)
+    value = module if attribute is None else getattr(module, attribute)
     globals()[name] = value
     return value
 
 
 def __dir__() -> list[str]:
-    return sorted({*globals(), *_OPTIONAL_EXPORTS})
+    return sorted({*globals(), *_EXPORTS, *_OPTIONAL_EXPORTS})
 
 
 # Single-source the version from the wheel metadata so ``__version__`` is
@@ -370,6 +382,7 @@ __all__ = [
     "save_html_report",
     "solve",
     "solve_tex",
+    "tex",
     "solve_mixed",
     "user_problem_from_source",
     "warmstart",

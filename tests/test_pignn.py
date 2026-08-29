@@ -8,6 +8,8 @@ keep CPU CI light.
 
 from __future__ import annotations
 
+import os
+
 import networkx as nx
 import pytest
 import torch
@@ -17,6 +19,16 @@ import qqa
 pytest.importorskip("torch_geometric")
 
 from qqa.pignn import GCNNet, train_cpra_pi_gnn, train_cra_pi_gnn  # noqa: E402
+
+
+def _subprocess_timeout(default: int) -> int:
+    """Allow slow filesystems to extend, but never shorten, CLI limits."""
+    raw = os.environ.get("QQA_TEST_SUBPROCESS_TIMEOUT_SECONDS", str(default))
+    try:
+        configured = int(raw)
+    except ValueError:
+        configured = default
+    return max(default, configured)
 
 
 def _small_mis_problem(n: int = 30, d: int = 3, seed: int = 0):
@@ -239,7 +251,7 @@ def test_pignn_cli_branch(tmp_path):
         "1e-3",
         "--quiet",
     ]
-    proc = run(cmd, capture_output=True, text=True, timeout=120)
+    proc = run(cmd, capture_output=True, text=True, timeout=_subprocess_timeout(120))
     assert proc.returncode == 0, proc.stderr
     assert "backend    : pignn" in proc.stdout
     assert "best_obj" in proc.stdout
@@ -479,7 +491,7 @@ def test_cpra_cli_branch():
         "1e-3",
         "--quiet",
     ]
-    proc = run(cmd, capture_output=True, text=True, timeout=180)
+    proc = run(cmd, capture_output=True, text=True, timeout=_subprocess_timeout(180))
     assert proc.returncode == 0, proc.stderr
     assert "backend    : cpra" in proc.stdout
     assert "best_obj" in proc.stdout
