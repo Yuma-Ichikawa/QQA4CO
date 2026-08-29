@@ -6,6 +6,17 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Repository layout
+
+- Consolidate historical benchmark aggregates in the documentation and remove
+  the duplicate root result archive and Benchmark Hub manifest.
+- Keep downloaded MIPLIB/QPLIB data under the ignored
+  `data/public-benchmarks/` tree, consolidate all example notebooks under
+  `examples/`, and move documentation assets and deployment guidance into
+  `docs/`.
+- Remove the tracked operating-system metadata file and add a repository
+  layout regression test.
+
 ## [0.10.0] - 2026-08-29
 
 ### Semantic correctness and Factor-Split QQA
@@ -575,8 +586,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Repo-wide audit of the QQA / CPRA paper citations. Three places had
   silently swapped the QQA paper (Ichikawa & Arai, ICLR 2025) with the
   CPRA paper (Ichikawa & Iwashita, TMLR 2025) — fixed in
-  `src/qqa/__init__.py` docstring, `notebooks/cra_pignn_example.ipynb`
-  and `notebooks/cpra_pignn_example.ipynb`. Adopted the TMLR-published
+  `src/qqa/__init__.py` docstring, `examples/16_cra_pignn.ipynb`
+  and `examples/17_cpra_pignn.ipynb`. Adopted the TMLR-published
   title for CPRA ("Continuous Parallel Relaxation for Finding Diverse
   Solutions in Combinatorial Optimization Problems"); the older
   arXiv-preprint title ("Continuous Tensor Relaxation …") is no longer
@@ -630,7 +641,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`docs/explanation/algorithm.md`**: SA section documenting the
   parallel-Glauber fast path and when to reach for SA vs QQA / CRA /
   CPRA.
-- **`notebooks/benchmark_sa_vs_qqa_vs_pignn.ipynb`**: head-to-head
+- **`examples/18_solver_benchmark.ipynb`**: head-to-head
   benchmark notebook comparing all four solver families on a common
   MIS instance with controlled compute budget.
 

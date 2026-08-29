@@ -1,5 +1,8 @@
 # Deploying QQA4CO to Streamlit Community Cloud
 
+This runbook lives with the rest of the maintained documentation; deployment
+configuration remains in the repository root only where Streamlit requires it.
+
 This document is the operator's runbook for the public dashboard at
 <https://parallelquasiquantum4co.streamlit.app/>.
 

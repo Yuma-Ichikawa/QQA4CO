@@ -64,8 +64,8 @@ gh release create vX.Y.Z --target main --title "vX.Y.Z" --notes-file release-not
    triggers it).
 4. **Docs** — confirm the GitHub Pages workflow pushed the new
    `mkdocs build` to <https://yuma-ichikawa.github.io/QQA4CO/>.
-5. **Streamlit Cloud** — bump the pinned `qqa` version in the deploy's
-   `requirements.txt` if needed (see `deploy/STREAMLIT_DEPLOY.md`).
+5. **Streamlit Cloud** — update deployment dependencies if needed and follow
+   the [Streamlit deployment runbook](../how-to/streamlit-deployment.md).
 6. **Open a `CHANGELOG.md` "Unreleased" stub** for the next cycle.
 
 ## Trusted Publishing (recommended once configured)

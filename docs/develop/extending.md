@@ -19,7 +19,7 @@ the exact files you need to touch in a PR.
 | A new continuous lift of a discrete variable | a class that satisfies the [`qqa.Relaxation`](../api.md#qqa.relaxation) `Protocol` | §[Custom relaxation](#a-new-relaxation) |
 | A new annealing schedule | any `Callable[[int, int], float]` | §[Custom schedule](#a-new-schedule) |
 | A new training-time hook | a subclass of [`qqa.Callback`](../api.md#qqa.callbacks) | §[Custom callback](#a-new-callback) |
-| A new solver backend (next to `qqa.anneal` and `qqa.pignn`) | a function returning [`qqa.AnnealResult`](../api.md#qqa.AnnealResult) | §[Custom backend](#a-new-solver-backend) |
+| A new solver backend (next to `qqa.anneal` and `qqa.pignn`) | a function returning [`qqa.AnnealResult`](../api.md#qqa.annealing.AnnealResult) | §[Custom backend](#a-new-solver-backend) |
 
 QQA4CO's design philosophy is that **every extension point is a small,
 pure-Python contract**, not a registration hook or a metaclass dance.

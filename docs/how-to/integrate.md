@@ -7,7 +7,8 @@ integrations.
 
 ## The contract — `AnnealResult`
 
-`qqa.anneal()` always returns a [`qqa.AnnealResult`](../api.md#qqa.AnnealResult)
+`qqa.anneal()` always returns a
+[`qqa.AnnealResult`](../api.md#qqa.annealing.AnnealResult)
 dataclass with these fields:
 
 | Field | Type | What it is |

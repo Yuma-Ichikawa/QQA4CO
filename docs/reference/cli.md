@@ -185,12 +185,12 @@ Fetch, inspect, and solve public MIPLIB/QPLIB instances. This is distinct from
 `qqa bench`, which runs the bundled combinatorial presets.
 
 ```bash
-qqa benchmark fetch miplib --instance pk1 --output benchmarks/miplib
-qqa benchmark fetch qplib --instance 31 --output benchmarks/qplib
-qqa benchmark inspect benchmarks/qplib/QPLIB_0031.qplib
-qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+qqa benchmark fetch miplib --instance pk1 --output data/public-benchmarks/miplib
+qqa benchmark fetch qplib --instance 31 --output data/public-benchmarks/qplib
+qqa benchmark inspect data/public-benchmarks/qplib/QPLIB_0031.qplib
+qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --output result.json
-qqa benchmark compare benchmarks/miplib/pk1.mps.gz \
+qqa benchmark compare data/public-benchmarks/miplib/pk1.mps.gz \
   --baseline-solver scip-aggressive --seeds 0 1 2 \
   --time-limit 60 --output comparison.json
 qqa benchmark merge shard-0.json shard-1.json --output comparison.json

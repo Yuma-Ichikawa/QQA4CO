@@ -62,6 +62,13 @@ comparison if you only need to pick one entry point.
         - fix_seed
         - generate_graph
 
+### Legacy annealing result
+
+`qqa.anneal` and the legacy-compatible solver backends return this result
+contract:
+
+::: qqa.annealing.AnnealResult
+
 ## Problems
 
 ::: qqa.problems.base

@@ -62,8 +62,8 @@ qqa inspect model.mps
 qqa plan model.mps --profile balanced
 qqa solve model.mps --profile balanced --budget 60
 qqa solve --problem sk --size 100 --sol-size 128 --epochs 1000
-qqa benchmark fetch miplib --output benchmarks/miplib
-qqa benchmark fetch qplib --output benchmarks/qplib
+qqa benchmark fetch miplib --output data/public-benchmarks/miplib
+qqa benchmark fetch qplib --output data/public-benchmarks/qplib
 ```
 
 ## Launch the GUI
@@ -81,11 +81,14 @@ qqa gui
   solve, cockpit, checkpoint/resume, and verified result package
 - `examples/14_factor_split_qqa_study.ipynb` — factor-split execution,
   guarantees, QQA Study/Trial campaigns, and Benchmark Hub statistics
-- …
-- `notebooks/cra_pignn_example.ipynb` — CRA-PI-GNN walkthrough across
+- `examples/15_pqqa_sa_pa.ipynb` — PQQA, simulated annealing, and population
+  annealing comparison
+- `examples/16_cra_pignn.ipynb` — CRA-PI-GNN walkthrough across
   every supported graph problem
-- `notebooks/cpra_pignn_example.ipynb` — CPRA penalty / variation
+- `examples/17_cpra_pignn.ipynb` — CPRA penalty / variation
   diversification
+- `examples/18_solver_benchmark.ipynb` — matched-instance QQA, SA,
+  CRA-PI-GNN, and CPRA comparison
 
 Run any of them with ``uv run jupyter lab``.
 

@@ -224,11 +224,11 @@ pip install "qqa[benchmark]"
 Fetch and inspect one public instance:
 
 ```bash
-qqa benchmark fetch miplib --instance air05 --output benchmarks/miplib
-qqa benchmark inspect benchmarks/miplib/air05.mps.gz
+qqa benchmark fetch miplib --instance air05 --output data/public-benchmarks/miplib
+qqa benchmark inspect data/public-benchmarks/miplib/air05.mps.gz
 
-qqa benchmark fetch qplib --instance QPLIB_0031 --output benchmarks/qplib
-qqa benchmark inspect benchmarks/qplib/QPLIB_0031.qplib
+qqa benchmark fetch qplib --instance QPLIB_0031 --output data/public-benchmarks/qplib
+qqa benchmark inspect data/public-benchmarks/qplib/QPLIB_0031.qplib
 ```
 
 Run QQA-centred SG-CQQA or a paired baseline comparison:

@@ -179,8 +179,15 @@ Benchmark Hub TOML/JSON manifests declare tracks, instances, checksums,
 budgets, seeds, solvers, and metrics without retaining local paths. Paired
 comparisons report wins/ties/losses, median differences, and deterministic
 bootstrap confidence intervals plus an exact paired sign test; `holm_adjust`
-controls family-wise error across declared comparisons. The portable starter
-manifest is `benchmarks/manifests/qqa-core.toml`.
+controls family-wise error across declared comparisons. Load the portable
+starter manifest from the installed package, without relying on a checkout
+path:
+
+```python
+from qqa.benchmarking import builtin_benchmark_manifest
+
+manifest = builtin_benchmark_manifest("qqa-core")
+```
 
 Unsupported coefficients, domains, factors, or proof semantics raise an
 explicit exception. No route silently rounds coefficients, drops rows, or

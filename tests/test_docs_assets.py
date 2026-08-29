@@ -1,8 +1,8 @@
 """Lightweight guard that mirrors the `mkdocs build --strict` CI step.
 
 The failing CI run `24658520429` tripped `mkdocs --strict` because
-`docs/how-to/benchmark.md` referenced a local image path that lived
-outside the MkDocs doc root (`../../data/fig/gallery/bench_report_example.png`).
+`docs/how-to/benchmark.md` once referenced a local image path that lived
+outside the MkDocs doc root. Gallery assets now live under `docs/assets/`.
 We fixed the link, but the CI pipeline is slow and forgiving mistakes
 is easy. This test encodes the same invariant as a pytest assertion so
 the mistake is caught locally *before* pushing.

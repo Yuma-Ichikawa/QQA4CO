@@ -144,7 +144,6 @@ packages = ["src/qqa"]
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-    "/benchmark-results/**",
     "/data/**",
 ]
 include = [

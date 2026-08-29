@@ -18,15 +18,15 @@ source URL, byte count, and SHA-256 digest, and rejects unsafe ZIP members.
 
 ```bash
 # One small instance
-qqa benchmark fetch miplib --instance pk1 --output benchmarks/miplib
-qqa benchmark fetch qplib --instance 31 --output benchmarks/qplib
+qqa benchmark fetch miplib --instance pk1 --output data/public-benchmarks/miplib
+qqa benchmark fetch qplib --instance 31 --output data/public-benchmarks/qplib
 
 # Complete public snapshots (large downloads)
-qqa benchmark fetch miplib --output benchmarks/miplib
-qqa benchmark fetch qplib --output benchmarks/qplib
+qqa benchmark fetch miplib --output data/public-benchmarks/miplib
+qqa benchmark fetch qplib --output data/public-benchmarks/qplib
 
-qqa benchmark inspect benchmarks/miplib/pk1.mps.gz
-qqa benchmark inspect benchmarks/qplib/QPLIB_0031.qplib
+qqa benchmark inspect data/public-benchmarks/miplib/pk1.mps.gz
+qqa benchmark inspect data/public-benchmarks/qplib/QPLIB_0031.qplib
 ```
 
 Result metadata contains only portable source names, public URLs, versions,
@@ -44,11 +44,11 @@ QQA4CO.
 
 ```bash
 # Exact/global SCIP path
-qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver scip --time-limit 60 --threads 1 --output pk1-scip.json
 
 # SCIP-guided conditional QQA primal heuristic
-qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --threads 1 \
   --core-size 32 --maximum-problem-variables 32 \
   --minimum-core-size 16 --maximum-core-saturation 0.9 \
@@ -58,11 +58,11 @@ qqa benchmark run benchmarks/miplib/pk1.mps.gz \
   --seed 0 --output pk1-sgcqqa.json
 
 # Let QQA select CUDA, MPS, or CPU; SCIP itself remains CPU-based
-qqa benchmark run benchmarks/miplib/pk1.mps.gz \
+qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --device auto --output pk1-auto.json
 
 # A screened QPLIB profile may open a longer early window and select PROBTYPEs
-qqa benchmark run benchmarks/qplib/QPLIB_0031.qplib \
+qqa benchmark run data/public-benchmarks/qplib/QPLIB_0031.qplib \
   --solver sg-cqqa --time-limit 60 \
   --maximum-problem-variables 64 --minimum-core-size 8 \
   --maximum-call-time 5 --maximum-call-time-fraction 0.25 \
@@ -70,11 +70,11 @@ qqa benchmark run benchmarks/qplib/QPLIB_0031.qplib \
   --output qplib-31.json
 
 # Several files: emits per-instance results plus overall/PROBTYPE summaries
-qqa benchmark run benchmarks/qplib/QPLIB_*.qplib \
+qqa benchmark run data/public-benchmarks/qplib/QPLIB_*.qplib \
   --format qplib --solver sg-cqqa --time-limit 60 --output qplib-suite.json
 
 # Paired comparison at equal budgets, including the native-heuristic ablation
-qqa benchmark compare benchmarks/qplib/QPLIB_0031.qplib \
+qqa benchmark compare data/public-benchmarks/qplib/QPLIB_0031.qplib \
   --format qplib \
   --solvers scip scip-aggressive sg-cqqa \
   --baseline-solver scip-aggressive --seeds 0 1 2 \
@@ -82,17 +82,17 @@ qqa benchmark compare benchmarks/qplib/QPLIB_0031.qplib \
   --output qplib-comparison.json --quiet
 
 # Full, resumable campaigns checkpoint after every solver/instance/seed run
-qqa benchmark compare benchmarks/miplib/instances/*.mps.gz \
+qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
   --format miplib --time-limit 60 --threads 1 --seeds 0 \
   --baseline-solver scip-aggressive \
-  --reference-file benchmarks/miplib/miplib2017-v36.solu \
+  --reference-file data/public-benchmarks/miplib/miplib2017-v36.solu \
   --continue-on-error --output miplib-campaign.json --quiet
 
 # Repeat the identical command with --resume after an interruption
-qqa benchmark compare benchmarks/miplib/instances/*.mps.gz \
+qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
   --format miplib --time-limit 60 --threads 1 --seeds 0 \
   --baseline-solver scip-aggressive \
-  --reference-file benchmarks/miplib/miplib2017-v36.solu \
+  --reference-file data/public-benchmarks/miplib/miplib2017-v36.solu \
   --continue-on-error --resume --output miplib-campaign.json --quiet
 
 # Or shard instances, seeds, or both, then validate and merge the full grid
@@ -189,8 +189,8 @@ from qqa.benchmarking import run_miplib, run_qplib
 from qqa.hybrid import QQAHeuristicConfig
 from qqa.io import load_mps, load_qplib
 
-mip = load_mps("benchmarks/miplib/pk1.mps.gz")
-qp = load_qplib("benchmarks/qplib/QPLIB_0031.qplib")
+mip = load_mps("data/public-benchmarks/miplib/pk1.mps.gz")
+qp = load_qplib("data/public-benchmarks/qplib/QPLIB_0031.qplib")
 print(mip.summary())
 print(qp.problem_type, qp.evaluate(qp.lower_bounds).maximum_infeasibility)
 
@@ -212,7 +212,7 @@ config = QQAHeuristicConfig(
     threads=1,
 )
 result = run_miplib(
-    "benchmarks/miplib/pk1.mps.gz",
+    "data/public-benchmarks/miplib/pk1.mps.gz",
     solver="sg-cqqa",
     time_limit=60,
     qqa_config=config,
@@ -326,8 +326,8 @@ publish_benchmark_campaigns(
         "qplib": "qplib-campaign.json",
     },
     {
-        "miplib": "benchmarks/miplib/snapshot.json",
-        "qplib": "benchmarks/qplib/snapshot.json",
+        "miplib": "data/public-benchmarks/miplib/snapshot.json",
+        "qplib": "data/public-benchmarks/qplib/snapshot.json",
     },
     "public-results",
     implementation_revision="0123456789abcdef0123456789abcdef01234567",

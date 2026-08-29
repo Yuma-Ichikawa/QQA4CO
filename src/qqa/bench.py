@@ -256,7 +256,7 @@ def _normalise_output(output: Path | str | None) -> Path | None:
 
     - ``"results.json"`` → ``bench_results/results.json`` (convenience
       shortcut for the "I just want a report next to the runs" case).
-    - ``"data/fig/bench.png"`` → ``data/fig/bench.png`` (honor any
+    - ``"artifacts/fig/bench.png"`` → ``artifacts/fig/bench.png`` (honor any
       explicit directory the caller passed; prepending ``bench_results/``
       would be surprising and creates confusing nested trees).
     - ``"./x.png"`` / ``"~/x.png"`` / ``"/abs/x.png"`` → kept as-is.

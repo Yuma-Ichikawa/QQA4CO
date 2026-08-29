@@ -1,11 +1,19 @@
 # Public MIPLIB/QPLIB results
 
 This page reports the complete 2026-08-26 campaign without selecting only
-favourable instances. A machine-readable compact summary is committed under
-[`benchmark-results/2026-08-26`](https://github.com/Yuma-Ichikawa/QQA4CO/tree/main/benchmark-results/2026-08-26).
-Full per-instance results and incumbent trajectories are generated artifacts;
-new campaigns should publish them through a release, CI artifact, or external
-result registry.
+favourable instances. It is the canonical, reviewable aggregate record; result
+directories are not committed at the repository root. Full per-instance
+results, incumbent trajectories, and machine-readable campaign bundles are
+generated artifacts that new campaigns should publish through a release, CI
+artifact, or external result registry.
+
+| Campaign identity | Value |
+| --- | --- |
+| Date | 2026-08-26 |
+| Summary schema | 1 |
+| Primary comparison | `sg-cqqa` vs `scip-aggressive` |
+| Budget | 30 seconds per solver run |
+| Historical seed count | 1 |
 
 ## Protocol
 
@@ -34,9 +42,8 @@ result registry.
 
 A later conservative campaign added explicit structural bypasses, a 0.1%
 minimum completion improvement, core-coverage gates, in-place dive completion,
-and QPLIB `PROBTYPE` routing. Its aggregate is retained in `summary.json`.
-Both suites
-use one solver/LP/Torch thread, seed 0, a 30-second budget, balanced execution
+and QPLIB `PROBTYPE` routing. Both suites use one solver/LP/Torch thread, seed
+0, a 30-second budget, balanced execution
 order, and `scip-aggressive` as the direct baseline.
 The generated manifest intentionally omits `implementation_revision` because
 the campaign was generated before that implementation had a commit identity.

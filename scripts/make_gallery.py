@@ -1,8 +1,8 @@
-"""Regenerate the visualization gallery shipped under ``data/fig/gallery/``.
+"""Regenerate the visualization gallery shipped under ``docs/assets/gallery/``.
 
 Each run is deliberately small so the whole script finishes in a few minutes on
-a laptop CPU. The PNGs are referenced from ``README.md`` and
-``docs/visualization.md`` and should be re-generated deterministically after
+a laptop CPU. The PNGs are referenced from ``docs/visualization.md`` and
+should be re-generated deterministically after
 any behavioural change to :func:`qqa.anneal` or :mod:`qqa.visualization`.
 
 Run with::
@@ -24,7 +24,7 @@ import qqa  # noqa: E402
 from qqa import visualization as viz  # noqa: E402
 from qqa.callbacks import PopulationTracker  # noqa: E402
 
-OUT = Path(__file__).resolve().parents[1] / "data" / "fig" / "gallery"
+OUT = Path(__file__).resolve().parents[1] / "docs" / "assets" / "gallery"
 OUT.mkdir(parents=True, exist_ok=True)
 
 

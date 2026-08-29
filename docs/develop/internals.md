@@ -13,12 +13,10 @@ QQA4CO/
 ├── src/qqa/             # The Python package (everything ships in the wheel)
 ├── app/                 # Streamlit dashboard (also shipped in the wheel)
 ├── tests/               # Unit, integration, CLI, security, and UI tests
-├── notebooks/           # Curated walkthroughs (CRA-PI-GNN, CPRA)
-├── examples/            # Auto-generated per-problem notebooks
+├── examples/            # Generated and curated executable notebooks
 ├── scripts/             # Demos, benchmarks, gallery / verification regen
-├── docs/                # MkDocs-Material source (this site)
+├── docs/                # Guides, deployment runbooks, and documentation assets
 ├── data/                # Tiny smoke data and public dataset manifests
-├── deploy/              # Streamlit Cloud config
 ├── pyproject.toml       # PEP 621, hatchling, ruff, pytest, extras
 ├── mkdocs.yml           # Site nav (this site is built from docs/)
 ├── CHANGELOG.md         # Keep-a-Changelog
@@ -135,7 +133,7 @@ The categories:
   `uv run python scripts/demo_mis.py`.
 * `bench_*.py` — small benchmarks; `bench_qqa_vs_pignn.py` regenerates
   the headline comparison table.
-* `make_gallery.py` — regenerates the README/docs gallery PNGs.
+* `make_gallery.py` — regenerates the documentation gallery PNGs.
 * `verify_all_problems.py` — the catalogue-wide correctness sweep that
   produces `docs/verification.md`.
 * `_generate_notebooks.py` — deterministically rebuilds the

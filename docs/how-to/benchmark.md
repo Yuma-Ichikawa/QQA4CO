@@ -87,7 +87,7 @@ per-subset horizontal bars, feasibility bars, and a per-instance
 violin+strip plot. `--theme dark` produces a dark-mode variant suitable
 for talk slides.
 
-![example report](https://raw.githubusercontent.com/Yuma-Ichikawa/QQA4CO/main/data/fig/gallery/bench_report_example.png)
+![example report](../assets/gallery/bench_report_example.png)
 
 ## 4. Suite identifiers
 

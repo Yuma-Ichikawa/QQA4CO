@@ -50,12 +50,11 @@ tasks/
 bench_results/
 benchmark-output/
 
-# Downloaded public datasets and generated benchmark campaigns.  Keep only
-# their small manifests/summaries under version control.
+# Downloaded public datasets and generated benchmark campaigns. Published
+# aggregate results belong in docs/benchmark-results.md; raw runs are CI or
+# release artifacts, never source files.
 data/mis/er-large/*.gpickle
-benchmark-results/*/*/
-!benchmark-results/*/README.md
-!benchmark-results/*/summary.json
+data/public-benchmarks/
 
 # Streamlit cache
 .streamlit/secrets.toml
