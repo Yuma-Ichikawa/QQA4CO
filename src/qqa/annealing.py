@@ -194,6 +194,14 @@ def _lexicographic_argmin(keys: torch.Tensor) -> torch.Tensor:
     return order[0]
 
 
+def _replica_median(values: torch.Tensor) -> torch.Tensor:
+    """Return the lower median without CUDA's nondeterministic index path."""
+    if values.is_cuda and torch.are_deterministic_algorithms_enabled():
+        ordered = torch.sort(values, dim=0).values
+        return ordered[(ordered.shape[0] - 1) // 2]
+    return values.median(dim=0).values
+
+
 def _lexicographic_less(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
     """Compare two one-dimensional keys entirely on their current device."""
     if left.shape != right.shape or left.ndim != 1:
@@ -787,9 +795,9 @@ def anneal(
             candidate_key_function if callable(candidate_key_function) else None
         )
         if normalize_loss and robust_scaling:
-            objective_center = loss_disc.median(dim=0).values
-            objective_mad = (loss_disc - objective_center).abs().median(dim=0).values
-            objective_fallback = loss_disc.abs().median(dim=0).values.clamp_min(1.0)
+            objective_center = _replica_median(loss_disc)
+            objective_mad = _replica_median((loss_disc - objective_center).abs())
+            objective_fallback = _replica_median(loss_disc.abs()).clamp_min(1.0)
             objective_scale = torch.where(
                 objective_mad > torch.finfo(loss_disc.dtype).eps,
                 objective_mad,

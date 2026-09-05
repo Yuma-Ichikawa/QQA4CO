@@ -11,7 +11,7 @@ import torch
 
 import qqa
 from qqa.algebraic import AlgebraicModel, SparseQuadratic, VariableType
-from qqa.annealing import AnnealResult, _apply_optimizer_step_scale_
+from qqa.annealing import AnnealResult, _apply_optimizer_step_scale_, _replica_median
 from qqa.hybrid.exact import ExactBackendResult
 from qqa.model import (
     CardinalityFactor,
@@ -189,6 +189,11 @@ def test_adam_role_scale_changes_the_actual_update() -> None:
     _apply_optimizer_step_scale_(parameter, origin, torch.tensor([[0.5], [2.0]]))
     delta = (parameter.detach() - origin).abs().reshape(-1)
     assert delta[1] == pytest.approx(4.0 * delta[0])
+
+
+def test_replica_median_preserves_lower_median_semantics() -> None:
+    values = torch.tensor([[4.0, 1.0], [2.0, 8.0], [3.0, 5.0], [1.0, 7.0]])
+    torch.testing.assert_close(_replica_median(values), values.median(dim=0).values)
 
 
 def test_convexification_uses_objective_scale_and_dimension() -> None:
