@@ -123,6 +123,11 @@ solvers, metrics, and accounting rules. Split jobs by instance or seed when
 needed, then use `benchmark merge`; do not change the configuration after
 inspecting sealed results.
 
+Balanced execution order is derived from each portable instance basename and
+seed. It is therefore unchanged when the same suite is split into one-instance
+jobs, preventing process-startup and file-cache effects from acquiring a fixed
+solver direction after sharding.
+
 `--time-limit` is one total wall-clock budget. Input conversion and plugin
 setup are deducted before SCIP starts; every QQA call and continuous
 completion then runs inside SCIP's remaining solve time. This makes

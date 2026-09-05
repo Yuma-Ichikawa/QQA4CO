@@ -234,6 +234,8 @@ and win/tie/loss counts against `--baseline-solver`, including counts
 stratified by actual QQA execution. The defaults compare `scip-aggressive`
 against `sg-cqqa` in balanced order. This is the direct plugin ablation because
 both use the same aggressive native SCIP heuristic setting.
+The balanced order uses a stable hash of the portable instance basename plus
+the seed, so splitting a campaign into shards does not reset the order phase.
 
 For audit-grade cells, `--include-import-in-budget` starts before launching each
 isolated interpreter and therefore includes package startup and original-model

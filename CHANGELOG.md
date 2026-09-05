@@ -55,6 +55,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Align Python and CLI hybrid defaults on the conservative screened profile,
   bypass QQA when the integer core or remaining budget cannot reach its minimum,
   and retain portable native signal/exit diagnostics.
+- Make balanced solver order invariant to campaign sharding by deriving its
+  phase from the portable instance name and seed, including independently
+  executed structural-bypass cells.
 
 ### Repository layout
 

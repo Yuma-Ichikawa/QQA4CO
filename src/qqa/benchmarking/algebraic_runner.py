@@ -781,9 +781,14 @@ def _comparison_solver_order(
     execution_order: str,
     seed: int,
     instance_index: int,
+    instance_name: str | None = None,
 ) -> tuple[str, ...]:
-    """Return a deterministic order while balancing first-run cache effects."""
-    if execution_order == "fixed" or (seed + instance_index) % 2 == 0:
+    """Return a deterministic, shard-invariant balanced execution order."""
+    instance_phase = instance_index
+    if instance_name is not None:
+        digest = hashlib.sha256(instance_name.encode("utf-8")).digest()
+        instance_phase = digest[0] & 1
+    if execution_order == "fixed" or (seed + instance_phase) % 2 == 0:
         return solvers
     return tuple(reversed(solvers))
 
@@ -853,6 +858,9 @@ def compare_benchmark_solvers(
         "seeds": list(seed_values),
         "baseline_solver": baseline_solver,
         "execution_order": execution_order,
+        "execution_balance_key": (
+            "portable_instance_name_sha256" if execution_order == "balanced" else None
+        ),
         "format": kwargs.get("format", "auto"),
         "time_limit": float(kwargs.get("time_limit", 60.0)),
         "relative_gap_limit": float(kwargs.get("relative_gap_limit", 0.0)),
@@ -996,6 +1004,7 @@ def compare_benchmark_solvers(
                 execution_order=execution_order,
                 seed=seed,
                 instance_index=instance_index,
+                instance_name=name,
             )
             applicability_hint = _qqa_applicability_hint(
                 source,
@@ -1003,7 +1012,11 @@ def compare_benchmark_solvers(
                 seeded_config,
                 algebraic=algebraic,
             )
-            if applicability_hint is False and "scip-aggressive" in ordered_solvers:
+            if (
+                reuse_equivalent_baseline
+                and applicability_hint is False
+                and "scip-aggressive" in ordered_solvers
+            ):
                 ordered_solvers = (
                     "scip-aggressive",
                     *(solver for solver in ordered_solvers if solver != "scip-aggressive"),

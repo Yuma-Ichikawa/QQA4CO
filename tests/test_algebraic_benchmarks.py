@@ -190,6 +190,34 @@ def test_paired_benchmark_balances_solver_execution_order():
     ) == tuple(reversed(solvers))
 
 
+def test_balanced_solver_order_is_shard_invariant_and_seed_symmetric():
+    solvers = ("scip-aggressive", "sg-cqqa")
+    first = _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=0,
+        instance_index=0,
+        instance_name="portable-instance.mps.gz",
+    )
+    assert (
+        _comparison_solver_order(
+            solvers,
+            execution_order="balanced",
+            seed=0,
+            instance_index=999,
+            instance_name="portable-instance.mps.gz",
+        )
+        == first
+    )
+    assert _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=1,
+        instance_index=0,
+        instance_name="portable-instance.mps.gz",
+    ) == tuple(reversed(first))
+
+
 def test_algebraic_metadata_rejects_private_environment_fields():
     model = _algebraic_fixture()
     payload = json.dumps(model.summary(), sort_keys=True)
@@ -1166,6 +1194,40 @@ def test_structural_bypass_reuses_aggressive_failure(tmp_path, monkeypatch):
         "sg-cqqa",
     ]
     assert {failure.error_type for failure in comparison.failures} == {"RuntimeError"}
+
+
+def test_independent_structural_bypass_preserves_balanced_order(tmp_path, monkeypatch):
+    path = tmp_path / "continuous.qplib"
+    path.write_text("continuous\nQCL\nminimize\n10 # variables\n", encoding="utf-8")
+    attempted = []
+
+    def fail_both(source, *, solver, **kwargs):  # noqa: ARG001
+        attempted.append(solver)
+        raise RuntimeError("synthetic worker failure")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner._run_isolated_benchmark_instance",
+        fail_both,
+    )
+    solvers = ("scip-aggressive", "sg-cqqa")
+    compare_benchmark_solvers(
+        [path],
+        solvers=solvers,
+        baseline_solver="scip-aggressive",
+        format="qplib",
+        time_limit=0.1,
+        continue_on_error=True,
+        reuse_equivalent_baseline=False,
+    )
+    assert attempted == list(
+        _comparison_solver_order(
+            solvers,
+            execution_order="balanced",
+            seed=0,
+            instance_index=0,
+            instance_name=path.name,
+        )
+    )
 
 
 def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
