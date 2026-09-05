@@ -80,6 +80,8 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by default while SCIP validates completed candidates in original precision.
 - Remove history and duplicate historical-archive work from the bounded hybrid
   callback while retaining its best/final population and constraint archive.
+- Seed general-integer QQA cores with alternating LP-centred randomized
+  rounding and broad lattice samples instead of pathological bound-only draws.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

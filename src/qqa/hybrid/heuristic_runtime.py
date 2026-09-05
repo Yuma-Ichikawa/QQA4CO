@@ -132,12 +132,26 @@ def build_initial_population(
     if not remaining:
         return population
 
+    integer_lower = np.ceil(lower)
+    integer_upper = np.floor(upper)
+    if np.any(integer_lower > integer_upper):
+        raise ValueError("Every integer-core coordinate must have a non-empty lattice domain.")
+
     rng = np.random.default_rng(seed)
-    probability = np.clip((target - lower) / np.maximum(1.0, upper - lower), 0.0, 1.0)
     row_numbers = np.arange(populated, sol_size)
-    probabilities = np.where((row_numbers % 2 == 0)[:, None], probability, 0.5)
     draws = rng.random((remaining, target.size))
-    population[populated:] = np.where(draws < probabilities, upper, lower)
+    bounded_target = np.clip(target, integer_lower, integer_upper)
+    target_floor = np.floor(bounded_target)
+    local_rounding = target_floor + (draws < (bounded_target - target_floor))
+
+    # Alternate incumbent-centred randomized rounding with a broad sample of
+    # the complete local integer lattice. Sampling only the two bounds has the
+    # correct mean but is pathological for general integers: every replica can
+    # start several grid points away from both the LP point and incumbent.
+    levels = integer_upper - integer_lower + 1.0
+    global_lattice = np.floor(integer_lower + rng.random((remaining, target.size)) * levels)
+    use_local = (row_numbers % 2 == 0)[:, None]
+    population[populated:] = np.where(use_local, local_rounding, global_lattice)
     return population
 
 

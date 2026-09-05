@@ -43,6 +43,21 @@ def test_initial_population_is_bounded_deduplicated_and_deterministic():
     assert np.all(first <= upper)
 
 
+def test_initial_population_covers_general_integer_lattice_near_and_far():
+    population = build_initial_population(
+        [],
+        target=np.array([3.25]),
+        lower=np.array([0.0]),
+        upper=np.array([10.0]),
+        sol_size=64,
+        seed=19,
+    )
+
+    assert set(population[::2, 0]) <= {3.0, 4.0}
+    assert np.all(population == np.rint(population))
+    assert len(set(population[1::2, 0])) >= 8
+
+
 def test_repair_candidate_losses_are_evaluated_as_one_batch():
     class CountingProblem:
         def __init__(self):
