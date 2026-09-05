@@ -139,6 +139,7 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
     assert args.maximum_call_time == pytest.approx(0.15)
     assert args.min_qqa_time == pytest.approx(20.0)
     assert args.minimum_runtime_startup_time == pytest.approx(8.0)
+    assert args.core_dtype == "float32"
     assert args.qqa_fix_fraction == pytest.approx(0.25)
     assert args.minimum_relative_improvement == pytest.approx(0.001)
     assert args.qplib_problem_types is None
@@ -168,6 +169,7 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
         "min_qqa_time",
         "minimum_relative_improvement",
         "maximum_overhead_fraction",
+        "core_dtype",
     ):
         assert getattr(run, option) == getattr(args, option)
 

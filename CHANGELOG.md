@@ -13,12 +13,18 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Enforce original-model variable domains, finite values, coordinate-space
   identity, feasibility-first candidate selection, and candidate/certificate
   linkage across pure QQA, repair, and optional exact completion.
+- Centralise float64 original-model verification of objective finiteness,
+  domains, bounds, integrality, structured variables, and constraints in
+  `ModelIR.verify_solution` for every result-construction path.
 - Apply replica learning-rate and preconditioner scales to the effective Adam
   update, normalise convexification consistently, preserve fixed per-coordinate
   bounds, and keep adaptive augmented-Lagrangian/archive state on device.
 - Add structural sparse-factor presolve, complete adaptive/checkpoint state,
   observed event timestamps, static original-objective incumbents, and
   auditable stage execution diagnostics.
+- Preserve recorded trajectories and prior restart/exchange counters and epoch
+  masks across pickle-free checkpoint resume, with interrupted-versus-
+  uninterrupted parity coverage.
 - Preserve inward repair gradients at declared continuous bounds across
   PyTorch clamp-derivative changes while retaining exact forward bounds.
 
@@ -69,6 +75,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Reserve bounded callback-deadline slack before QQA execution so epoch-level
   stopping and candidate post-processing do not consume the advertised
   plugin-overhead allowance.
+- Synchronise CUDA work at explicit wall-clock deadline checks, report QQA
+  epoch/deadline diagnostics, and use a configurable float32 core surrogate
+  by default while SCIP validates completed candidates in original precision.
+- Remove history and duplicate historical-archive work from the bounded hybrid
+  callback while retaining its best/final population and constraint archive.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

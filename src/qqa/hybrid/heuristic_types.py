@@ -53,6 +53,7 @@ class QQAHeuristicConfig:
     threads: int = 1
     seed: int = 0
     device: str = "cpu"
+    core_dtype: str = "float32"
     verbose: bool = False
 
     def __post_init__(self) -> None:
@@ -151,6 +152,8 @@ class QQAHeuristicConfig:
             raise ValueError("local_branching_radius must be a positive integer or None.")
         if not isinstance(self.device, str) or not self.device.strip():
             raise ValueError("device must be a non-empty string.")
+        if self.core_dtype not in {"float32", "float64"}:
+            raise ValueError("core_dtype must be 'float32' or 'float64'.")
         if not isinstance(self.require_surrogate_improvement, bool):
             raise TypeError("require_surrogate_improvement must be a bool.")
         if not isinstance(self.require_incumbent, bool):
@@ -243,6 +246,8 @@ class QQAHeuristicStats:
     calls: int = 0
     qqa_calls: int = 0
     qqa_runtime: float = 0.0
+    qqa_completed_epochs: list[int] = field(default_factory=list)
+    qqa_deadline_reached: int = 0
     qqa_al_updates: int = 0
     qqa_archive_observations: int = 0
     completion_runtime: float = 0.0
@@ -307,6 +312,8 @@ class QQAHeuristicStats:
             "calls": self.calls,
             "qqa_calls": self.qqa_calls,
             "qqa_runtime": self.qqa_runtime,
+            "qqa_completed_epochs": list(self.qqa_completed_epochs),
+            "qqa_deadline_reached": self.qqa_deadline_reached,
             "qqa_al_updates": self.qqa_al_updates,
             "qqa_archive_observations": self.qqa_archive_observations,
             "completion_runtime": self.completion_runtime,

@@ -54,6 +54,7 @@ nav:
     - Visualization: visualization.md
     - GUI: gui.md
     - Verification sweep: verification.md
+    - Audit implementation: audit-implementation.md
     - Migration from 0.2.x: migration.md
   - Explanation:
     - Algorithm: explanation/algorithm.md

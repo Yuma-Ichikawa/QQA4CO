@@ -114,3 +114,31 @@ def test_cuda_graph_training_step_runs_through_stable_api():
     )
     assert math.isfinite(result.best_obj)
     assert result.diagnostics["cuda_graphs"] is True
+
+
+def test_cuda_wall_clock_deadline_accounts_for_asynchronous_work(monkeypatch):
+    synchronize = torch.cuda.synchronize
+    calls = 0
+
+    def counted_synchronize(device=None):
+        nonlocal calls
+        calls += 1
+        synchronize(device)
+
+    monkeypatch.setattr(torch.cuda, "synchronize", counted_synchronize)
+    result = qqa.anneal(
+        qqa.MaxCut(nx.cycle_graph(24), device="cuda"),
+        sol_size=8,
+        num_epochs=10_000,
+        time_limit=0.05,
+        learning_rate=0.05,
+        optimizer="lightweight-adamw",
+        record_history=False,
+        archive_size=0,
+        polish=False,
+        verbose=False,
+    )
+    completed = result.diagnostics["completed_epochs"]
+    assert result.diagnostics["deadline_reached"] is True
+    assert completed < 10_000
+    assert calls >= completed + 1

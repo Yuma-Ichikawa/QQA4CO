@@ -63,7 +63,7 @@ def solve_core_problem(
     """
     started = perf_counter()
     resolved_device = resolve_device(config.device)
-    initial = torch.as_tensor(initial_population, dtype=torch.float64)
+    initial = torch.as_tensor(initial_population, dtype=problem.dtype)
     with (
         torch_thread_budget(config.threads),
         torch_seed(seed, resolved_device),
@@ -76,6 +76,8 @@ def solve_core_problem(
             div_param=config.diversity,
             initial_state=initial,
             return_population=True,
+            record_history=False,
+            archive_size=0,
             calibrate_penalty=False,
             adaptive_augmented_lagrangian=bool(
                 config.adaptive_row_lagrangian and problem.constraints

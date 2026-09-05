@@ -11,9 +11,15 @@ import torch
 
 import qqa
 from qqa.algebraic import AlgebraicModel, SparseQuadratic, VariableType
-from qqa.annealing import AnnealResult, _apply_optimizer_step_scale_, _replica_median
+from qqa.annealing import (
+    AnnealResult,
+    _apply_optimizer_step_scale_,
+    _replica_median,
+    _reset_optimizer_rows,
+)
 from qqa.hybrid.exact import ExactBackendResult
 from qqa.model import (
+    BlackBoxFactor,
     CardinalityFactor,
     ClauseFactor,
     HigherOrderFactor,
@@ -50,6 +56,28 @@ def test_feasibility_checks_variable_domains(domain: str, candidate: list[float]
     bounds = {} if domain in {"binary", "spin"} else {"lower": 0.0, "upper": 2.0}
     model = ModelIR((VariableBlock("x", domain, (1,), **bounds),), ObjectiveIR(()))
     assert not bool(model.feasible(torch.tensor(candidate)).item())
+
+
+def test_original_model_verifier_rejects_nonfinite_objective() -> None:
+    model = ModelIR(
+        (VariableBlock("x", "binary", (1,)),),
+        ObjectiveIR(
+            (
+                BlackBoxFactor(
+                    lambda values: torch.full(
+                        values.shape[:-1],
+                        float("nan"),
+                        device=values.device,
+                        dtype=values.dtype,
+                    )
+                ),
+            )
+        ),
+    )
+    verification = model.verify_solution(torch.tensor([[0.0], [1.0]]))
+    assert verification.objective_values.dtype is torch.float64
+    assert not verification.objective_finite.any()
+    assert not verification.feasible.any()
 
 
 def test_model_ir_problem_accepts_per_coordinate_bounds() -> None:
@@ -189,6 +217,20 @@ def test_adam_role_scale_changes_the_actual_update() -> None:
     _apply_optimizer_step_scale_(parameter, origin, torch.tensor([[0.5], [2.0]]))
     delta = (parameter.detach() - origin).abs().reshape(-1)
     assert delta[1] == pytest.approx(4.0 * delta[0])
+
+
+def test_restart_clears_selected_optimizer_rows_in_place() -> None:
+    parameter = torch.nn.Parameter(torch.zeros(3, 2))
+    optimizer = torch.optim.AdamW([parameter])
+    optimizer.state[parameter] = {
+        "exp_avg": torch.ones_like(parameter),
+        "exp_avg_sq": torch.full_like(parameter, 2.0),
+    }
+    _reset_optimizer_rows(optimizer, parameter, torch.tensor([0, 2]))
+    for state, retained in zip(optimizer.state[parameter].values(), (1.0, 2.0), strict=True):
+        torch.testing.assert_close(state[0], torch.zeros(2))
+        torch.testing.assert_close(state[1], state.new_full((2,), retained))
+        torch.testing.assert_close(state[2], torch.zeros(2))
 
 
 def test_replica_median_preserves_lower_median_semantics() -> None:

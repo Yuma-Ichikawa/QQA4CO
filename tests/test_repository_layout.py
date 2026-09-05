@@ -24,6 +24,10 @@ def test_documentation_assets_are_not_stored_as_dataset_files() -> None:
     assert (REPO_ROOT / "docs" / "assets" / "gallery" / "schedule_default.png").is_file()
 
 
+def test_documentation_does_not_load_the_obsolete_polyfill_service() -> None:
+    assert "polyfill.io" not in (REPO_ROOT / "mkdocs.yml").read_text(encoding="utf-8")
+
+
 def test_builtin_benchmark_manifest_is_the_single_source_of_truth() -> None:
     manifest = builtin_benchmark_manifest("qqa-core")
     assert manifest.name == "qqa-core-portable"

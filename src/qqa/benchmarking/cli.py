@@ -78,6 +78,12 @@ def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
         "--maximum-overhead-fraction", type=float, default=defaults.maximum_overhead_fraction
     )
     parser.add_argument("--device", default=defaults.device)
+    parser.add_argument(
+        "--core-dtype",
+        choices=("float32", "float64"),
+        default=defaults.core_dtype,
+        help="Numerical dtype for the bounded QQA surrogate search.",
+    )
 
 
 def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
@@ -299,6 +305,7 @@ def _heuristic_config(args: argparse.Namespace, *, seed: int):
         threads=args.threads,
         seed=seed,
         device=args.device,
+        core_dtype=args.core_dtype,
         verbose=not args.quiet,
     )
 

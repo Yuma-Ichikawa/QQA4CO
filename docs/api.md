@@ -39,6 +39,15 @@ the quantity used by the search backend.
 
 ::: qqa.result
 
+## Canonical model and verification
+
+`ModelIR.verify_solution` is the independent original-model boundary used by
+result construction. It is separate from relaxation projection and search
+merit, and returns objective finiteness, domain violations, row values,
+row violations, and feasibility for every candidate.
+
+::: qqa.model
+
 ## Generated module reference
 
 Below is the auto-generated documentation for the public modules. The

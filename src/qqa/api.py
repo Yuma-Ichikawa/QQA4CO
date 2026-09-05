@@ -217,12 +217,12 @@ def _objective_value(
 
 def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
     values = solution.unsqueeze(0)
-    objective = float(model.objective_values(values)[0].item())
-    violations = model.constraint_violations(values)
+    verification = model.verify_solution(values)
+    objective = float(verification.objective_values[0].item())
     rows: dict[str, dict[str, Any]] = {}
-    domain_violation = float(model.domain_violations(values)[0].item())
+    domain_violation = float(verification.domain_violations[0].item())
     domain_feasible = domain_violation <= 1e-6
-    feasible = domain_feasible
+    feasible = bool(verification.feasible[0].item())
     if not domain_feasible:
         rows["variable_domains"] = {
             "violation": domain_violation,
@@ -231,11 +231,10 @@ def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
             "feasible": False,
         }
     for row in model.constraints:
-        violation = float(violations[row.name][0].item())
+        violation = float(verification.constraint_violations[row.name][0].item())
         satisfied = violation <= row.tolerance
-        feasible &= satisfied
         rows[row.name] = {
-            "lhs": float(row.expression.evaluate(values)[0].item()),
+            "lhs": float(verification.constraint_values[row.name][0].item()),
             "sense": row.sense,
             "rhs": row.rhs,
             "violation": violation,
@@ -253,6 +252,7 @@ def _model_ir_score(model: ModelIR, solution: torch.Tensor) -> dict[str, Any]:
         "extra": {
             "constraints": rows,
             "domain_violation": domain_violation,
+            "objective_finite": bool(verification.objective_finite[0].item()),
             "sense": ObjectiveSense(model.sense).value,
         },
     }

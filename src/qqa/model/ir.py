@@ -35,6 +35,18 @@ class ObjectiveSense(str, Enum):
         return 1.0 if self is ObjectiveSense.MINIMIZE else -1.0
 
 
+@dataclass(frozen=True, slots=True)
+class SolutionVerification:
+    """Independent original-model evaluation of one or more candidates."""
+
+    objective_values: torch.Tensor
+    objective_finite: torch.Tensor
+    domain_violations: torch.Tensor
+    constraint_values: Mapping[str, torch.Tensor]
+    constraint_violations: Mapping[str, torch.Tensor]
+    feasible: torch.Tensor
+
+
 def _shape_size(shape: tuple[int, ...]) -> int:
     return reduce(mul, shape, 1)
 
@@ -654,6 +666,46 @@ class ModelIR:
             mask &= row.violation(values) <= row.tolerance
         return mask
 
+    def verify_solution(
+        self,
+        values: torch.Tensor,
+        *,
+        domain_tolerance: float = 1e-6,
+    ) -> SolutionVerification:
+        """Verify candidates against the original objective, domains, and rows.
+
+        This path is independent from relaxation projection and search merit.
+        It evaluates in float64 when possible, rejects non-finite objectives,
+        and keeps every result aligned with the original variable order.
+        """
+        if not math.isfinite(domain_tolerance) or domain_tolerance < 0:
+            raise ValueError("domain_tolerance must be finite and non-negative.")
+        checked = self._validate_values(values)
+        if checked.is_complex():
+            raise TypeError("ModelIR values must use a real numeric tensor dtype.")
+        work = checked.to(torch.float64)
+        with torch.no_grad():
+            objective_values = self.objective_values(work)
+            objective_finite = torch.isfinite(objective_values)
+            domain_violations = self.domain_violations(work)
+            constraint_values = {
+                row.name: row.expression.evaluate(work) for row in self.constraints
+            }
+            constraint_violations = {row.name: row.violation(work) for row in self.constraints}
+            feasible = objective_finite & (domain_violations <= domain_tolerance)
+            for row in self.constraints:
+                feasible &= constraint_violations[row.name] <= row.tolerance
+        return SolutionVerification(
+            objective_values.detach(),
+            objective_finite.detach(),
+            domain_violations.detach(),
+            MappingProxyType({name: result.detach() for name, result in constraint_values.items()}),
+            MappingProxyType(
+                {name: result.detach() for name, result in constraint_violations.items()}
+            ),
+            feasible.detach(),
+        )
+
     def transformed(self, operation: str, **details: Any) -> ModelIR:
         """Return a copy with one reversible transformation ledger entry."""
         from dataclasses import replace
@@ -680,6 +732,7 @@ __all__ = [
     "ObjectiveSense",
     "PairwisePottsFactor",
     "QuadraticEdgeFactor",
+    "SolutionVerification",
     "TableFactor",
     "TransformationRecord",
     "VariableBlock",

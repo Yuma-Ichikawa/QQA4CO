@@ -879,6 +879,12 @@ class QQAHeuristic(_HeurBase):
                 )
                 self.stats.qqa_calls += 1
                 self.stats.qqa_runtime += perf_counter() - qqa_started
+                completed_epochs = result.diagnostics.get("completed_epochs")
+                if isinstance(completed_epochs, int):
+                    self.stats.qqa_completed_epochs.append(completed_epochs)
+                self.stats.qqa_deadline_reached += int(
+                    result.diagnostics.get("deadline_reached") is True
+                )
                 al_diagnostics = result.diagnostics.get("adaptive_augmented_lagrangian")
                 if isinstance(al_diagnostics, Mapping):
                     self.stats.qqa_al_updates += int(al_diagnostics.get("updates", 0))

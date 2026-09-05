@@ -786,6 +786,26 @@ def anneal(
     restart_epoch_mask = torch.zeros(num_epochs, dtype=torch.bool, device=x.device)
     exchange_count_device = torch.zeros((), dtype=torch.int64, device=x.device)
     exchange_epoch_mask = torch.zeros(num_epochs, dtype=torch.bool, device=x.device)
+    if restored_checkpoint is not None:
+        for name, target in (
+            ("restart_count", restart_count_device),
+            ("exchange_count", exchange_count_device),
+        ):
+            saved = restored_checkpoint.tensors.get(name)
+            if saved is not None:
+                if saved.numel() != 1:
+                    raise ValueError(f"Checkpoint {name} must be scalar.")
+                target.copy_(saved.to(device=x.device, dtype=target.dtype).reshape(()))
+        for name, target in (
+            ("restart_epoch_mask", restart_epoch_mask),
+            ("exchange_epoch_mask", exchange_epoch_mask),
+        ):
+            saved = restored_checkpoint.tensors.get(name)
+            if saved is not None:
+                saved = saved.to(device=x.device, dtype=torch.bool).reshape(-1)
+                if len(saved) < start_epoch or start_epoch > len(target):
+                    raise ValueError(f"Checkpoint {name} does not cover its completed epochs.")
+                target[:start_epoch].copy_(saved[:start_epoch])
 
     with torch.no_grad():
         x_disc = relax.project(x)
@@ -940,13 +960,13 @@ def anneal(
         problem=problem,
         relaxation=relax,
     )
+    for cb in cb_list:
+        cb.on_train_begin(state)
     if restored_checkpoint is not None:
         for cb in cb_list:
             restore_callback = getattr(cb, "restore_checkpoint_tensors", None)
             if callable(restore_callback) and cb is not archive_callback:
                 restore_callback(restored_checkpoint.tensors)
-    for cb in cb_list:
-        cb.on_train_begin(state)
 
     def loss_terms(
         bg_value: float | torch.Tensor,
@@ -1056,6 +1076,10 @@ def anneal(
             "adaptive_reference": adaptive_reference.detach(),
             "objective_center": objective_center.detach(),
             "objective_scale": objective_scale.detach(),
+            "restart_count": restart_count_device.detach(),
+            "restart_epoch_mask": restart_epoch_mask.detach(),
+            "exchange_count": exchange_count_device.detach(),
+            "exchange_epoch_mask": exchange_epoch_mask.detach(),
         }
         if best_key_gpu is not None:
             tensors["best_incumbent_key"] = best_key_gpu.detach()
@@ -1092,6 +1116,12 @@ def anneal(
     completed_epochs = start_epoch
     deadline_reached = False
     for epoch in range(start_epoch, num_epochs):
+        # CUDA launches asynchronously.  Synchronising only for an explicit
+        # wall-clock deadline prevents a queued epoch stream from appearing
+        # to fit the budget and then overrunning while results transfer back
+        # to the host.  Unbounded throughput-oriented runs remain unchanged.
+        if time_limit is not None and _is_cuda:
+            torch.cuda.synchronize(device)
         if time_limit is not None and perf_counter() - runtime_start >= time_limit:
             deadline_reached = True
             break
@@ -1263,6 +1293,8 @@ def anneal(
         ):
             save_runtime_checkpoint(completed_epochs, completed=False)
 
+    if time_limit is not None and _is_cuda:
+        torch.cuda.synchronize(device)
     runtime = perf_counter() - runtime_start
     best_obj = (
         best_obj_gpu.detach().cpu().numpy().astype(np.float64)

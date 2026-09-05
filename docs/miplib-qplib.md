@@ -234,9 +234,18 @@ without paying the Torch startup cost.
 time—not only the QQA epochs. State extraction, runtime initialisation,
 surrogate construction, candidate ranking, repair, and completion all consume
 the same cap. QQA time allocation also retains a bounded safety reserve for
-epoch-granularity stopping and callback post-processing. The accumulated value
-is available as `callback_runtime`, and the planned safety allowance as
-`callback_deadline_safety_reserved`.
+epoch-granularity stopping and callback post-processing. Explicit GPU deadlines
+synchronise queued CUDA work before each check, so asynchronous launches cannot
+hide consumed wall time. The accumulated value is available as
+`callback_runtime`, the planned safety allowance as
+`callback_deadline_safety_reserved`, and each QQA call's stopping evidence as
+`qqa_completed_epochs` and `qqa_deadline_reached`.
+
+The surrogate search uses `float32` by default for GPU throughput. Completed
+integer candidates are still checked and scored by SCIP against the original
+model; this does not reduce final feasibility precision. Numerically sensitive
+experiments can select `--core-dtype float64` or set
+`QQAHeuristicConfig(core_dtype="float64")` explicitly.
 
 ## Python API
 
@@ -266,6 +275,7 @@ config = QQAHeuristicConfig(
     subscip_repair=True,
     seed=0,
     threads=1,
+    core_dtype="float32",
 )
 result = run_miplib(
     "data/public-benchmarks/miplib/pk1.mps.gz",

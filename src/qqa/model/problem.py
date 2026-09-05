@@ -236,10 +236,10 @@ class ModelIRProblem(COProblem):
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         structured = self.model_ir.structured_block is not None
         values = x_disc.unsqueeze(0) if x_disc.ndim == (2 if structured else 1) else x_disc
-        objective = self.objective_values(values)[0]
-        violations = self.constraint_violations(values)
+        verification = self.model_ir.verify_solution(values)
+        objective = verification.objective_values[0]
         rows: dict[str, dict[str, Any]] = {}
-        domain_violation = float(self.model_ir.domain_violations(values)[0].item())
+        domain_violation = float(verification.domain_violations[0].item())
         feasible = domain_violation <= 1e-6
         if not feasible:
             rows["variable_domains"] = {
@@ -249,11 +249,10 @@ class ModelIRProblem(COProblem):
                 "feasible": False,
             }
         for constraint in self.model_ir.constraints:
-            violation = float(violations[constraint.name][0].item())
+            violation = float(verification.constraint_violations[constraint.name][0].item())
             satisfied = violation <= constraint.tolerance
-            feasible &= satisfied
             rows[constraint.name] = {
-                "lhs": float(constraint.expression.evaluate(values)[0].item()),
+                "lhs": float(verification.constraint_values[constraint.name][0].item()),
                 "sense": constraint.sense,
                 "rhs": constraint.rhs,
                 "violation": violation,
@@ -267,10 +266,11 @@ class ModelIRProblem(COProblem):
             "label": "objective",
             "value": float(objective.item()),
             "unit": "",
-            "feasible": feasible,
+            "feasible": bool(verification.feasible[0].item()),
             "extra": {
                 "constraints": rows,
                 "domain_violation": domain_violation,
+                "objective_finite": bool(verification.objective_finite[0].item()),
                 "sense": ObjectiveSense(self.model_ir.sense).value,
             },
         }
