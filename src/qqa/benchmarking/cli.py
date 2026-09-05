@@ -54,6 +54,26 @@ def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="cpu")
 
 
+def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
+    """Register process-boundary controls shared by run and compare."""
+    parser.add_argument(
+        "--worker-timeout",
+        type=float,
+        default=None,
+        help="Hard timeout for each isolated native worker (defaults to budget plus grace).",
+    )
+    parser.add_argument(
+        "--include-solution-values",
+        action="store_true",
+        help="Store the verified final solution in original variable order (can be large).",
+    )
+    parser.add_argument(
+        "--implementation-revision",
+        default=None,
+        help="Public 7-64 character lowercase hexadecimal source revision.",
+    )
+
+
 def add_benchmark_parser(subparsers) -> argparse.ArgumentParser:
     """Add the complete ``qqa benchmark`` command tree."""
     benchmark = subparsers.add_parser(
@@ -108,6 +128,7 @@ def add_benchmark_parser(subparsers) -> argparse.ArgumentParser:
     run.add_argument("--reference-file", default=None)
     run.add_argument("--output", default=None, help="Write machine-readable JSON.")
     run.add_argument("--quiet", action="store_true")
+    _add_runtime_options(run)
     _add_heuristic_options(run)
     run.add_argument("--seed", type=int, default=0)
 
@@ -146,7 +167,23 @@ def add_benchmark_parser(subparsers) -> argparse.ArgumentParser:
         action="store_true",
         help="When resuming, retry runs recorded as failures.",
     )
+    compare.add_argument(
+        "--no-equivalent-baseline-reuse",
+        action="store_true",
+        help="Execute structurally inapplicable hybrid cells independently for audit accounting.",
+    )
+    compare.add_argument(
+        "--isolate-all",
+        action="store_true",
+        help="Run every solver cell in a fresh process for ABI and memory isolation.",
+    )
+    compare.add_argument(
+        "--include-import-in-budget",
+        action="store_true",
+        help="Start each solver clock before parsing the original model.",
+    )
     compare.add_argument("--quiet", action="store_true")
+    _add_runtime_options(compare)
     _add_heuristic_options(compare)
     return benchmark
 
@@ -199,9 +236,10 @@ def _heuristic_config(args: argparse.Namespace, *, seed: int):
     )
 
 
-def _write_result(result, output_name: str | None) -> None:
+def _write_result(result, output_name: str | None, *, print_output: bool = True) -> None:
     rendered = json.dumps(result.to_dict(), ensure_ascii=False, indent=2)
-    print(rendered)
+    if print_output:
+        print(rendered)
     if output_name:
         output = Path(output_name).expanduser().resolve()
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -279,6 +317,8 @@ def run_benchmark_command(args: argparse.Namespace) -> int:
         "relative_gap_limit": args.gap,
         "threads": args.threads,
         "reference_file": args.reference_file,
+        "worker_timeout": args.worker_timeout,
+        "implementation_revision": args.implementation_revision,
         "verbose": not args.quiet,
     }
     result: Any
@@ -294,16 +334,25 @@ def run_benchmark_command(args: argparse.Namespace) -> int:
             resume=args.resume,
             continue_on_error=args.continue_on_error,
             retry_failures=args.retry_failures,
+            reuse_equivalent_baseline=not args.no_equivalent_baseline_reuse,
+            isolate_all=args.isolate_all,
+            include_import_in_budget=args.include_import_in_budget,
+            include_solution_values=args.include_solution_values,
             **common,
         )
     else:
-        common.update(solver=args.solver, seed=args.seed, qqa_config=config)
+        common.update(
+            solver=args.solver,
+            seed=args.seed,
+            qqa_config=config,
+            include_solution_values=args.include_solution_values,
+        )
         result = (
             run_benchmark_instance(instances[0], **common)
             if len(instances) == 1
             else run_benchmark_suite(instances, **common)
         )
-    _write_result(result, args.output)
+    _write_result(result, args.output, print_output=not args.quiet)
     return 0
 
 

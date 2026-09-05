@@ -54,15 +54,28 @@ def compose_warm_population(
     return torch.stack((rows * repeats)[:replicas])
 
 
-def estimate_convexification_beta(problem: Any, *, margin: float = 1.05) -> float:
-    """Return a safe c=2 beta from a Gershgorin Hessian lower bound.
+def estimate_convexification_beta(
+    problem: Any,
+    *,
+    objective_scale: float = 1.0,
+    dimensions: int | None = None,
+    margin: float = 1.05,
+) -> float:
+    """Return a normalized c=2 beta from a Gershgorin Hessian bound.
 
     The estimate is conservative and does not claim convexity for unknown
-    nonlinear callables.  A negative beta contributes ``8*abs(beta) I``.
+    nonlinear callables. For ``loss / M + beta * penalty / N``, a negative
+    beta contributes ``8*abs(beta)/N I``; therefore both the robust objective
+    scale ``M`` and the variable count ``N`` are part of the coefficient.
     """
+    if not math.isfinite(objective_scale) or objective_scale <= 0:
+        raise ValueError("objective_scale must be finite and positive.")
     qubo = getattr(problem, "sparse_qubo", None)
     if qubo is None:
         return 0.0
+    dimensions = qubo.num_variables if dimensions is None else int(dimensions)
+    if dimensions < 1:
+        raise ValueError("dimensions must be positive.")
     diagonal = torch.zeros(qubo.num_variables, dtype=torch.float64, device=qubo.linear.device)
     radius = torch.zeros_like(diagonal)
     if qubo.num_edges:
@@ -71,7 +84,7 @@ def estimate_convexification_beta(problem: Any, *, margin: float = 1.05) -> floa
         radius.scatter_add_(0, source, absolute)
         radius.scatter_add_(0, target, absolute)
     lower_bound = float((diagonal - radius).amin().item())
-    return -margin * max(0.0, -lower_bound) / 8.0
+    return -margin * dimensions * max(0.0, -lower_bound) / (8.0 * objective_scale)
 
 
 def factor_preconditioner(problem: Any, reference: torch.Tensor) -> torch.Tensor:
@@ -90,7 +103,12 @@ def factor_preconditioner(problem: Any, reference: torch.Tensor) -> torch.Tensor
 
 
 class ReplicaPortfolio:
-    """Assign roles and perform device-resident parallel-tempering exchange."""
+    """Assign roles and perform device-resident heuristic state exchange.
+
+    Roles intentionally use different penalties, step sizes, and perturbation
+    policies. Consequently this is a search-diversification heuristic, not a
+    detailed-balance parallel-tempering sampler.
+    """
 
     def __init__(self, replicas: int, *, convexification_beta: float = 0.0) -> None:
         if isinstance(replicas, bool) or not isinstance(replicas, int) or replicas < 1:
@@ -146,7 +164,7 @@ class ReplicaPortfolio:
         *,
         epoch: int,
     ) -> torch.Tensor:
-        """Swap adjacent role states with a Metropolis acceptance rule."""
+        """Swap adjacent role states with a Metropolis-inspired rule."""
         if self.replicas < 2:
             return torch.zeros((), dtype=torch.int64, device=state.device)
         start = epoch % 2

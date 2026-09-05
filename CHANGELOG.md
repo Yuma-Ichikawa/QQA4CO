@@ -6,6 +6,47 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-06
+
+### Solver integrity and QQA core
+
+- Enforce original-model variable domains, finite values, coordinate-space
+  identity, feasibility-first candidate selection, and candidate/certificate
+  linkage across pure QQA, repair, and optional exact completion.
+- Apply replica learning-rate and preconditioner scales to the effective Adam
+  update, normalise convexification consistently, preserve fixed per-coordinate
+  bounds, and keep adaptive augmented-Lagrangian/archive state on device.
+- Add structural sparse-factor presolve, complete adaptive/checkpoint state,
+  observed event timestamps, static original-objective incumbents, and
+  auditable stage execution diagnostics.
+- Preserve inward repair gradients at declared continuous bounds across
+  PyTorch clamp-derivative changes while retaining exact forward bounds.
+
+### Deadlines, hybrid execution, and observability
+
+- Introduce one monotonic solve context shared by compile, warm-up, search,
+  repair, baseline, and certification stages; record skipped deadline stages
+  instead of silently overrunning the requested budget.
+- Pass QQA incumbents into CP-SAT, make QUBO-to-SCIP certification reachable,
+  distinguish capability, planning, and actual execution, and add an explicit
+  opt-in mode that requires a QQA-generated primal.
+- Keep unavailable cockpit values unknown, distinguish search merit from the
+  mathematical objective, and remove the obsolete external Polyfill script
+  from the documentation site.
+
+### Public benchmark protocol
+
+- Add the complete MIPLIB/QPLIB audit manifest with fixed public snapshot
+  hashes, 1/10/30/300-second budgets, five seeds, and a direct aggressive-SCIP
+  ablation.
+- Add optional all-solver process isolation, model import inside the matched
+  deadline, independent bypass execution, bounded native workers, original-
+  coordinate solution hashes/values, stage timings, peak memory, target time,
+  anytime ECDFs, instance-level bootstrap intervals, and normalized failure
+  outcomes.
+- Preserve path-free failure records and separate independent runs, equivalent
+  baseline reuse, QQA activation, and QQA-attributable improvements.
+
 ### Repository layout
 
 - Consolidate historical benchmark aggregates in the documentation and remove

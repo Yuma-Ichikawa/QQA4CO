@@ -7,6 +7,7 @@ import pytest
 
 from qqa.algebraic import AlgebraicConstraint, AlgebraicModel, SparseQuadratic, VariableType
 from qqa.api import _retain_verified_warm_incumbent
+from qqa.hybrid.capabilities import cpsat_available, highs_available
 from qqa.hybrid.exact import ExactBackendResult, solve_exact_algebraic
 
 
@@ -47,7 +48,8 @@ def _infeasible_binary_model() -> AlgebraicModel:
 
 
 def test_highs_adapter_preserves_maximize_constant_bound_and_gap():
-    pytest.importorskip("highspy")
+    if not highs_available():
+        pytest.skip("HiGHS is unavailable")
     model = _binary_max_model()
     result = solve_exact_algebraic(model, "highs", time_limit=5.0, threads=1)
     evaluation = model.evaluate(result.best_sol.numpy())
@@ -59,7 +61,8 @@ def test_highs_adapter_preserves_maximize_constant_bound_and_gap():
 
 
 def test_cpsat_adapter_preserves_maximize_objective_and_bound():
-    pytest.importorskip("ortools")
+    if not cpsat_available():
+        pytest.skip("OR-Tools CP-SAT is unavailable")
     model = _binary_max_model()
     result = solve_exact_algebraic(
         model,
@@ -76,9 +79,11 @@ def test_cpsat_adapter_preserves_maximize_objective_and_bound():
     assert result.gap == pytest.approx(0.0)
 
 
-@pytest.mark.parametrize("backend, dependency", [("highs", "highspy"), ("cpsat", "ortools")])
-def test_exact_adapter_returns_proven_no_incumbent_without_exception(backend, dependency):
-    pytest.importorskip(dependency)
+@pytest.mark.parametrize("backend", ["highs", "cpsat"])
+def test_exact_adapter_returns_proven_no_incumbent_without_exception(backend):
+    available = highs_available if backend == "highs" else cpsat_available
+    if not available():
+        pytest.skip(f"{backend} is unavailable")
     result = solve_exact_algebraic(
         _infeasible_binary_model(),
         backend,
@@ -114,7 +119,8 @@ def np_to_tensor(values: list[float]):
 
 
 def test_cpsat_rejects_fractional_coefficients_instead_of_rounding():
-    pytest.importorskip("ortools")
+    if not cpsat_available():
+        pytest.skip("OR-Tools CP-SAT is unavailable")
     model = AlgebraicModel(
         "fractional",
         ("x",),

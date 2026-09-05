@@ -1,6 +1,6 @@
 # Typed primal–dual runtime
 
-QQA4CO 0.10 extends the typed, proof-aware runtime around QQA. The central
+QQA4CO 0.11 extends the typed, proof-aware runtime around QQA. The central
 rule is that representation, differentiable primal search, repair, and exact
 proof are separate capabilities. A factor being readable as `ModelIR` does not
 automatically make it valid for every solver.
@@ -48,6 +48,27 @@ all-different, table, logical, subtour, and scheduling factors can instead be
 routed to CP/SAT/exact propagation when their capability says so. A custom
 black-box factor must explicitly declare whether it is differentiable.
 
+The runtime generates the authoritative per-model matrix through
+`inspect_capabilities`; these broad built-in classes illustrate why the
+columns must remain separate:
+
+| Factor class | Represent | Pure QQA | Fused GPU | Repair | Lower bound | Registered proof route |
+| --- | --- | --- | --- | --- | --- | --- |
+| sparse linear | yes | yes | yes | no | yes | CP-SAT for compatible integer forms |
+| sparse quadratic | yes | yes | yes | no | yes | no generic registered route |
+| clause / cardinality | yes | yes | yes | yes | yes | CP-SAT |
+| assignment | yes | yes | eager | yes | yes | CP-SAT |
+| all-different | yes | no | no | yes | no | CP-SAT |
+| precedence / no-overlap / cumulative | yes | yes | eager | yes | type-dependent | CP-SAT |
+| table / logical / subtour | yes | no | no | yes | type-dependent | no generic registered route |
+| scenario and DRO | yes | yes | eager | no | no | no generic registered route |
+| black-box | yes | declared capability only | no | no | no | no |
+
+“Registered proof route” means an encoder exists; a particular model is only
+certifiable when its domains, coefficients, factor combination, selected API
+route, and optional backend are all compatible. Inspect `report.factors` and
+the executed-stage diagnostics instead of inferring execution from this table.
+
 Feasibility has three states: `feasible`, `infeasible`, and `unknown`. An empty
 constraint report is unknown unless it was explicitly created with
 `ConstraintReport.unconstrained()`.
@@ -83,7 +104,10 @@ objectives remain separate in `SolveResult`.
 
 The population contains convexification, exploration, discretization, noisy,
 incumbent, LP-centred, conflict-avoiding, and global roles. Roles receive
-different beta and learning-rate schedules. Coarse parallel-tempering exchange
+different beta and learning-rate schedules. Coarse, Metropolis-inspired state exchange
+is a search-diversification heuristic: heterogeneous roles do not share one
+stationary distribution, so this mode makes no detailed-balance or
+parallel-tempering sampling claim. Exchange
 swaps latent and optimizer state together. For sparse QUBOs, a Gershgorin
 curvature bound sets the negative c=2 convexification strength and a
 factor-degree diagonal preconditioner rescales gradients. Negative beta adds
@@ -223,6 +247,12 @@ first = qqa.solve(
 )
 resumed = qqa.solve(problem, budget="30s", resume_from="run.qqacp")
 ```
+
+Checkpoint continuation reports `resume_semantics="resume"` when the epoch
+horizon is unchanged. Increasing `num_epochs` is explicitly reported as
+`"extend"`: the saved trajectory is preserved, while future schedule and
+adaptive-update positions follow the new horizon and are not claimed to be
+bit-identical to a run that declared the longer horizon initially.
 
 Checkpoints are atomic ZIP containers with JSON metadata, NumPy tensors, and a
 SHA-256 checksum for every tensor. They contain no pickle or executable code.

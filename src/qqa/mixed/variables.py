@@ -158,7 +158,15 @@ class VariableSpace:
         """Map normalised solver coordinates from ``[0, 1]`` to user units."""
         self._check_last_dimension(latent)
         lower, upper = self._bounds_like(latent)
-        return lower + (upper - lower) * latent.clamp(0.0, 1.0)
+        bounded = latent.clamp(0.0, 1.0)
+        # PyTorch's endpoint derivative for clamp is version-dependent.  The
+        # physical value must remain bounded, while repair/search starting on
+        # a declared bound still needs an inward derivative.  Use an identity
+        # straight-through derivative and keep the exact clamp in the forward
+        # pass.
+        if latent.requires_grad:
+            bounded = latent + (bounded - latent).detach()
+        return lower + (upper - lower) * bounded
 
     def encode(self, values: torch.Tensor) -> torch.Tensor:
         """Map user-unit values into normalised solver coordinates."""

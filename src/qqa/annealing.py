@@ -11,7 +11,7 @@ problems all share this same loop.
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from dataclasses import dataclass, field, fields, is_dataclass
 from time import perf_counter
@@ -183,6 +183,29 @@ def _replica_merit(discrete_losses: torch.Tensor) -> torch.Tensor:
     return ((flattened - centre) / scale).mean(dim=1)
 
 
+def _lexicographic_argmin(keys: torch.Tensor) -> torch.Tensor:
+    """Return a stable lexicographic row argmin without a host round-trip."""
+    if keys.ndim != 2 or not len(keys):
+        raise ValueError("keys must be a non-empty rank-two tensor.")
+    order = torch.arange(len(keys), device=keys.device)
+    for column in range(keys.shape[1] - 1, -1, -1):
+        ranked = torch.argsort(keys[order, column], stable=True)
+        order = order[ranked]
+    return order[0]
+
+
+def _lexicographic_less(left: torch.Tensor, right: torch.Tensor) -> torch.Tensor:
+    """Compare two one-dimensional keys entirely on their current device."""
+    if left.shape != right.shape or left.ndim != 1:
+        raise ValueError("Lexicographic keys must be aligned one-dimensional tensors.")
+    less = torch.zeros((), dtype=torch.bool, device=left.device)
+    equal = torch.ones((), dtype=torch.bool, device=left.device)
+    for column in range(len(left)):
+        less |= equal & (left[column] < right[column])
+        equal &= left[column] == right[column]
+    return less
+
+
 def _schedule_checkpoint_descriptor(schedule: Schedule) -> dict[str, Any]:
     """Describe a schedule without source paths or executable payloads."""
     parameters: dict[str, Any] = {}
@@ -216,13 +239,29 @@ def _reset_optimizer_rows(
         value = state.get(key)
         if torch.is_tensor(value) and value.shape == parameter.shape:
             if enabled is None:
-                value[rows].zero_()
+                value.index_fill_(0, rows, 0)
             else:
                 value[rows] = torch.where(
                     enabled,
                     torch.zeros_like(value[rows]),
                     value[rows],
                 )
+
+
+@torch.no_grad()
+def _apply_optimizer_step_scale_(
+    parameter: torch.Tensor,
+    origin: torch.Tensor,
+    scale: torch.Tensor,
+) -> None:
+    """Apply role/preconditioner scaling to an optimizer's actual update."""
+    if parameter.shape != origin.shape:
+        raise ValueError("parameter and origin must have the same shape.")
+    try:
+        torch.broadcast_shapes(parameter.shape, scale.shape)
+    except RuntimeError as exc:
+        raise ValueError("scale must broadcast to the parameter shape.") from exc
+    parameter.copy_(origin + (parameter - origin) * scale)
 
 
 def _restart_replicas(
@@ -407,14 +446,15 @@ def anneal(
         evaluation. Unsupported user callables fail explicitly instead of
         silently falling back through graph breaks.
     """
+    runtime_start = perf_counter()
     if not isinstance(sol_size, int) or isinstance(sol_size, bool) or sol_size < 1:
         raise ValueError(f"sol_size must be >= 1, got {sol_size}.")
     if not isinstance(num_epochs, int) or isinstance(num_epochs, bool) or num_epochs < 0:
         raise ValueError(f"num_epochs must be >= 0, got {num_epochs}.")
     if time_limit is not None and (
-        isinstance(time_limit, bool) or not math.isfinite(time_limit) or time_limit <= 0
+        isinstance(time_limit, bool) or not math.isfinite(time_limit) or time_limit < 0
     ):
-        raise ValueError("time_limit must be finite and > 0, or None.")
+        raise ValueError("time_limit must be finite and non-negative, or None.")
     if not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError(f"learning_rate must be > 0, got {learning_rate}.")
     if not math.isfinite(temp) or temp < 0:
@@ -587,10 +627,10 @@ def anneal(
         )
         cb_list.append(archive_callback)
 
-    runtime_start = perf_counter()
     is_batch = _is_instance_problem(problem)
     restored_checkpoint = None
     checkpoint_fingerprint = None
+    resume_semantics = "fresh"
     start_epoch = 0
     if resume_from is not None or checkpoint_path is not None:
         from qqa.runtime.checkpoint import fingerprint_problem, load_checkpoint
@@ -605,6 +645,8 @@ def anneal(
                     continue
                 if restored_checkpoint.config.get(key) != expected:
                     raise ValueError(f"Checkpoint {key} does not match the requested run.")
+            saved_epochs = int(restored_checkpoint.config.get("num_epochs", num_epochs))
+            resume_semantics = "resume" if saved_epochs == num_epochs else "extend"
             saved_schedule_state = restored_checkpoint.metadata.get("schedule_state", {})
             if set(saved_schedule_state) != set(schedule_descriptor["state"]):
                 raise ValueError("Checkpoint schedule state does not match the requested schedule.")
@@ -727,23 +769,9 @@ def anneal(
         factor_preconditioner,
     )
 
-    convexification_beta = (
-        estimate_convexification_beta(problem) if curvature_aware_beta and curve_rate == 2 else 0.0
-    )
-    replica_portfolio = (
-        ReplicaPortfolio(sol_size, convexification_beta=convexification_beta)
-        if heterogeneous_replicas and sol_size > 1
-        else None
-    )
     preconditioner = (
         factor_preconditioner(problem, x) if factor_preconditioning else torch.ones_like(x[0])
     )
-    learning_rate_scale = (
-        replica_portfolio.learning_rate_scale(x.device, x.dtype)
-        if replica_portfolio is not None
-        else torch.ones(sol_size, device=x.device, dtype=x.dtype)
-    )
-    learning_rate_scale = learning_rate_scale.reshape(sol_size, *((1,) * (x.ndim - 1)))
 
     hp = {"div_param": float(div_param), "restart_count": 0}
     restart_count_device = torch.zeros((), dtype=torch.int64, device=x.device)
@@ -754,6 +782,10 @@ def anneal(
     with torch.no_grad():
         x_disc = relax.project(x)
         loss_disc = loss_function(x_disc)
+        candidate_key_function = getattr(problem, "incumbent_keys", None)
+        incumbent_keys: Callable[[torch.Tensor], torch.Tensor] | None = (
+            candidate_key_function if callable(candidate_key_function) else None
+        )
         if normalize_loss and robust_scaling:
             objective_center = loss_disc.median(dim=0).values
             objective_mad = (loss_disc - objective_center).abs().median(dim=0).values
@@ -766,9 +798,18 @@ def anneal(
         else:
             objective_center = torch.zeros_like(loss_disc[0])
             objective_scale = torch.ones_like(loss_disc[0])
-        if is_batch:
+        best_key_gpu = None
+        best_obj: Any
+        if not is_batch and incumbent_keys is not None:
+            candidate_keys = incumbent_keys(x_disc)
+            selected_index = _lexicographic_argmin(candidate_keys)
+            best_key_gpu = candidate_keys[selected_index].detach().clone()
+            best_sol = x_disc[selected_index].detach().clone()
+            ranking = getattr(problem, "ranking_objective", loss_function)
+            best_obj = float(ranking(best_sol.unsqueeze(0))[0].item())
+        elif is_batch:
             min_vals, min_idx = torch.min(loss_disc, dim=0)
-            best_obj: Any = min_vals.detach().cpu().numpy().astype(np.float64)
+            best_obj = min_vals.detach().cpu().numpy().astype(np.float64)
             columns = torch.arange(x_disc.size(1), device=x_disc.device)
             best_sol = x_disc[min_idx, columns].detach().clone()
         else:
@@ -778,6 +819,57 @@ def anneal(
             # downstream code — ``problem.score_summary``, CLI, notebooks —
             # sees a clean ``(N, ...)`` tensor rather than ``(B, N, ...)``.
             best_sol = x_disc[int(min_idx.item())].detach().clone()
+    if restored_checkpoint is not None:
+        for name in ("objective_center", "objective_scale"):
+            saved = restored_checkpoint.tensors.get(name)
+            current = objective_center if name == "objective_center" else objective_scale
+            if saved is None or saved.shape != current.shape:
+                raise ValueError(f"Checkpoint has no compatible {name} tensor.")
+            if name == "objective_center":
+                objective_center = saved.to(device=x.device, dtype=loss_disc.dtype)
+            else:
+                objective_scale = saved.to(device=x.device, dtype=loss_disc.dtype)
+    dimensions = max(
+        1,
+        relax.num_variables(problem) * int(getattr(problem, "num_instance", 1) or 1),
+    )
+    scale_for_convexification = float(objective_scale.reshape(-1).median().item())
+    convexification_beta = (
+        estimate_convexification_beta(
+            problem,
+            objective_scale=scale_for_convexification,
+            dimensions=dimensions,
+        )
+        if curvature_aware_beta and curve_rate == 2
+        else 0.0
+    )
+    replica_portfolio = (
+        ReplicaPortfolio(sol_size, convexification_beta=convexification_beta)
+        if heterogeneous_replicas and sol_size > 1
+        else None
+    )
+    learning_rate_scale = (
+        replica_portfolio.learning_rate_scale(x.device, x.dtype)
+        if replica_portfolio is not None
+        else torch.ones(sol_size, device=x.device, dtype=x.dtype)
+    )
+    learning_rate_scale = learning_rate_scale.reshape(sol_size, *((1,) * (x.ndim - 1)))
+    optimizer_step_scale = learning_rate_scale * preconditioner
+    adaptive_optimizer = optimizer in {"adamw", "lightweight-adamw"}
+    optimizer_origin = torch.empty_like(x) if adaptive_optimizer else None
+
+    @torch.no_grad()
+    def capture_optimizer_origin() -> None:
+        if optimizer_origin is not None:
+            optimizer_origin.copy_(x)
+
+    @torch.no_grad()
+    def apply_effective_step_scale() -> None:
+        """Scale the actual Adam update; scaling its input gradient cancels."""
+        if optimizer_origin is None:
+            return
+        _apply_optimizer_step_scale_(x, optimizer_origin, optimizer_step_scale)
+
     # Keep incumbent comparisons and solution selection device-resident.  The
     # host receives the final value once after the loop (or when an explicit
     # user callback chooses to inspect it).
@@ -796,8 +888,30 @@ def anneal(
             if is_batch
             else float(best_obj_gpu.item())
         )
-    restart_reference = best_obj_gpu.detach().clone()
-    adaptive_reference = best_obj_gpu.detach().clone()
+        if best_key_gpu is not None:
+            assert incumbent_keys is not None
+            checkpoint_best_key = restored_checkpoint.tensors.get("best_incumbent_key")
+            best_key_gpu = (
+                incumbent_keys(best_sol.unsqueeze(0))[0].detach().clone()
+                if checkpoint_best_key is None
+                else checkpoint_best_key.to(device=x.device, dtype=loss_disc.dtype)
+            )
+    restart_reference = (
+        best_obj_gpu.detach().clone() if best_key_gpu is None else best_key_gpu.detach().clone()
+    )
+    adaptive_reference = restart_reference.detach().clone()
+    if restored_checkpoint is not None:
+        for name, current in (
+            ("restart_reference", restart_reference),
+            ("adaptive_reference", adaptive_reference),
+        ):
+            saved = restored_checkpoint.tensors.get(name)
+            if saved is None or saved.shape != current.shape:
+                raise ValueError(f"Checkpoint has no compatible {name} tensor.")
+            if name == "restart_reference":
+                restart_reference = saved.to(device=x.device, dtype=current.dtype)
+            else:
+                adaptive_reference = saved.to(device=x.device, dtype=current.dtype)
     # Adaptive schedule observation is an explicit host control point. Keep
     # it aligned with check_interval so ordinary GPU runs do not gain hidden
     # synchronisations in addition to user-requested progress checks.
@@ -818,6 +932,11 @@ def anneal(
         problem=problem,
         relaxation=relax,
     )
+    if restored_checkpoint is not None:
+        for cb in cb_list:
+            restore_callback = getattr(cb, "restore_checkpoint_tensors", None)
+            if callable(restore_callback) and cb is not archive_callback:
+                restore_callback(restored_checkpoint.tensors)
     for cb in cb_list:
         cb.on_train_begin(state)
 
@@ -841,10 +960,6 @@ def anneal(
                 beta = torch.as_tensor(bg_value, device=x.device, dtype=x.dtype)
                 while beta.ndim < penalties_value.ndim:
                     beta = beta.unsqueeze(-1)
-                dimensions = max(
-                    1,
-                    relax.num_variables(problem) * int(getattr(problem, "num_instance", 1) or 1),
-                )
                 objective_term = normalised_losses.mean()
                 penalty_term = (penalties_value * beta).mean() / dimensions
                 diversity_term = -diversity_value / dimensions
@@ -874,14 +989,17 @@ def anneal(
             gradient = x.grad
             if gradient is None:
                 raise RuntimeError("Autograd returned no latent gradient.")
-            gradient.mul_(preconditioner)
-            gradient.mul_(learning_rate_scale)
+            if optimizer_origin is not None:
+                capture_optimizer_origin()
+            else:
+                gradient.mul_(optimizer_step_scale)
             if gradient_clip_norm is not None:
                 gradient_scale = (
                     gradient_clip_norm / (torch.linalg.vector_norm(gradient) + 1e-12)
                 ).clamp(max=1.0)
                 gradient.mul_(gradient_scale)
             optimiser.step()
+            apply_effective_step_scale()
             relax.perturb_(x, learning_rate, temp)
             return losses_value, penalties_value, diversity_value
 
@@ -907,7 +1025,12 @@ def anneal(
                 initial_beta,
                 x.new_tensor(float(hp["div_param"])),
             ),
-            state_tensors=(x, graph_gradient, *optimiser_tensors),
+            state_tensors=(
+                x,
+                graph_gradient,
+                *(() if optimizer_origin is None else (optimizer_origin,)),
+                *optimiser_tensors,
+            ),
         )
 
     def save_runtime_checkpoint(epoch: int, *, completed: bool) -> None:
@@ -921,11 +1044,24 @@ def anneal(
             "best_solution": best_sol.detach(),
             "best_objective": best_obj_gpu.detach(),
             "cpu_rng_state": torch.random.get_rng_state(),
+            "restart_reference": restart_reference.detach(),
+            "adaptive_reference": adaptive_reference.detach(),
+            "objective_center": objective_center.detach(),
+            "objective_scale": objective_scale.detach(),
         }
+        if best_key_gpu is not None:
+            tensors["best_incumbent_key"] = best_key_gpu.detach()
         if x.device.type == "cuda":
             tensors["device_rng_state"] = torch.cuda.get_rng_state(x.device)
         if archive_callback is not None:
             tensors.update(archive_callback.checkpoint_tensors())
+        for callback in cb_list:
+            checkpoint_callback = getattr(callback, "checkpoint_tensors", None)
+            if callable(checkpoint_callback) and callback is not archive_callback:
+                for name, value in checkpoint_callback().items():
+                    if name in tensors:
+                        raise ValueError(f"Duplicate callback checkpoint tensor: {name}.")
+                    tensors[name] = value
         for key in ("step", "exp_avg", "exp_avg_sq", "max_exp_avg_sq"):
             value = optimiser_state.get(key)
             if torch.is_tensor(value):
@@ -974,11 +1110,14 @@ def anneal(
             gradient = x.grad
             if gradient is None:
                 raise RuntimeError("Autograd returned no latent gradient.")
-            gradient.mul_(preconditioner)
-            gradient.mul_(learning_rate_scale)
+            if optimizer_origin is not None:
+                capture_optimizer_origin()
+            else:
+                gradient.mul_(optimizer_step_scale)
             if gradient_clip_norm is not None:
                 torch.nn.utils.clip_grad_norm_([x], gradient_clip_norm)
             optimiser.step()
+            apply_effective_step_scale()
             relax.perturb_(x, learning_rate, temp)
 
         with torch.no_grad():
@@ -991,11 +1130,24 @@ def anneal(
                 best_sol = torch.where(improved_mask.unsqueeze(-1), selected, best_sol)
                 best_obj_gpu = torch.minimum(best_obj_gpu, min_vals)
             else:
-                min_val, min_idx = torch.min(loss_disc, dim=0)
-                improved = min_val < best_obj_gpu
-                selected = x_disc[min_idx]
-                best_sol = torch.where(improved, selected, best_sol)
-                best_obj_gpu = torch.minimum(best_obj_gpu, min_val)
+                if best_key_gpu is not None:
+                    assert incumbent_keys is not None
+                    candidate_keys = incumbent_keys(x_disc)
+                    min_idx = _lexicographic_argmin(candidate_keys)
+                    candidate_key = candidate_keys[min_idx]
+                    improved = _lexicographic_less(candidate_key, best_key_gpu)
+                    selected = x_disc[min_idx]
+                    best_sol = torch.where(improved, selected, best_sol)
+                    best_key_gpu = torch.where(improved, candidate_key, best_key_gpu)
+                    ranking = getattr(problem, "ranking_objective", loss_function)
+                    candidate_objective = ranking(selected.unsqueeze(0))[0]
+                    best_obj_gpu = torch.where(improved, candidate_objective, best_obj_gpu)
+                else:
+                    min_val, min_idx = torch.min(loss_disc, dim=0)
+                    improved = min_val < best_obj_gpu
+                    selected = x_disc[min_idx]
+                    best_sol = torch.where(improved, selected, best_sol)
+                    best_obj_gpu = torch.minimum(best_obj_gpu, min_val)
             if (
                 replica_portfolio is not None
                 and replica_exchange_interval is not None
@@ -1031,7 +1183,11 @@ def anneal(
         if callable(observe_schedule) and (
             (epoch + 1) % adaptive_interval == 0 or epoch == num_epochs - 1
         ):
-            window_improved = torch.any(best_obj_gpu < adaptive_reference - 1e-12)
+            window_improved = (
+                torch.any(best_obj_gpu < adaptive_reference - 1e-12)
+                if best_key_gpu is None
+                else _lexicographic_less(best_key_gpu, adaptive_reference)
+            )
             dimensions = max(
                 1, relax.num_variables(problem) * int(getattr(problem, "num_instance", 1) or 1)
             )
@@ -1040,7 +1196,11 @@ def anneal(
                 improved=bool(window_improved.item()),
                 diversity_ratio=float(diversity_ratio.item()),
             )
-            adaptive_reference = best_obj_gpu.detach().clone()
+            adaptive_reference = (
+                best_obj_gpu.detach().clone()
+                if best_key_gpu is None
+                else best_key_gpu.detach().clone()
+            )
 
         if verbose and (epoch % check_interval == 0 or epoch == num_epochs - 1):
             display_best = (
@@ -1056,7 +1216,11 @@ def anneal(
             and epoch < num_epochs - 1
             and (epoch + 1) % restart_patience == 0
         ):
-            improved_in_window = torch.any(best_obj_gpu < restart_reference - 1e-12)
+            improved_in_window = (
+                torch.any(best_obj_gpu < restart_reference - 1e-12)
+                if best_key_gpu is None
+                else _lexicographic_less(best_key_gpu, restart_reference)
+            )
             restart_enabled = ~improved_in_window
             restarted = _restart_replicas(
                 x=x,
@@ -1079,7 +1243,11 @@ def anneal(
             if restarted:
                 restart_count_device.add_(restart_enabled.to(torch.int64) * restarted)
                 restart_epoch_mask[epoch] = restart_enabled
-            restart_reference = best_obj_gpu.detach().clone()
+            restart_reference = (
+                best_obj_gpu.detach().clone()
+                if best_key_gpu is None
+                else best_key_gpu.detach().clone()
+            )
         if (
             checkpoint_path is not None
             and checkpoint_interval is not None
@@ -1134,8 +1302,12 @@ def anneal(
     # because their best_sol is one row per independent model rather than one
     # search state. A strict improvement hot-swaps best_sol / best_obj / score.
     prev_obj = best_obj
+    deadline_reached |= time_limit is not None and perf_counter() - runtime_start >= time_limit
     best_sol, best_obj, polished_sol = apply_polish_if_improves(
-        problem, best_sol, best_obj, polish=polish and not is_batch
+        problem,
+        best_sol,
+        best_obj,
+        polish=polish and not is_batch and not deadline_reached,
     )
     # The incumbent is initialised from a non-empty replica population before
     # polishing, so the helper's optional return cannot be ``None`` here.
@@ -1182,6 +1354,7 @@ def anneal(
             "replica_exchange_interval": replica_exchange_interval,
             "replica_exchange_count": exchange_count,
             "replica_exchange_events": len(exchange_epochs),
+            "replica_exchange_mode": "heuristic_role_exchange",
             "factor_preconditioning": factor_preconditioning,
             "curvature_aware_beta": curvature_aware_beta,
             "convexification_beta": convexification_beta,
@@ -1189,6 +1362,7 @@ def anneal(
                 None if archive_callback is None else archive_callback.archive.diagnostics()
             ),
             "resumed": restored_checkpoint is not None,
+            "resume_semantics": resume_semantics,
             "checkpoint_written": checkpoint_path is not None,
         },
         archive=None if archive_callback is None else archive_callback.archive,

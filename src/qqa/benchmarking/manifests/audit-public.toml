@@ -1,0 +1,39 @@
+name = "qqa-public-audit-v1"
+track = "constrained"
+schema_version = 1
+budgets = [1.0, 10.0, 30.0, 300.0]
+seeds = [0, 1, 2, 3, 4]
+solvers = ["scip-aggressive", "sg-cqqa"]
+baseline_solver = "scip-aggressive"
+execution_order = "balanced"
+threads = 1
+process_isolation = "all-solvers"
+include_import_in_budget = true
+reuse_equivalent_baseline = false
+include_solution_values = true
+metrics = [
+  "time_to_first_verified_feasible",
+  "time_to_reference_target",
+  "verified_original_objective_at_deadline",
+  "primal_integral",
+  "solver_relative_gap",
+  "reliability",
+  "peak_memory",
+  "qqa_active_rate",
+  "qqa_attributable_improvement_rate",
+]
+cadence = ["release"]
+
+[[instances]]
+name = "miplib-2017-benchmark-v2"
+format = "miplib-archive"
+source = "https://miplib.zib.de/downloads/benchmark.zip"
+sha256 = "c756eefd544d83b31809306b45d3549a1a5b9378e6aa78b68738b1a3b6a418fa"
+tags = ["public", "mixed-integer", "complete-suite", "sealed-evaluation"]
+
+[[instances]]
+name = "qplib-public-snapshot"
+format = "qplib-archive"
+source = "https://qplib.zib.de/qplib.zip"
+sha256 = "b3596e1264ed57c5f6a44e822679f5c9138e1985fe74bc8341c3becbc666b9fd"
+tags = ["public", "quadratic", "complete-suite", "sealed-evaluation"]

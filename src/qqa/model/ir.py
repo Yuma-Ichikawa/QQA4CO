@@ -548,14 +548,108 @@ class ModelIR:
         values = self._validate_values(values)
         return {row.name: row.violation(values) for row in self.constraints}
 
+    def domain_violations(self, values: torch.Tensor) -> torch.Tensor:
+        """Return the maximum variable-domain violation for every candidate.
+
+        Objective and factor evaluation intentionally accepts relaxed points.
+        Feasibility does not: it independently checks finiteness, declared
+        bounds, integrality, binary/spin membership, and structured one-hot or
+        permutation semantics.  Keeping these contracts separate prevents a
+        relaxed objective probe from being mistaken for a verified incumbent.
+        """
+        values = self._validate_values(values)
+        if values.is_complex():
+            raise TypeError("ModelIR values must use a real numeric tensor dtype.")
+        work = values if values.is_floating_point() else values.to(torch.float64)
+        structured = self.structured_block
+        batch_shape = (
+            work.shape[:-2] if structured is not None and work.ndim >= 3 else work.shape[:-1]
+        )
+        maximum = torch.zeros(batch_shape, device=work.device, dtype=work.dtype)
+        finite = torch.isfinite(work)
+        finite_by_candidate = finite.reshape(*batch_shape, -1).all(dim=-1)
+        finite_penalty = torch.where(
+            finite_by_candidate,
+            torch.zeros_like(maximum),
+            torch.full_like(maximum, torch.finfo(work.dtype).max),
+        )
+        maximum = torch.maximum(maximum, finite_penalty)
+        safe = torch.where(finite, work, torch.zeros_like(work))
+
+        if structured is not None:
+            categories = int(structured.categories or 0)
+            if safe.ndim >= 3 and safe.shape[-2:] == (structured.size, categories):
+                maximum = torch.maximum(
+                    maximum,
+                    (safe - safe.round()).abs().reshape(*batch_shape, -1).amax(dim=-1),
+                )
+                maximum = torch.maximum(maximum, (-safe).clamp_min(0).amax(dim=(-2, -1)))
+                maximum = torch.maximum(maximum, (safe - 1.0).clamp_min(0).amax(dim=(-2, -1)))
+                maximum = torch.maximum(maximum, (safe.sum(dim=-1) - 1.0).abs().amax(dim=-1))
+                if structured.domain is VariableDomain.PERMUTATION:
+                    maximum = torch.maximum(maximum, (safe.sum(dim=-2) - 1.0).abs().amax(dim=-1))
+                return maximum
+            maximum = torch.maximum(maximum, (safe - safe.round()).abs().amax(dim=-1))
+            maximum = torch.maximum(maximum, (-safe).clamp_min(0).amax(dim=-1))
+            maximum = torch.maximum(
+                maximum, (safe - float(categories - 1)).clamp_min(0).amax(dim=-1)
+            )
+            if structured.domain is VariableDomain.PERMUTATION:
+                sorted_states = safe.sort(dim=-1).values
+                target = torch.arange(categories, device=safe.device, dtype=safe.dtype)
+                if structured.size != categories:
+                    maximum = torch.maximum(maximum, torch.ones_like(maximum))
+                else:
+                    maximum = torch.maximum(maximum, (sorted_states - target).abs().amax(dim=-1))
+            return maximum
+
+        offset = 0
+        for block in self.variables:
+            part = safe[..., offset : offset + block.size]
+            offset += block.size
+            lower = block.lower
+            upper = block.upper
+            implicit_lower: float | None
+            implicit_upper: float | None
+            if block.domain is VariableDomain.BINARY:
+                implicit_lower, implicit_upper = 0.0, 1.0
+                membership = torch.minimum(part.abs(), (part - 1.0).abs()).amax(dim=-1)
+                maximum = torch.maximum(maximum, membership)
+            elif block.domain is VariableDomain.SPIN:
+                implicit_lower, implicit_upper = -1.0, 1.0
+                membership = torch.minimum((part + 1.0).abs(), (part - 1.0).abs()).amax(dim=-1)
+                maximum = torch.maximum(maximum, membership)
+            else:
+                implicit_lower = implicit_upper = None
+                if block.domain is VariableDomain.INTEGER:
+                    maximum = torch.maximum(maximum, (part - part.round()).abs().amax(dim=-1))
+            if lower is not None or implicit_lower is not None:
+                bound = (
+                    (
+                        torch.as_tensor(lower, device=part.device, dtype=part.dtype)
+                        if lower is not None
+                        else part.new_tensor(implicit_lower)
+                    )
+                    .reshape(-1)
+                    .expand(block.size)
+                )
+                maximum = torch.maximum(maximum, (bound - part).clamp_min(0).amax(dim=-1))
+            if upper is not None or implicit_upper is not None:
+                bound = (
+                    (
+                        torch.as_tensor(upper, device=part.device, dtype=part.dtype)
+                        if upper is not None
+                        else part.new_tensor(implicit_upper)
+                    )
+                    .reshape(-1)
+                    .expand(block.size)
+                )
+                maximum = torch.maximum(maximum, (part - bound).clamp_min(0).amax(dim=-1))
+        return maximum
+
     def feasible(self, values: torch.Tensor) -> torch.Tensor:
         values = self._validate_values(values)
-        batch_shape = (
-            values.shape[:-2]
-            if self.structured_block is not None and values.ndim >= 3
-            else values.shape[:-1]
-        )
-        mask = torch.ones(batch_shape, dtype=torch.bool, device=values.device)
+        mask = self.domain_violations(values) <= 1e-6
         for row in self.constraints:
             mask &= row.violation(values) <= row.tolerance
         return mask

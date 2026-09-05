@@ -28,3 +28,10 @@ def test_builtin_benchmark_manifest_is_the_single_source_of_truth() -> None:
     manifest = builtin_benchmark_manifest("qqa-core")
     assert manifest.name == "qqa-core-portable"
     assert manifest.instances
+    audit = builtin_benchmark_manifest("audit-public")
+    assert audit.budgets == (1.0, 10.0, 30.0, 300.0)
+    assert audit.seeds == (0, 1, 2, 3, 4)
+    assert {instance.format for instance in audit.instances} == {
+        "miplib-archive",
+        "qplib-archive",
+    }

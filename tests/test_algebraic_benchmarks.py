@@ -32,12 +32,14 @@ from qqa.benchmarking import (
 )
 from qqa.benchmarking import download as benchmark_download
 from qqa.benchmarking.algebraic_runner import (
+    _classify_outcome,
     _comparison_solver_order,
     _configure_scip_threads,
     _qqa_applicability_hint,
     _qqa_is_applicable,
 )
 from qqa.benchmarking.metrics import (
+    BenchmarkFailure,
     IncumbentPoint,
     SCIPProgressTracker,
     normalised_primal_error,
@@ -536,6 +538,14 @@ def test_elastic_repair_and_mixed_solver_archive_restore_feasibility():
     )
     assert result.diagnostics["constraint_archive"]["observations"] > 0
     assert result.score["feasible"]
+
+
+def test_real_decode_retains_inward_gradient_at_declared_bounds():
+    problem = _constrained_real_problem()
+    latent = torch.tensor([0.0], dtype=torch.float64, requires_grad=True)
+    problem.space.decode(latent).sum().backward()
+    assert latent.grad is not None
+    assert latent.grad.item() == pytest.approx(2.0)
 
 
 def test_conditional_heuristic_uses_qqa_guided_partial_fixings_for_lns_repair(monkeypatch):
@@ -1208,6 +1218,8 @@ def test_benchmark_campaign_records_path_free_failures_and_continues(tmp_path):
         "completed_runs": 0,
         "failed_runs": 2,
         "failures_by_solver": {"scip": 1, "sg-cqqa": 1},
+        "failures_by_type": {"FileNotFoundError": 2},
+        "failures_by_outcome": {"backend_failure": 2},
     }
     payload = json.dumps(result.to_dict())
     assert str(tmp_path) not in payload
@@ -1371,6 +1383,10 @@ def test_comparison_stratifies_actual_qqa_execution():
         "ties": 0,
         "wins": 0,
     }
+    inference = summary["pairwise"]["sg-cqqa"]["inference"]
+    assert inference["confidence_unit"] == "instance_after_seed_median"
+    assert inference["primal_quality"]["eligible_instances"] == 2
+    assert summary["anytime_ecdf"]["sg-cqqa"]["runs"] == 2
 
 
 def test_public_campaign_artifacts_are_deterministic_and_path_free(tmp_path):
@@ -1532,5 +1548,32 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert args.min_qqa_time == pytest.approx(2.0)
     assert args.fast_candidates == 0
     assert args.maximum_overhead_fraction == pytest.approx(0.05)
+    assert args.worker_timeout is None
+    assert args.implementation_revision is None
+    assert not args.no_equivalent_baseline_reuse
+    assert not args.isolate_all
+    assert not args.include_import_in_budget
+    assert not args.include_solution_values
     assert not args.resume
     assert not args.continue_on_error
+
+
+@pytest.mark.parametrize(
+    ("error_type", "outcome"),
+    [
+        ("WorkerTimeout", "timeout"),
+        ("MemoryError", "out_of_memory"),
+        ("UnsupportedFactor", "unsupported"),
+        ("NativeSolverProcessError", "backend_failure"),
+    ],
+)
+def test_benchmark_failures_have_portable_outcomes(error_type, outcome):
+    failure = BenchmarkFailure("instance", "miplib", "sg-cqqa", 0, error_type)
+    assert failure.outcome == outcome
+
+
+def test_zero_gap_without_optimal_status_is_not_promoted_to_a_certificate():
+    assert _classify_outcome(status="timelimit", feasible=True) == "feasible"
+    assert (
+        _classify_outcome(status="optimal", feasible=True) == "optimal_with_qualified_certificate"
+    )

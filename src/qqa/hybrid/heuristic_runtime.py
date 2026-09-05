@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import contextmanager
+from time import perf_counter
 
 import numpy as np
 import torch
@@ -60,12 +61,14 @@ def solve_core_problem(
     device contract independently testable. In particular, ``device='auto'``
     is resolved consistently with every other QQA solver entry point.
     """
+    started = perf_counter()
     resolved_device = resolve_device(config.device)
     initial = torch.as_tensor(initial_population, dtype=torch.float64)
     with (
         torch_thread_budget(config.threads),
         torch_seed(seed, resolved_device),
     ):
+        remaining = max(0.0, time_limit - (perf_counter() - started))
         return problem.solve(
             sol_size=config.sol_size,
             num_epochs=config.epochs,
@@ -82,7 +85,7 @@ def solve_core_problem(
             polish=False,
             restart_patience=max(20, config.epochs // 2),
             optimizer="lightweight-adamw",
-            time_limit=time_limit,
+            time_limit=remaining,
             device=resolved_device,
             verbose=config.verbose,
         )

@@ -21,28 +21,13 @@ def _prefer_feasible(problem: ModelIRProblem, result: AnnealResult) -> None:
         return
     candidates = torch.cat([result.best_sol.unsqueeze(0), result.final_population], dim=0)
     with torch.no_grad():
-        violations = problem.constraint_violations(candidates)
-        matrix = torch.stack(
-            [violations[row.name] / row.scale for row in problem.constraints], dim=1
-        )
-        maximum = matrix.amax(dim=1)
-        total = matrix.sum(dim=1)
-        internal = problem.internal_objective(candidates)
-        feasible = torch.ones(len(candidates), dtype=torch.bool, device=candidates.device)
-        for row in problem.constraints:
-            feasible &= violations[row.name] <= row.tolerance
-        selected = min(
-            range(len(candidates)),
-            key=lambda index: (
-                not bool(feasible[index]),
-                0.0 if bool(feasible[index]) else float(maximum[index]),
-                0.0 if bool(feasible[index]) else float(total[index]),
-                float(internal[index]),
-                index,
-            ),
-        )
+        keys = problem.incumbent_keys(candidates)
+        order = torch.arange(len(candidates), device=candidates.device)
+        for column in range(keys.shape[1] - 1, -1, -1):
+            order = order[torch.argsort(keys[order, column], stable=True)]
+        selected = order[0]
         result.best_sol = candidates[selected].detach().clone()
-        result.best_obj = float(problem.loss_fn(result.best_sol.unsqueeze(0))[0])
+        result.best_obj = float(problem.internal_objective(result.best_sol.unsqueeze(0))[0])
         result.score = problem.score_summary(result.best_sol)
 
 
@@ -66,7 +51,7 @@ def solve_model_ir(problem: ModelIRProblem, **kwargs: Any) -> AnnealResult:
         callbacks.extend(
             [
                 ConstraintArchiveCallback(archive, update_interval=min(10, update_interval)),
-                AdaptiveALCallback(update_interval=update_interval),
+                AdaptiveALCallback(update_interval=update_interval, controller=controller),
             ]
         )
         options["return_population"] = True

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
+from time import perf_counter
 
 import torch
 
@@ -135,12 +137,27 @@ def knapsack_repair(
 
 
 @torch.no_grad()
-def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Tensor:
+def repair_model_ir(
+    model,
+    values: torch.Tensor,
+    *,
+    passes: int = 4,
+    time_limit: float | None = None,
+) -> torch.Tensor:
     """Apply conservative native-factor repairs to one ModelIR candidate.
 
     Only mathematically recognisable projections are applied. Unknown or
     coupled constraints are left untouched instead of being guessed.
     """
+    if time_limit is not None and (
+        isinstance(time_limit, bool) or not math.isfinite(time_limit) or time_limit < 0.0
+    ):
+        raise ValueError("time_limit must be finite and non-negative or None.")
+    deadline = None if time_limit is None else perf_counter() + time_limit
+
+    def expired() -> bool:
+        return deadline is not None and perf_counter() >= deadline
+
     from qqa.model import (  # noqa: PLC0415
         AssignmentFactor,
         CardinalityFactor,
@@ -155,9 +172,13 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
         if values.shape != expected:
             raise ValueError(f"structured values must have shape {expected}.")
         return (
-            assignment_projection(values)
-            if structured.domain is VariableDomain.PERMUTATION
-            else one_hot_projection(values)
+            values.detach().clone()
+            if expired()
+            else (
+                assignment_projection(values)
+                if structured.domain is VariableDomain.PERMUTATION
+                else one_hot_projection(values)
+            )
         )
     if values.ndim != 1 or values.numel() != model.num_variables:
         raise ValueError("values must be one flattened ModelIR candidate.")
@@ -174,6 +195,8 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
         if not binary[scoped].all() or not 0 <= target <= len(scoped):
             return
         for _ in range(abs(int(result[scoped].round().sum().item()) - target)):
+            if expired():
+                return
             current = result.round().clamp(0, 1)
             count = int(current[scoped].sum().item())
             eligible = (
@@ -190,6 +213,8 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
 
     def linear_inequality(factor: LinearFactor, sense: str) -> None:
         """Greedily flip a binary variable only when total violation falls."""
+        if expired():
+            return
         indices = factor.indices.to(result.device)
         weights = factor.weights.to(result)
         if not len(indices) or not binary[indices].all():
@@ -224,8 +249,12 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
         result.copy_(candidates[torch.argmin(energies)])
 
     for _ in range(max(1, passes)):
+        if expired():
+            break
         before = result.clone()
         for row in model.constraints:
+            if expired():
+                break
             factors = row.expression.factors
             if len(factors) != 1:
                 continue
@@ -254,6 +283,8 @@ def repair_model_ir(model, values: torch.Tensor, *, passes: int = 4) -> torch.Te
                 clause_indices = factor.indices.to(result.device)
                 signs = factor.signs.to(result.device)
                 for indices, clause_signs in zip(clause_indices, signs, strict=True):
+                    if expired():
+                        break
                     literals = torch.where(clause_signs > 0, result[indices], 1 - result[indices])
                     if bool((literals > 0.5).any()):
                         continue

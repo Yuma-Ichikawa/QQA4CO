@@ -241,7 +241,10 @@ def test_general_qpbo_exact_probe_matches_bruteforce() -> None:
 
 
 def test_cp_scheduling_runtime_enforces_no_overlap() -> None:
-    pytest.importorskip("ortools.sat.python.cp_model")
+    from qqa.hybrid.capabilities import cpsat_available
+
+    if not cpsat_available():
+        pytest.skip("OR-Tools CP-SAT is unavailable")
     starts = torch.arange(3)
     model = ModelIR(
         (VariableBlock("start", "integer", (3,), 0, 8),),

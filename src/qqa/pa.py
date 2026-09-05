@@ -36,7 +36,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from time import time
+from time import perf_counter
 from typing import Any, Literal
 
 import torch
@@ -133,6 +133,7 @@ class PAResult:
     free_energy_density: float | None = None
     genealogy: dict | None = None
     polished_sol: torch.Tensor | None = None
+    diagnostics: dict = field(default_factory=dict)
 
 
 def _systematic_resample_indices(weights: torch.Tensor, rng: torch.Generator) -> torch.Tensor:
@@ -189,6 +190,7 @@ def population_annealing(
     verbose: bool = True,
     check_interval: int = 10,
     callback: Callable[[int, float, float, float], None] | None = None,
+    time_limit: float | None = None,
 ) -> PAResult:
     """Run GPU-parallel Population Annealing (with resampling) on ``problem``.
 
@@ -257,6 +259,8 @@ def population_annealing(
         raise ValueError(f"sweeps_per_temp must be >= 0, got {sweeps_per_temp}.")
     if history_stride < 1:
         raise ValueError(f"history_stride must be >= 1, got {history_stride}.")
+    if time_limit is not None and (not math.isfinite(time_limit) or time_limit < 0):
+        raise ValueError("time_limit must be finite and non-negative or None.")
     if resample not in ("systematic", "multinomial"):
         raise ValueError(f"resample must be 'systematic' or 'multinomial', got {resample!r}.")
     # PA is only well-defined for non-decreasing β: reweighting by exp(-Δβ E)
@@ -349,9 +353,13 @@ def population_annealing(
     best_sol = x[int(min_idx.item())].detach().clone()
     log_z_running = 0.0  # accumulator for ln Z(β_t) - ln Z(0)
 
-    runtime_start = time()
+    runtime_start = perf_counter()
+    deadline_reached = False
     prev_beta = 0.0  # virtual β=0 reference, so step 0 carries the β=0 → β_start jump
     for step in range(num_temps):
+        if time_limit is not None and perf_counter() - runtime_start >= time_limit:
+            deadline_reached = True
+            break
         beta = float(betas[step].item())
         delta_beta = beta - prev_beta
 
@@ -442,7 +450,8 @@ def population_annealing(
 
         prev_beta = beta
 
-    runtime = time() - runtime_start
+    runtime = perf_counter() - runtime_start
+    deadline_reached |= time_limit is not None and runtime >= time_limit
     if verbose:
         print(
             f"[PA] done. best={best_obj:.6f}  "
@@ -457,7 +466,7 @@ def population_annealing(
     # (spin / categorical / batched problems). PA therefore matches PQQA's
     # post-processing contract by construction.
     best_sol_disc, best_obj, polished_sol = apply_polish_if_improves(
-        problem, best_sol_disc, best_obj, polish=polish
+        problem, best_sol_disc, best_obj, polish=polish and not deadline_reached
     )
 
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
@@ -488,4 +497,5 @@ def population_annealing(
         free_energy_density=float(f_density),
         genealogy=genealogy,
         polished_sol=polished_sol,
+        diagnostics={"deadline_reached": deadline_reached, "time_limit": time_limit},
     )

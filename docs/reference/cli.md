@@ -15,7 +15,7 @@ page is the explanation of how the flags interact.
 
 ```bash
 qqa version
-# 0.10.0
+# 0.11.0
 ```
 
 Prints the value of `qqa.__version__`, which is single-sourced from
@@ -203,7 +203,11 @@ PROBTYPE when available, and portable source provenance.
 `run` accepts `--solver scip`, `--solver scip-aggressive`, or
 `--solver sg-cqqa`. Shared flags are
 `--time-limit`, `--gap`, `--threads`, `--reference-file`, `--format`,
-`--output`, and `--quiet`. SG-CQQA additionally accepts `--core-size`,
+`--worker-timeout`, `--implementation-revision`,
+`--include-solution-values`, `--output`, and `--quiet`.
+The solution flag stores values in original variable order and can produce a
+large JSON file; a SHA-256 solution identity is recorded even when values are
+omitted. SG-CQQA additionally accepts `--core-size`,
 `--maximum-problem-variables`, `--maximum-integer-variables`,
 `--qplib-problem-types`, `--minimum-core-size`,
 `--maximum-core-saturation`, `--sol-size`, `--epochs`, `--max-calls`,
@@ -225,6 +229,14 @@ and win/tie/loss counts against `--baseline-solver`, including counts
 stratified by actual QQA execution. The defaults compare `scip-aggressive`
 against `sg-cqqa` in balanced order. This is the direct plugin ablation because
 both use the same aggressive native SCIP heuristic setting.
+
+For audit-grade cells, `--include-import-in-budget` starts before parsing each
+original model, `--isolate-all` gives every solver a fresh native process, and
+`--no-equivalent-baseline-reuse` independently executes structurally bypassed
+SG-CQQA cells. The summary still reports independent runs, equivalent reuse,
+QQA plugin activation, actual QQA calls, QQA-attributable improvements,
+normalized failure outcomes, stage durations, peak memory, and instance-level
+confidence intervals separately.
 
 `--threads` constrains SCIP workers, LP-solver threads, and (for SG-CQQA)
 Torch threads. Reproducible CPU campaigns should additionally cap the BLAS and

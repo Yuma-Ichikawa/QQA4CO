@@ -62,9 +62,10 @@ API boundary.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from time import time
+from time import perf_counter
 from typing import Any, Literal
 
 import numpy as np
@@ -109,6 +110,7 @@ class ISCOResult:
     mu_final: float = 0.0
     mean_path_length: float = 0.0
     num_instance: int = 1
+    diagnostics: dict = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +374,7 @@ def _isco_single(
     verbose: bool,
     check_interval: int,
     callback: Callable[[int, float, float], None] | None,
+    deadline: float | None,
 ) -> tuple[
     torch.Tensor,
     float,
@@ -441,6 +444,8 @@ def _isco_single(
     }
 
     for t_idx in range(num_steps):
+        if deadline is not None and perf_counter() >= deadline:
+            break
         T = float(temps[t_idx].item())
         inv_T = 1.0 / max(T, 1e-12)
         inv2T = 0.5 * inv_T
@@ -580,6 +585,7 @@ def _isco_batched(
     verbose: bool,
     check_interval: int,
     callback: Callable[[int, float, float], None] | None,
+    deadline: float | None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -667,6 +673,8 @@ def _isco_batched(
     mask_var_b = mask_var.unsqueeze(0).bool()  # (1, I, N)
 
     for t_idx in range(num_steps):
+        if deadline is not None and perf_counter() >= deadline:
+            break
         T = float(temps[t_idx].item())
         inv_T = 1.0 / max(T, 1e-12)
         inv2T = 0.5 * inv_T
@@ -821,6 +829,7 @@ def discrete_langevin(
     check_interval: int = 100,
     callback: Callable[[int, float, float], None] | None = None,
     polish: bool = True,
+    time_limit: float | None = None,
 ) -> ISCOResult:
     """Run GPU-parallel iSCO on ``problem`` (Sun et al., ICML 2023).
 
@@ -908,6 +917,8 @@ def discrete_langevin(
         raise ValueError(f"mu0 must be >= 1.0, got {mu0}.")
     if not (0.0 < target_accept < 1.0):
         raise ValueError(f"target_accept must be in (0, 1), got {target_accept}.")
+    if time_limit is not None and (not math.isfinite(time_limit) or time_limit < 0):
+        raise ValueError("time_limit must be finite and non-negative or None.")
 
     device = resolve_device(device)
     require_cuda_if_requested(device)
@@ -915,7 +926,8 @@ def discrete_langevin(
 
     is_batched, _ = _validate_qubo_problem(problem)
 
-    t0 = time()
+    t0 = perf_counter()
+    deadline = None if time_limit is None else t0 + time_limit
     if is_batched:
         if initial_state is not None:
             initial_state = None  # silently ignored, mirrors qqa.anneal
@@ -947,8 +959,9 @@ def discrete_langevin(
             verbose=verbose,
             check_interval=check_interval,
             callback=callback,
+            deadline=deadline,
         )
-        runtime = time() - t0
+        runtime = perf_counter() - t0
         best_sol_disc = best_bits.to(torch.uint8).cpu()
         best_obj_np = best_obj_t.detach().cpu().numpy().astype(np.float64)
 
@@ -983,6 +996,10 @@ def discrete_langevin(
             mu_final=mu_final,
             mean_path_length=mean_L,
             num_instance=int(best_bits.shape[0]),
+            diagnostics={
+                "deadline_reached": deadline is not None and perf_counter() >= deadline,
+                "time_limit": time_limit,
+            },
         )
 
     (
@@ -1014,12 +1031,14 @@ def discrete_langevin(
         verbose=verbose,
         check_interval=check_interval,
         callback=callback,
+        deadline=deadline,
     )
-    runtime = time() - t0
+    runtime = perf_counter() - t0
+    deadline_reached = deadline is not None and perf_counter() >= deadline
 
     best_sol_disc = best_bits.detach()
     best_sol_disc, best_obj, polished_sol = apply_polish_if_improves(
-        problem, best_sol_disc, best_obj, polish=polish
+        problem, best_sol_disc, best_obj, polish=polish and not deadline_reached
     )
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
 
@@ -1045,6 +1064,10 @@ def discrete_langevin(
         mu_final=mu_final,
         mean_path_length=mean_L,
         num_instance=1,
+        diagnostics={
+            "deadline_reached": deadline_reached,
+            "time_limit": time_limit,
+        },
     )
 
 

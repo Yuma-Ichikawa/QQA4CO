@@ -44,6 +44,16 @@ def test_binary_penalty_is_bounded_below_outside_cube():
     assert (pen >= 0.0).all(), f"penalty went negative on out-of-cube x: {pen}"
 
 
+def test_binary_and_spin_bounds_retain_version_independent_gradients():
+    latent = torch.tensor([[0.0, 1.0]], requires_grad=True)
+    BinaryRelaxation().forward(latent).sum().backward()
+    torch.testing.assert_close(latent.grad, torch.ones_like(latent))
+
+    spin_latent = torch.tensor([[0.0, 1.0]], requires_grad=True)
+    SpinRelaxation().forward(spin_latent).sum().backward()
+    torch.testing.assert_close(spin_latent.grad, torch.full_like(spin_latent, 2.0))
+
+
 def test_binary_perturb_clamps_at_zero_temperature():
     """``perturb_(temp=0)`` must clamp ``x`` back into ``[0, 1]`` in-place.
 

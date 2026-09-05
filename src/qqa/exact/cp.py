@@ -149,8 +149,13 @@ def solve_cp_model_ir(
     time_limit: float | None = None,
     random_seed: int = 0,
     workers: int = 1,
+    warm_start: torch.Tensor | None = None,
 ) -> CPResult:
-    """Solve bounded binary/integer linear and scheduling models with CP-SAT."""
+    """Solve bounded binary/integer linear and scheduling models with CP-SAT.
+
+    A supplied warm start is only a hint. CP-SAT validates it against the
+    original model and remains solely responsible for bounds and proofs.
+    """
     if not isinstance(model, ModelIR):
         raise TypeError("model must be a ModelIR.")
     if workers < 1 or random_seed < 0:
@@ -215,6 +220,20 @@ def solve_cp_model_ir(
                 variables.append(cp.new_int_var(integer_lower, integer_upper, name))
                 variable_bounds.append((integer_lower, integer_upper))
 
+    accepted_hint = False
+    if warm_start is not None:
+        hint = torch.as_tensor(warm_start).detach().reshape(-1).cpu().to(torch.float64)
+        if hint.numel() != len(variables):
+            raise ValueError("CP-SAT warm_start does not match the original variable count.")
+        if torch.isfinite(hint).all() and torch.allclose(hint, hint.round(), atol=1e-6, rtol=0.0):
+            rounded = hint.round().to(torch.int64).tolist()
+            if all(
+                lo <= value <= hi for value, (lo, hi) in zip(rounded, variable_bounds, strict=True)
+            ):
+                for variable, value in zip(variables, rounded, strict=True):
+                    cp.add_hint(variable, value)
+                accepted_hint = True
+
     objective = _linear_expression(model.objective, variables)
     if objective is None:
         raise NotImplementedError("CP-SAT objective lowering currently requires linear factors.")
@@ -261,7 +280,7 @@ def solve_cp_model_ir(
             None,
             None,
             True,
-            diagnostics={"cp_status": status_name},
+            diagnostics={"cp_status": status_name, "accepted_warm_start": accepted_hint},
         )
     if not has_solution:
         raise RuntimeError(f"CP-SAT returned no incumbent ({status_name}).")
@@ -278,7 +297,11 @@ def solve_cp_model_ir(
         bound,
         gap,
         proven,
-        diagnostics={"cp_status": status_name, "branches": solver.num_branches},
+        diagnostics={
+            "cp_status": status_name,
+            "branches": solver.num_branches,
+            "accepted_warm_start": accepted_hint,
+        },
     )
 
 

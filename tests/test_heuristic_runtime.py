@@ -103,6 +103,6 @@ def test_core_solve_resolves_and_forwards_requested_device():
     assert result == "result"
     assert problem.options is not None
     assert problem.options["device"] == resolve_device("auto")
-    assert problem.options["time_limit"] == 0.5
+    assert 0.0 < problem.options["time_limit"] <= 0.5
     assert problem.options["initial_state"].shape == (2, 3)
     assert problem.options["initial_state"].dtype == torch.float64

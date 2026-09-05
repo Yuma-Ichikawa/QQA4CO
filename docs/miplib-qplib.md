@@ -99,17 +99,40 @@ qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
 qqa benchmark merge miplib-shard-*.json --output miplib-campaign.json
 ```
 
+For an audit-grade product comparison, put original-model import inside every
+matched clock, isolate every native run, execute bypassed cells independently,
+and retain the verified final vector. The last option can make artifacts large:
+
+```bash
+qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
+  --format miplib --solvers scip-aggressive sg-cqqa \
+  --baseline-solver scip-aggressive --seeds 0 1 2 3 4 \
+  --time-limit 30 --threads 1 \
+  --reference-file data/public-benchmarks/miplib/miplib2017-v36.solu \
+  --include-import-in-budget --isolate-all \
+  --no-equivalent-baseline-reuse --include-solution-values \
+  --implementation-revision 0123456789abcdef0123456789abcdef01234567 \
+  --continue-on-error --output miplib-audit-30s.json --quiet
+```
+
+Repeat that pre-registered command at the 1, 10, 30, and 300 second budgets.
+The portable `audit-public.toml` manifest shipped in
+`qqa/benchmarking/manifests` fixes the complete public archives, hashes, seeds,
+solvers, metrics, and accounting rules. Split jobs by instance or seed when
+needed, then use `benchmark merge`; do not change the configuration after
+inspecting sealed results.
+
 `--time-limit` is one total wall-clock budget. Input conversion and plugin
 setup are deducted before SCIP starts; every QQA call and continuous
 completion then runs inside SCIP's remaining solve time. This makes
 `--solver scip` and `--solver sg-cqqa` comparable at a matched budget.
-For a paired `compare` campaign, sparse algebraic import is common preparation
-outside each solver's identical deadline. MIP input is parsed once and reused.
-Each QPLIB solver run instead reparses the same public file in a disposable
-worker before starting its solver clock. This prevents nonlinear native state
-or allocator fragmentation from crossing instance/solver boundaries while
-keeping the measured phases symmetric. Solver-model setup, plugin setup,
-completion, QQA, and SCIP remain inside the matched deadline.
+By default, a paired `compare` campaign treats sparse algebraic import as common
+preparation outside each solver's identical deadline. Add
+`--include-import-in-budget` for a product-level clock beginning before each
+original input is parsed. QPLIB runs are process-isolated by default; add
+`--isolate-all` to give MIPLIB cells the same native-process and memory
+boundary. Solver-model setup, plugin setup, completion, QQA, verification, and
+SCIP are accounted separately in every result.
 
 SG-CQQA is a primal heuristic, not a replacement for SCIP's proof machinery:
 
@@ -126,7 +149,9 @@ for the bypassed SG-CQQA record, marked
 `equivalent_baseline_reuse: true`. This prevents two wall-clock-limited runs of
 an identical algorithm from being misreported as a QQA win or loss. Applicable
 instances are always solved independently. A standalone `benchmark run` also
-always performs the requested solve.
+always performs the requested solve. Use `--no-equivalent-baseline-reuse` when
+the protocol requires every requested cell to be independently executed; both
+counts remain separate in the summary.
 
 The CLI also defaults to a conservative, empirically screened profile:
 instances with more than 32 original variables bypass the plugin; advanced
@@ -253,6 +278,11 @@ appropriate certified status.
 - original-space objective and maximum infeasibility;
 - dual bound and SCIP-compatible relative gap;
 - primal integral when a reference objective is supplied;
+- time to a predeclared reference target and a fixed-grid anytime ECDF;
+- setup/plugin, solver, and post-solve verification durations;
+- process and available GPU peak-memory high-water marks;
+- a SHA-256 identity for the final original-coordinate solution, with the full
+  original-order vector when `--include-solution-values` is selected;
 - node count, overall hybrid and QQA-only completion/acceptance rates, and QQA
   call timings;
 - source basename, SHA-256, parser version, and reference snapshot name.
@@ -266,7 +296,9 @@ absolute error.
 
 Multi-file runs add overall and `PROBTYPE`-grouped feasible rates, median
 runtime/time-to-first-feasible/gap/infeasibility, and aggregate QQA
-completion/acceptance rates.
+completion/acceptance rates. Paired reports aggregate seed medians by instance,
+then provide deterministic bootstrap confidence intervals and a sign test;
+dependent seeds are never counted as independent problem instances.
 
 Use the same archive, reference file, total time, thread count, seed set, and
 hardware class for comparisons. MIPLIB solution records and QPLIB solution
@@ -274,10 +306,11 @@ records can be passed with `--reference-file`; they are read as reference
 values, never as a substitute for checking the returned point.
 For a single `benchmark run`, runtime, time to first feasible, and primal
 integral start before input parsing. In paired `compare`, one common algebraic
-import is excluded from every solver equally; all three clocks then start
-before solver-model construction. Primal integral always uses the configured
-time limit as its common horizon. If model setup exhausts that limit, SCIP is
-not started and the run is reported as `setup-time-limit`.
+import is excluded from every solver equally by default; all three clocks then
+start before solver-model construction. `--include-import-in-budget` instead
+uses the single-run product clock for every paired cell. Primal integral always
+uses the configured time limit as its common horizon. If model setup exhausts
+that limit, SCIP is not started and the run is reported as `setup-time-limit`.
 The thread option constrains both SCIP parallel workers and LP-solver threads;
 SG-CQQA also applies it to Torch. For externally reproducible CPU runs, cap
 BLAS/OpenMP threads in the execution environment as well.
@@ -299,7 +332,9 @@ configuration, then skips finished tuples. `--continue-on-error` stores only
 the source basename, format, solver, seed, and exception class; exception text
 is deliberately omitted because it can contain a machine path. Use
 `--retry-failures` with `--resume` after correcting an optional dependency or
-solver issue.
+solver issue. Timeout, out-of-memory, unsupported, and backend-failure outcomes
+are normalized and counted separately without converting a failed run into a
+win or tie.
 
 `benchmark merge` accepts disjoint `(instance, seed)` cells, so seed campaigns
 can be distributed independently as well as instance campaigns. It rejects

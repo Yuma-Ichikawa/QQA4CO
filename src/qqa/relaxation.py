@@ -21,6 +21,23 @@ from typing import Literal, Protocol
 import torch
 
 
+def _bounded_straight_through(
+    values: torch.Tensor,
+    lower: float,
+    upper: float,
+) -> torch.Tensor:
+    """Clamp forward values while retaining an inward gradient at a bound.
+
+    PyTorch versions have differed in the derivative selected exactly at a
+    ``clamp`` endpoint. QQA projects its latent variables to the closed box
+    after every update, so a zero endpoint derivative can freeze a replica.
+    The identity straight-through derivative makes that boundary behaviour
+    explicit and version-independent without changing physical values.
+    """
+    bounded = values.clamp(lower, upper)
+    return values + (bounded - values).detach() if values.requires_grad else bounded
+
+
 class Relaxation(Protocol):
     """Protocol that any relaxation strategy must satisfy."""
 
@@ -80,7 +97,7 @@ class BinaryRelaxation:
         # incentive to drift further out — empirically this freezes PQQA's
         # best loss / DIV value within the first few thousand epochs at
         # ``temp=0`` (the default). See ``tasks/test/verify_freeze_bug.py``.
-        return x.clamp(0.0, 1.0)
+        return _bounded_straight_through(x, 0.0, 1.0)
 
     def encode(self, values):
         """Map physical binary values back to latent coordinates."""
@@ -99,7 +116,7 @@ class BinaryRelaxation:
         # Clamp to [0, 1] for the same reason ``forward`` does — the penalty
         # is otherwise unbounded below for x outside the cube and the CRA
         # annealing schedule's discrete attractor at γ > 0 collapses.
-        x_clip = x.clamp(0.0, 1.0)
+        x_clip = _bounded_straight_through(x, 0.0, 1.0)
         return torch.sum(1 - (1 - 2 * x_clip) ** curve_rate, dim=-1)
 
     def diversity(self, x):
@@ -215,7 +232,7 @@ class SpinRelaxation(BinaryRelaxation):
     """
 
     def forward(self, x):
-        return 2 * x.clamp(0.0, 1.0) - 1
+        return 2 * _bounded_straight_through(x, 0.0, 1.0) - 1
 
     def encode(self, values):
         """Map physical spins in ``[-1, 1]`` back to ``[0, 1]``."""
