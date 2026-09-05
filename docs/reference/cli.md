@@ -194,6 +194,11 @@ qqa benchmark compare data/public-benchmarks/miplib/pk1.mps.gz \
   --baseline-solver scip-aggressive --seeds 0 1 2 \
   --time-limit 60 --output comparison.json
 qqa benchmark merge shard-0.json shard-1.json --output comparison.json
+qqa benchmark publish \
+  --campaign miplib=comparison.json \
+  --snapshot miplib=miplib-snapshot.json \
+  --implementation-revision COMMIT_SHA \
+  --output public-results
 ```
 
 `fetch` accepts `miplib` or `qplib`; omit `--instance` to download the full
@@ -230,8 +235,9 @@ stratified by actual QQA execution. The defaults compare `scip-aggressive`
 against `sg-cqqa` in balanced order. This is the direct plugin ablation because
 both use the same aggressive native SCIP heuristic setting.
 
-For audit-grade cells, `--include-import-in-budget` starts before parsing each
-original model, `--isolate-all` gives every solver a fresh native process, and
+For audit-grade cells, `--include-import-in-budget` starts before launching each
+isolated interpreter and therefore includes package startup and original-model
+parsing. `--isolate-all` gives every solver a fresh native process, and
 `--no-equivalent-baseline-reuse` independently executes structurally bypassed
 SG-CQQA cells. The summary still reports independent runs, equivalent reuse,
 QQA plugin activation, actual QQA calls, QQA-attributable improvements,
@@ -259,6 +265,10 @@ Cartesian grid; partial or overlapping campaign collections are rejected.
 `merge` combines disjoint comparison shards after checking that every setting
 except the instance list is identical. It rejects overlapping instances or
 duplicate solver/instance/seed rows and recomputes all medians and W/T/L counts.
+`benchmark publish` accepts repeatable `--campaign LIBRARY=PATH` and matching
+`--snapshot LIBRARY=PATH` options. It emits path-free compact/full artifacts
+and a checksum manifest; duplicate library names or mismatched sets are
+rejected.
 See the [MIPLIB/QPLIB guide](../miplib-qplib.md) for metric definitions and
 reproducibility guidance.
 

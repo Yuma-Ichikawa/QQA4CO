@@ -99,8 +99,9 @@ qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
 qqa benchmark merge miplib-shard-*.json --output miplib-campaign.json
 ```
 
-For an audit-grade product comparison, put original-model import inside every
-matched clock, isolate every native run, execute bypassed cells independently,
+For an audit-grade product comparison, put isolated interpreter/package startup
+and original-model import inside every matched clock, isolate every native run,
+execute bypassed cells independently,
 and retain the verified final vector. The last option can make artifacts large:
 
 ```bash
@@ -133,6 +134,9 @@ original input is parsed. QPLIB runs are process-isolated by default; add
 `--isolate-all` to give MIPLIB cells the same native-process and memory
 boundary. Solver-model setup, plugin setup, completion, QQA, verification, and
 SCIP are accounted separately in every result.
+The native worker timeout defaults to the requested budget plus a bounded
+15--60 second shutdown/serialization grace; set `--worker-timeout` explicitly
+when an external protocol requires a different process cap.
 
 SG-CQQA is a primal heuristic, not a replacement for SCIP's proof machinery:
 
@@ -198,8 +202,8 @@ as a structural bypass, not silently counted as a QQA result.
 
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
 for SCIP, and caps calls, candidates, nodes, completion time, and total plugin
-overhead. The Python configuration caps fast completion and QQA at 10% of
-SCIP's allotted time; the conservative `qqa benchmark` CLI uses 5%. If the
+overhead. The Python and `qqa benchmark` defaults use the same conservative 5%
+cap and structural gates. If the
 first QQA call does not improve the original incumbent, later QQA calls in that
 run are suppressed while fast LNS and SCIP continue. This safeguard can be
 disabled explicitly for an ablation with
@@ -368,6 +372,25 @@ publish_benchmark_campaigns(
     implementation_revision="0123456789abcdef0123456789abcdef01234567",
 )
 ```
+
+The same publication boundary is available from the CLI. Each library name
+must appear once in both option groups; input paths are used only for reading
+and are never serialised:
+
+```bash
+qqa benchmark publish \
+  --campaign miplib=miplib-campaign.json \
+  --campaign qplib=qplib-campaign.json \
+  --snapshot miplib=data/public-benchmarks/miplib/snapshot.json \
+  --snapshot qplib=data/public-benchmarks/qplib/snapshot.json \
+  --implementation-revision COMMIT_SHA \
+  --output public-results
+```
+
+The compact JSON omits full incumbent trajectories and solution vectors while
+retaining their point/value counts and solution hashes. The deterministic gzip
+artifact retains the complete original-coordinate records. `manifest.json`
+checksums both forms.
 
 Publication rejects absolute POSIX/Windows paths, loopback/private/link-local
 addresses, local/internal host suffixes, and environment-specific metadata

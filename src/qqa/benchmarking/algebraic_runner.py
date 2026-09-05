@@ -33,11 +33,16 @@ from qqa.benchmarking.metrics import (
     summarise_comparison,
 )
 from qqa.hybrid.heuristic_types import QQAHeuristicConfig
-from qqa.hybrid.scip_heuristic import include_qqa_heuristic
 from qqa.io import load_mps, load_qplib
-from qqa.presolve import build_scip_model
 
 _RETAINED_NATIVE_MODELS: list[object] = []
+
+
+def include_qqa_heuristic(*args, **kwargs):
+    """Load the optional Torch/SCIP plugin only for an active hybrid run."""
+    from qqa.hybrid.scip_heuristic import include_qqa_heuristic as include
+
+    return include(*args, **kwargs)
 
 
 def detect_format(path: str | Path) -> str:
@@ -86,6 +91,8 @@ def _load_model(
 ):
     algebraic = _load_algebraic(path, format) if algebraic is None else algebraic
     if format == "qplib":
+        from qqa.presolve import build_scip_model
+
         scip, variables = build_scip_model(algebraic)
         return algebraic, scip, variables
     try:
@@ -123,6 +130,36 @@ def _software_versions(*, qplib: bool) -> dict[str, str]:
         except PackageNotFoundError:
             continue
     return versions
+
+
+def _model_statistics(algebraic: AlgebraicModel, solver_model) -> dict[str, object]:
+    """Return portable original-model structure for benchmark stratification.
+
+    MIPLIB execution intentionally imports objective and variable metadata into
+    the algebraic representation without duplicating every row.  Ask SCIP for
+    the original row count in that case while keeping coefficient nonzero
+    counts explicitly marked as unavailable.  QPLIB keeps the complete sparse
+    algebraic model, so all counts are available directly.
+    """
+    summary = algebraic.summary()
+    materialised_constraints = algebraic.num_constraints > 0
+    try:
+        num_constraints = int(solver_model.getNConss())
+    except Exception:
+        num_constraints = algebraic.num_constraints
+    return {
+        "num_variables": algebraic.num_variables,
+        "num_constraints": num_constraints,
+        "variable_counts": dict(summary["variable_counts"]),
+        "objective_linear_nonzeros": summary["objective_linear_nonzeros"],
+        "objective_quadratic_nonzeros": summary["objective_quadratic_nonzeros"],
+        "constraint_linear_nonzeros": (
+            summary["constraint_linear_nonzeros"] if materialised_constraints else None
+        ),
+        "constraint_quadratic_nonzeros": (
+            summary["constraint_quadratic_nonzeros"] if materialised_constraints else None
+        ),
+    }
 
 
 def _peak_memory_mb() -> dict[str, float]:
@@ -181,6 +218,21 @@ def _classify_outcome(*, status: str, feasible: bool) -> str:
     return "no_feasible_found"
 
 
+def _native_process_error_type(returncode: int | None) -> str:
+    """Describe a failed worker without exposing command lines or host state."""
+    if returncode is None:
+        return "NativeSolverProcessError"
+    if returncode < 0:
+        return f"NativeSolverSignal{abs(returncode)}"
+    return f"NativeSolverExit{returncode}"
+
+
+def _default_worker_timeout(time_limit: float) -> float:
+    """Bound an isolated worker while allowing result-serialization grace."""
+    grace = max(15.0, min(60.0, 0.1 * time_limit))
+    return time_limit + grace
+
+
 def _solution_sha256(names: tuple[str, ...], values: np.ndarray) -> str:
     """Hash one original-coordinate solution with unambiguous variable names."""
     digest = hashlib.sha256()
@@ -209,7 +261,7 @@ def _qqa_is_applicable(
 ) -> bool:
     """Apply cheap original-model gates before registering a SCIP plugin."""
     return bool(
-        algebraic.integer_indices.size > 0
+        algebraic.integer_indices.size >= config.minimum_core_size
         and (
             algebraic.problem_type is None
             or config.allowed_qplib_problem_types is None
@@ -262,6 +314,8 @@ def _qqa_applicability_hint(
     variable_class = problem_type[1]
     if variable_class == "C":
         return False
+    if variable_class in {"B", "I"} and num_variables < config.minimum_core_size:
+        return False
     if (
         config.maximum_problem_variables is not None
         and num_variables > config.maximum_problem_variables
@@ -313,6 +367,7 @@ def run_benchmark_instance(
     _reference_records: dict[str, tuple[str, float | None]] | None = None,
     _defer_cleanup: bool = False,
     _isolated_worker: bool = False,
+    _clock_started_at: float | None = None,
 ) -> BenchmarkResult:
     """Run one public benchmark with a single total SCIP/QQA deadline."""
     source = Path(path).expanduser()
@@ -367,12 +422,13 @@ def run_benchmark_instance(
             worker_timeout=worker_timeout,
         )
 
-    started = perf_counter()
+    started = perf_counter() if _clock_started_at is None else _clock_started_at
     algebraic, model, variables = _load_model(
         source,
         resolved_format,
         algebraic=_algebraic,
     )
+    model_statistics = _model_statistics(algebraic, model)
     if not verbose:
         model.hideOutput()
     model.setRealParam("limits/gap", float(relative_gap_limit))
@@ -401,7 +457,12 @@ def run_benchmark_instance(
     tracker.attach(model)
     resolved_qqa_config = qqa_config or QQAHeuristicConfig()
     qqa_structurally_applicable = _qqa_is_applicable(algebraic, resolved_qqa_config)
-    qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable
+    qqa_budget_applicable = float(time_limit) - (perf_counter() - started) > max(
+        resolved_qqa_config.minimum_call_time,
+        resolved_qqa_config.minimum_qqa_time,
+        resolved_qqa_config.completion_time,
+    )
+    qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable and qqa_budget_applicable
     heuristic = (
         include_qqa_heuristic(
             model,
@@ -484,6 +545,7 @@ def run_benchmark_instance(
     )
     provenance = {
         **dict(algebraic.metadata),
+        "model_statistics": model_statistics,
         "reference_name": Path(reference_file).name if reference_file is not None else None,
         "reference_status": reference_status,
         "software": _software_versions(qplib=resolved_format == "qplib"),
@@ -527,7 +589,9 @@ def run_benchmark_instance(
             "scip_parallel_threads": threads,
             "scip_lp_threads": threads,
             "torch_threads": threads if qqa_applicable else None,
-            "qqa_applicable": qqa_structurally_applicable,
+            "qqa_applicable": qqa_structurally_applicable and qqa_budget_applicable,
+            "qqa_structurally_applicable": qqa_structurally_applicable,
+            "qqa_budget_applicable": qqa_budget_applicable,
             "qqa_plugin_active": qqa_applicable,
             "metric_clock": (
                 "total_wall_clock"
@@ -593,6 +657,7 @@ def _isolated_benchmark_worker(
     reference_records: dict[str, tuple[str, float | None]] | None,
     run_kwargs: dict,
     common_import: bool = True,
+    clock_started_at: float | None = None,
 ) -> None:
     """Run one native solver in a disposable process and persist its result.
 
@@ -614,6 +679,7 @@ def _isolated_benchmark_worker(
             _reference_records=reference_records,
             _defer_cleanup=True,
             _isolated_worker=True,
+            _clock_started_at=clock_started_at,
             **run_kwargs,
         )
         payload: dict[str, object] = {"result": result.to_dict()}
@@ -650,6 +716,7 @@ def _run_isolated_benchmark_instance(
             key: str(value) if isinstance(value, Path) else value
             for key, value in run_kwargs.items()
         }
+        clock_started_at = None if common_import else perf_counter()
         request.write_text(
             json.dumps(
                 {
@@ -661,6 +728,7 @@ def _run_isolated_benchmark_instance(
                     "reference_records": reference_records,
                     "run_kwargs": serializable_kwargs,
                     "common_import": common_import,
+                    "clock_started_at": clock_started_at,
                 },
                 ensure_ascii=False,
                 allow_nan=False,
@@ -678,7 +746,7 @@ def _run_isolated_benchmark_instance(
             ]
         )
         time_limit = float(run_kwargs.get("time_limit", 60.0))
-        timeout = max(300.0, time_limit + 120.0) if worker_timeout is None else worker_timeout
+        timeout = _default_worker_timeout(time_limit) if worker_timeout is None else worker_timeout
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -686,7 +754,7 @@ def _run_isolated_benchmark_instance(
             process.wait()
             raise _IsolatedBenchmarkError("WorkerTimeout") from None
         if not output.is_file():
-            raise _IsolatedBenchmarkError("NativeSolverProcessError")
+            raise _IsolatedBenchmarkError(_native_process_error_type(process.returncode))
         payload = json.loads(output.read_text(encoding="utf-8"))
     if "error_type" in payload:
         raise _IsolatedBenchmarkError(str(payload["error_type"]))

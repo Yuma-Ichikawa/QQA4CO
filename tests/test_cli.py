@@ -173,6 +173,21 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
     )
     assert merged.quiet
 
+    published = build_parser().parse_args(
+        [
+            "benchmark",
+            "publish",
+            "--campaign",
+            "miplib=campaign.json",
+            "--snapshot",
+            "miplib=snapshot.json",
+            "--output",
+            "public-results",
+        ]
+    )
+    assert published.campaign == ["miplib=campaign.json"]
+    assert published.snapshot == ["miplib=snapshot.json"]
+
 
 def test_cli_score_summary_is_compact_and_auditable(capsys):
     from qqa.cli import _print_score

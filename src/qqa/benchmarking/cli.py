@@ -16,42 +16,63 @@ from typing import Any
 
 def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
     """Register the shared, explicitly opt-in SG-CQQA tuning surface."""
-    parser.add_argument("--core-size", type=int, default=32)
-    parser.add_argument("--maximum-problem-variables", type=int, default=32)
-    parser.add_argument("--maximum-integer-variables", type=int, default=2048)
+    from qqa.hybrid.heuristic_types import QQAHeuristicConfig
+
+    defaults = QQAHeuristicConfig()
+    parser.add_argument("--core-size", type=int, default=defaults.core_size)
+    parser.add_argument(
+        "--maximum-problem-variables", type=int, default=defaults.maximum_problem_variables
+    )
+    parser.add_argument(
+        "--maximum-integer-variables", type=int, default=defaults.maximum_integer_variables
+    )
     parser.add_argument("--qplib-problem-types", nargs="+", default=None)
-    parser.add_argument("--minimum-core-size", type=int, default=16)
-    parser.add_argument("--maximum-core-saturation", type=float, default=0.9)
-    parser.add_argument("--sol-size", type=int, default=16)
-    parser.add_argument("--epochs", type=int, default=20)
-    parser.add_argument("--max-calls", type=int, default=1)
-    parser.add_argument("--max-candidates", type=int, default=1)
-    parser.add_argument("--completion-time", type=float, default=0.25)
-    parser.add_argument("--completion-nodes", type=int, default=100)
-    parser.add_argument("--dive-lp-iterations", type=int, default=300)
-    parser.add_argument("--qqa-fix-fraction", type=float, default=0.25)
-    parser.add_argument("--repair-beam-width", type=int, default=16)
-    parser.add_argument("--reference-pool-size", type=int, default=3)
-    parser.add_argument("--minimum-relative-improvement", type=float, default=0.001)
-    parser.add_argument("--min-call-time", type=float, default=1.0)
-    parser.add_argument("--min-qqa-time", type=float, default=2.0)
-    parser.add_argument("--maximum-call-time", type=float, default=0.15)
-    parser.add_argument("--maximum-call-time-fraction", type=float, default=0.05)
-    parser.add_argument("--min-nodes-between-calls", type=int, default=100)
-    parser.add_argument("--fast-candidates", type=int, default=0)
+    parser.add_argument("--minimum-core-size", type=int, default=defaults.minimum_core_size)
+    parser.add_argument(
+        "--maximum-core-saturation", type=float, default=defaults.maximum_core_saturation
+    )
+    parser.add_argument("--sol-size", type=int, default=defaults.sol_size)
+    parser.add_argument("--epochs", type=int, default=defaults.epochs)
+    parser.add_argument("--max-calls", type=int, default=defaults.max_calls)
+    parser.add_argument("--max-candidates", type=int, default=defaults.max_candidates)
+    parser.add_argument("--completion-time", type=float, default=defaults.completion_time)
+    parser.add_argument("--completion-nodes", type=int, default=defaults.completion_nodes)
+    parser.add_argument("--dive-lp-iterations", type=int, default=defaults.dive_lp_iterations)
+    parser.add_argument("--qqa-fix-fraction", type=float, default=defaults.qqa_fix_fraction)
+    parser.add_argument("--repair-beam-width", type=int, default=defaults.repair_beam_width)
+    parser.add_argument("--reference-pool-size", type=int, default=defaults.reference_pool_size)
+    parser.add_argument(
+        "--minimum-relative-improvement",
+        type=float,
+        default=defaults.minimum_relative_improvement,
+    )
+    parser.add_argument("--min-call-time", type=float, default=defaults.minimum_call_time)
+    parser.add_argument("--min-qqa-time", type=float, default=defaults.minimum_qqa_time)
+    parser.add_argument("--maximum-call-time", type=float, default=defaults.maximum_call_time)
+    parser.add_argument(
+        "--maximum-call-time-fraction",
+        type=float,
+        default=defaults.maximum_call_time_fraction,
+    )
+    parser.add_argument(
+        "--min-nodes-between-calls", type=int, default=defaults.min_nodes_between_calls
+    )
+    parser.add_argument("--fast-candidates", type=int, default=defaults.fast_candidates)
     parser.add_argument("--no-subscip-repair", action="store_true")
     parser.add_argument("--local-branching-radius", type=int, default=None)
-    parser.add_argument("--max-lp-rows", type=int, default=64)
-    parser.add_argument("--objective-weight", type=float, default=1.0)
-    parser.add_argument("--row-penalty", type=float, default=20.0)
-    parser.add_argument("--proximity-weight", type=float, default=0.02)
-    parser.add_argument("--reduced-cost-weight", type=float, default=0.01)
+    parser.add_argument("--max-lp-rows", type=int, default=defaults.max_lp_rows)
+    parser.add_argument("--objective-weight", type=float, default=defaults.objective_weight)
+    parser.add_argument("--row-penalty", type=float, default=defaults.row_penalty)
+    parser.add_argument("--proximity-weight", type=float, default=defaults.proximity_weight)
+    parser.add_argument("--reduced-cost-weight", type=float, default=defaults.reduced_cost_weight)
     parser.add_argument("--allow-nonimproving-candidates", action="store_true")
     parser.add_argument("--allow-no-incumbent", action="store_true")
     parser.add_argument("--no-adaptive-row-lagrangian", action="store_true")
     parser.add_argument("--continue-qqa-without-improvement", action="store_true")
-    parser.add_argument("--maximum-overhead-fraction", type=float, default=0.05)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--maximum-overhead-fraction", type=float, default=defaults.maximum_overhead_fraction
+    )
+    parser.add_argument("--device", default=defaults.device)
 
 
 def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
@@ -72,6 +93,20 @@ def _add_runtime_options(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Public 7-64 character lowercase hexadecimal source revision.",
     )
+
+
+def _named_paths(values: list[str], *, option: str) -> dict[str, Path]:
+    """Parse repeatable ``NAME=PATH`` arguments without resolving private paths."""
+    result: dict[str, Path] = {}
+    for value in values:
+        name, separator, raw_path = value.partition("=")
+        name = name.strip().lower()
+        if not separator or not name or not raw_path.strip():
+            raise ValueError(f"{option} entries must use NAME=PATH.")
+        if name in result:
+            raise ValueError(f"{option} contains duplicate name {name!r}.")
+        result[name] = Path(raw_path).expanduser()
+    return result
 
 
 def add_benchmark_parser(subparsers) -> argparse.ArgumentParser:
@@ -110,6 +145,32 @@ def add_benchmark_parser(subparsers) -> argparse.ArgumentParser:
     merge.add_argument("campaign", nargs="+")
     merge.add_argument("--output", required=True)
     merge.add_argument("--quiet", action="store_true")
+
+    publish = commands.add_parser(
+        "publish",
+        help="Create path-free compact/full campaign artifacts and a checksum manifest.",
+    )
+    publish.add_argument(
+        "--campaign",
+        action="append",
+        required=True,
+        metavar="LIBRARY=PATH",
+        help="Merged campaign JSON; repeat once per library.",
+    )
+    publish.add_argument(
+        "--snapshot",
+        action="append",
+        required=True,
+        metavar="LIBRARY=PATH",
+        help="Matching public snapshot JSON; repeat once per library.",
+    )
+    publish.add_argument("--output", required=True, help="Destination directory.")
+    publish.add_argument(
+        "--implementation-revision",
+        default=None,
+        help="Public 7-64 character lowercase hexadecimal source revision.",
+    )
+    publish.add_argument("--quiet", action="store_true")
 
     run = commands.add_parser(
         "run",
@@ -299,6 +360,25 @@ def run_benchmark_command(args: argparse.Namespace) -> int:
         output.write_text(rendered + "\n", encoding="utf-8")
         if not args.quiet:
             print(rendered)
+        return 0
+
+    if args.benchmark_command == "publish":
+        from qqa.benchmarking.publication import publish_benchmark_campaigns
+
+        try:
+            campaigns = _named_paths(args.campaign, option="--campaign")
+            snapshots = _named_paths(args.snapshot, option="--snapshot")
+            manifest = publish_benchmark_campaigns(
+                campaigns,
+                snapshots,
+                args.output,
+                implementation_revision=args.implementation_revision,
+            )
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            print(f"[qqa benchmark] {exc}", file=sys.stderr)
+            return 2
+        if not args.quiet:
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return 0
 
     from qqa.benchmarking.algebraic_runner import (

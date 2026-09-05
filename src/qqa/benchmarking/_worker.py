@@ -26,6 +26,7 @@ def main() -> None:
         request.get("reference_records"),
         request["run_kwargs"],
         bool(request["common_import"]),
+        request.get("clock_started_at"),
     )
 
 

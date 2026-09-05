@@ -27,6 +27,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Introduce one monotonic solve context shared by compile, warm-up, search,
   repair, baseline, and certification stages; record skipped deadline stages
   instead of silently overrunning the requested budget.
+- Make I/O, presolve, and runtime facades lazy, avoid importing Torch in native
+  SCIP-only workers, and include isolated interpreter/package startup in the
+  strict end-to-end benchmark clock.
 - Pass QQA incumbents into CP-SAT, make QUBO-to-SCIP certification reachable,
   distinguish capability, planning, and actual execution, and add an explicit
   opt-in mode that requires a QQA-generated primal.
@@ -46,6 +49,12 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   outcomes.
 - Preserve path-free failure records and separate independent runs, equivalent
   baseline reuse, QQA activation, and QQA-attributable improvements.
+- Add a `qqa benchmark publish` command for deterministic, path-checked
+  compact/full MIPLIB and QPLIB artifacts, keep full solution vectors out of
+  the compact form, and record portable original-model structure metadata.
+- Align Python and CLI hybrid defaults on the conservative screened profile,
+  bypass QQA when the integer core or remaining budget cannot reach its minimum,
+  and retain portable native signal/exit diagnostics.
 
 ### Repository layout
 
