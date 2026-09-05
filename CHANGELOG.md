@@ -76,12 +76,14 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stopping and candidate post-processing do not consume the advertised
   plugin-overhead allowance.
 - Synchronise CUDA work at explicit wall-clock deadline checks, report QQA
-  epoch/deadline diagnostics, and use a configurable float32 core surrogate
-  by default while SCIP validates completed candidates in original precision.
+  epoch/deadline diagnostics, and use configurable core precision while SCIP
+  validates completed candidates against the original model.
 - Remove history and duplicate historical-archive work from the bounded hybrid
   callback while retaining its best/final population and constraint archive.
 - Seed general-integer QQA cores with alternating LP-centred randomized
   rounding and broad lattice samples instead of pathological bound-only draws.
+- Adopt the screened float64/four-candidate hybrid profile, which produced
+  more final-quality wins without losses across its five-seed tuning campaign.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

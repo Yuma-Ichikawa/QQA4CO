@@ -478,7 +478,7 @@ def test_core_surrogate_uses_original_objective_and_active_lp_rows():
         adaptive_rows=True,
     )
     assert len(core_problem.constraints) == 1
-    assert core_problem.dtype == torch.float32
+    assert core_problem.dtype == torch.float64
     assert core_problem.constraints[0].sense == "<="
     violating = torch.tensor([[1.0, 1.0]], dtype=torch.float64)
     expected = surrogate.merit_values(
@@ -500,7 +500,7 @@ def test_core_surrogate_uses_original_objective_and_active_lp_rows():
         QQAHeuristicConfig(),
     )
     assert static_problem.constraints == ()
-    assert static_problem.dtype == torch.float32
+    assert static_problem.dtype == torch.float64
     assert static_problem.loss_fn(violating).item() == pytest.approx(expected)
     result = core_problem.solve(
         sol_size=4,
@@ -1811,7 +1811,8 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert args.maximum_call_time == pytest.approx(0.15)
     assert args.min_qqa_time == pytest.approx(20.0)
     assert args.minimum_runtime_startup_time == pytest.approx(8.0)
-    assert args.core_dtype == "float32"
+    assert args.max_candidates == 4
+    assert args.core_dtype == "float64"
     assert args.fast_candidates == 0
     assert args.maximum_overhead_fraction == pytest.approx(0.05)
     assert args.worker_timeout is None

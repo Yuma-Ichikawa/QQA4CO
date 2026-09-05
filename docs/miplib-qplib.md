@@ -52,7 +52,7 @@ qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --threads 1 \
   --core-size 32 --maximum-problem-variables 32 \
   --minimum-core-size 16 --maximum-core-saturation 0.9 \
-  --sol-size 16 --epochs 20 --max-calls 1 --max-candidates 1 \
+  --sol-size 16 --epochs 20 --max-calls 1 --max-candidates 4 \
   --completion-time 0.25 --qqa-fix-fraction 0.25 \
   --minimum-relative-improvement 0.001 \
   --seed 0 --output pk1-sgcqqa.json
@@ -241,11 +241,12 @@ hide consumed wall time. The accumulated value is available as
 `callback_deadline_safety_reserved`, and each QQA call's stopping evidence as
 `qqa_completed_epochs` and `qqa_deadline_reached`.
 
-The surrogate search uses `float32` by default for GPU throughput. Completed
-integer candidates are still checked and scored by SCIP against the original
-model; this does not reduce final feasibility precision. Numerically sensitive
-experiments can select `--core-dtype float64` or set
-`QQAHeuristicConfig(core_dtype="float64")` explicitly.
+The surrogate search uses `float64` by default. A screened five-seed profile
+retained more improving general-integer candidates at this precision than at
+`float32`; completed candidates are independently checked and scored by SCIP
+against the original model in either case. Throughput-oriented experiments can
+select `--core-dtype float32` or set
+`QQAHeuristicConfig(core_dtype="float32")` explicitly.
 
 ## Python API
 
@@ -267,7 +268,7 @@ config = QQAHeuristicConfig(
     sol_size=16,
     epochs=20,
     max_calls=1,
-    max_candidates=1,
+    max_candidates=4,
     maximum_call_time=0.15,
     completion_time=0.25,
     completion_nodes=100,
@@ -275,7 +276,7 @@ config = QQAHeuristicConfig(
     subscip_repair=True,
     seed=0,
     threads=1,
-    core_dtype="float32",
+    core_dtype="float64",
 )
 result = run_miplib(
     "data/public-benchmarks/miplib/pk1.mps.gz",

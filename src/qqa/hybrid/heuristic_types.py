@@ -15,7 +15,7 @@ class QQAHeuristicConfig:
     sol_size: int = 16
     epochs: int = 20
     max_calls: int = 1
-    max_candidates: int = 1
+    max_candidates: int = 4
     frequency: int = 10
     maximum_depth: int = 20
     minimum_core_size: int = 16
@@ -53,7 +53,7 @@ class QQAHeuristicConfig:
     threads: int = 1
     seed: int = 0
     device: str = "cpu"
-    core_dtype: str = "float32"
+    core_dtype: str = "float64"
     verbose: bool = False
 
     def __post_init__(self) -> None:
