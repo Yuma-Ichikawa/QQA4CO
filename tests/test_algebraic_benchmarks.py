@@ -883,6 +883,35 @@ def test_conditional_heuristic_suppresses_repeated_unproductive_qqa_calls():
     assert not ablation._qqa_has_stalled()
 
 
+def test_conditional_heuristic_accounts_complete_callback_overhead(monkeypatch):
+    heuristic = QQAHeuristic(QQAHeuristicConfig(maximum_overhead_fraction=0.05))
+    pyscipopt = pytest.importorskip("pyscipopt")
+    active_model = pyscipopt.Model()
+    active_model.hideOutput()
+    active_model.setRealParam("limits/time", 10.0)
+    heuristic.model = active_model
+    heuristic.stats.callback_runtime = 0.4
+    assert heuristic._remaining_overhead_budget() == pytest.approx(0.1)
+
+    heuristic.stats.callback_runtime = 0.0
+    heuristic.stats.numerical_runtime_initialisation = 0.6
+    assert heuristic._remaining_overhead_budget() == 0.0
+
+    times = iter((1.0, 1.25))
+    monkeypatch.setattr(scip_heuristic_module, "perf_counter", lambda: next(times))
+
+    def execute(heurtiming, nodeinfeasible):
+        assert (heurtiming, nodeinfeasible) == ("timing", False)
+        assert heuristic._active_callback_started_at == 1.0
+        return {"result": "complete"}
+
+    monkeypatch.setattr(heuristic, "_heurexec_impl", execute)
+    assert heuristic.heurexec("timing", False) == {"result": "complete"}
+    assert heuristic.stats.callback_runtime == pytest.approx(0.25)
+    assert heuristic._active_callback_started_at is None
+    active_model.free()
+
+
 def test_completion_improvement_threshold_is_validated_before_solver_use():
     with pytest.raises(ValueError, match="minimum_relative_improvement"):
         complete_integer_assignment(

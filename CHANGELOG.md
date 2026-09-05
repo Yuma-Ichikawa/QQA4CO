@@ -60,6 +60,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Delay the optional Torch-backed heuristic runtime until a SCIP callback
   passes every cheap timing and structural gate, and report its one-time
   initialisation cost separately in heuristic diagnostics.
+- Enforce the hybrid overhead cap against complete measured callback wall
+  time, including state inspection, lazy numerical-runtime startup, candidate
+  ranking, QQA, and completion instead of only QQA/completion substeps.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

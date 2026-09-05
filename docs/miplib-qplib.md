@@ -227,6 +227,11 @@ than hidden in solver time. Structurally eligible instances that never reach a
 useful callback therefore retain the matched aggressive-SCIP execution path
 without paying the Torch startup cost.
 
+`maximum_overhead_fraction` applies to the complete measured callback wall
+time—not only the QQA epochs. State extraction, runtime initialisation,
+surrogate construction, candidate ranking, repair, and completion all consume
+the same cap. The accumulated value is available as `callback_runtime`.
+
 ## Python API
 
 ```python

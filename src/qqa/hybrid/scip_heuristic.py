@@ -93,6 +93,7 @@ class QQAHeuristic(_HeurBase):
         self._lns_archive: set[bytes] = set()
         self._reference_pool: list[dict[str, float]] = []
         self._numerical_runtime_loaded = False
+        self._active_callback_started_at: float | None = None
 
     def _reference_disagreement(self, state) -> NDArray:
         """Return node-aligned disagreement across recent LP references."""
@@ -220,7 +221,18 @@ class QQAHeuristic(_HeurBase):
             return math.inf
         if not math.isfinite(limit) or limit >= 1e19:
             return math.inf
-        used = self.stats.qqa_runtime + self.stats.completion_runtime
+        measured = self.stats.callback_runtime
+        if self._active_callback_started_at is not None:
+            measured += perf_counter() - self._active_callback_started_at
+        # Component counters remain useful when private numerical helpers are
+        # exercised directly, outside SCIP's registered callback wrapper.
+        components = (
+            self.stats.inspection_runtime
+            + self.stats.numerical_runtime_initialisation
+            + self.stats.qqa_runtime
+            + self.stats.completion_runtime
+        )
+        used = max(measured, components)
         return max(0.0, self.config.maximum_overhead_fraction * limit - used)
 
     def _qqa_has_stalled(self) -> bool:
@@ -572,7 +584,21 @@ class QQAHeuristic(_HeurBase):
                 break
         return accepted_any, improved_any
 
-    def heurexec(self, heurtiming, nodeinfeasible):  # noqa: ARG002 - SCIP callback signature
+    def heurexec(self, heurtiming, nodeinfeasible):
+        """Account for the complete plugin callback, including lazy startup."""
+        callback_started = perf_counter()
+        self._active_callback_started_at = callback_started
+        try:
+            return self._heurexec_impl(heurtiming, nodeinfeasible)
+        finally:
+            self.stats.callback_runtime += perf_counter() - callback_started
+            self._active_callback_started_at = None
+
+    def _heurexec_impl(
+        self,
+        heurtiming,
+        nodeinfeasible,
+    ):  # noqa: ARG002 - SCIP callback signature
         from pyscipopt import SCIP_LPSOLSTAT, SCIP_RESULT
 
         self.stats.callbacks += 1

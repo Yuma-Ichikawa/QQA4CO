@@ -231,6 +231,7 @@ class QQAHeuristicStats:
     prechecks: int = 0
     small_core_skips: int = 0
     saturation_skips: int = 0
+    callback_runtime: float = 0.0
     inspection_runtime: float = 0.0
     numerical_runtime_loads: int = 0
     numerical_runtime_initialisation: float = 0.0
@@ -292,6 +293,7 @@ class QQAHeuristicStats:
             "prechecks": self.prechecks,
             "small_core_skips": self.small_core_skips,
             "saturation_skips": self.saturation_skips,
+            "callback_runtime": self.callback_runtime,
             "inspection_runtime": self.inspection_runtime,
             "numerical_runtime_loads": self.numerical_runtime_loads,
             "numerical_runtime_initialisation": self.numerical_runtime_initialisation,
