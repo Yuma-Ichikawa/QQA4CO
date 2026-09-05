@@ -99,12 +99,17 @@ def _resolve_config(
     if profile == "prove":
         profile = "certify"
     budget = _parse_budget(budget)
+    explicit = dict(overrides)
+    if explicit.get("cuda_graphs") is True and "replica_exchange_interval" not in explicit:
+        # Graph capture owns stable optimizer buffers. Enabling it through the
+        # high-level API should override the profile's exchange default while
+        # an explicitly requested incompatible combination remains an error.
+        explicit["replica_exchange_interval"] = None
     if config is None:
-        values = {"profile": profile, "budget": budget, "device": device, **overrides}
+        values = {"profile": profile, "budget": budget, "device": device, **explicit}
         return SolverConfig.from_mapping(values)
     if not isinstance(config, SolverConfig):
         raise TypeError("config must be a SolverConfig or None.")
-    explicit = dict(overrides)
     if profile != "balanced":
         explicit["profile"] = profile
     if budget is not None:

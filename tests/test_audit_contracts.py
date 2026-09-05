@@ -157,6 +157,29 @@ def test_model_ir_repair_receives_remaining_api_budget(monkeypatch) -> None:
     assert 0.0 <= observed[0] <= 1.0
 
 
+def test_cuda_graph_api_override_disables_only_implicit_replica_exchange() -> None:
+    api = importlib.import_module("qqa.api")
+    resolved = api._resolve_config(
+        profile="fast",
+        budget=None,
+        device="cuda",
+        config=None,
+        overrides={"cuda_graphs": True},
+    )
+    assert resolved.cuda_graphs is True
+    assert resolved.heterogeneous_replicas is True
+    assert resolved.replica_exchange_interval is None
+
+    with pytest.raises(ValueError, match="cuda_graphs"):
+        api._resolve_config(
+            profile="fast",
+            budget=None,
+            device="cuda",
+            config=None,
+            overrides={"cuda_graphs": True, "replica_exchange_interval": 10},
+        )
+
+
 def test_adam_role_scale_changes_the_actual_update() -> None:
     parameter = torch.nn.Parameter(torch.zeros(2, 1))
     optimizer = torch.optim.AdamW([parameter], lr=0.1, weight_decay=0.0)

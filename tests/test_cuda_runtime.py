@@ -94,7 +94,7 @@ def test_cuda_triton_sparse_kernel_matches_portable_operator():
         torch.randint(0, 24, (2, 80), generator=generator),
         torch.randn(80, generator=generator),
     ).to("cuda")
-    values = torch.rand((6, 24), generator=generator, device="cuda")
+    values = torch.rand((6, 24), generator=generator).to("cuda")
     expected_energy, expected_gradient = model.energy_gradient(values, implementation="torch")
     energy, gradient = model.energy_gradient(values, implementation="triton")
     torch.testing.assert_close(energy, expected_energy, rtol=2e-4, atol=2e-4)
