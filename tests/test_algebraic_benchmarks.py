@@ -1719,7 +1719,7 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert args.seeds == (0,)
     assert args.maximum_problem_variables == 32
     assert args.maximum_call_time == pytest.approx(0.15)
-    assert args.min_qqa_time == pytest.approx(2.0)
+    assert args.min_qqa_time == pytest.approx(20.0)
     assert args.fast_candidates == 0
     assert args.maximum_overhead_fraction == pytest.approx(0.05)
     assert args.worker_timeout is None

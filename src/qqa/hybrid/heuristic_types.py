@@ -31,7 +31,7 @@ class QQAHeuristicConfig:
     reference_pool_size: int = 3
     minimum_relative_improvement: float = 0.001
     minimum_call_time: float = 1.0
-    minimum_qqa_time: float = 2.0
+    minimum_qqa_time: float = 20.0
     maximum_call_time: float = 0.15
     maximum_call_time_fraction: float = 0.05
     fast_candidates: int = 0
@@ -232,6 +232,8 @@ class QQAHeuristicStats:
     small_core_skips: int = 0
     saturation_skips: int = 0
     inspection_runtime: float = 0.0
+    numerical_runtime_loads: int = 0
+    numerical_runtime_initialisation: float = 0.0
     lp_candidate_counts: list[int] = field(default_factory=list)
     calls: int = 0
     qqa_calls: int = 0
@@ -291,6 +293,8 @@ class QQAHeuristicStats:
             "small_core_skips": self.small_core_skips,
             "saturation_skips": self.saturation_skips,
             "inspection_runtime": self.inspection_runtime,
+            "numerical_runtime_loads": self.numerical_runtime_loads,
+            "numerical_runtime_initialisation": self.numerical_runtime_initialisation,
             "lp_candidate_counts": list(self.lp_candidate_counts),
             "calls": self.calls,
             "qqa_calls": self.qqa_calls,

@@ -137,6 +137,7 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
     assert args.minimum_core_size == 16
     assert args.maximum_core_saturation == pytest.approx(0.9)
     assert args.maximum_call_time == pytest.approx(0.15)
+    assert args.min_qqa_time == pytest.approx(20.0)
     assert args.qqa_fix_fraction == pytest.approx(0.25)
     assert args.minimum_relative_improvement == pytest.approx(0.001)
     assert args.qplib_problem_types is None
@@ -163,6 +164,7 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
         "minimum_core_size",
         "maximum_core_saturation",
         "completion_time",
+        "min_qqa_time",
         "minimum_relative_improvement",
         "maximum_overhead_fraction",
     ):

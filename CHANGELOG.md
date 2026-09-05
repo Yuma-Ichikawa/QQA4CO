@@ -55,6 +55,11 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Align Python and CLI hybrid defaults on the conservative screened profile,
   bypass QQA when the integer core or remaining budget cannot reach its minimum,
   and retain portable native signal/exit diagnostics.
+- Require a 20-second QQA reserve by default after short-budget screening;
+  1- and 10-second comparisons stay on the matched SCIP path.
+- Delay the optional Torch-backed heuristic runtime until a SCIP callback
+  passes every cheap timing and structural gate, and report its one-time
+  initialisation cost separately in heuristic diagnostics.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

@@ -271,6 +271,30 @@ print(json.dumps(loaded))
     assert json.loads(completed.stdout) == []
 
 
+def test_scip_heuristic_registration_module_does_not_import_torch() -> None:
+    code = """
+import json
+import sys
+import qqa.hybrid.scip_heuristic
+
+loaded = sorted(name for name in sys.modules if name == "torch" or name.startswith("torch."))
+print(json.dumps(loaded))
+"""
+    environment = dict(os.environ)
+    source = str((Path(__file__).parents[1] / "src").resolve())
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (source, environment.get("PYTHONPATH", "")) if item
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert json.loads(completed.stdout) == []
+
+
 def test_lightweight_runtime_io_and_presolve_facades_do_not_import_torch() -> None:
     code = """
 import json

@@ -208,13 +208,24 @@ as a structural bypass, not silently counted as a QQA result.
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
 for SCIP, and caps calls, candidates, nodes, completion time, and total plugin
 overhead. The Python and `qqa benchmark` defaults use the same conservative 5%
-cap and structural gates. If the
+cap and structural gates. The default 20-second QQA reserve bypasses the plugin
+entirely at 1- and 10-second campaign budgets, where isolated screening showed
+that framework startup cost dominates a small-core intervention. If the
 first QQA call does not improve the original incumbent, later QQA calls in that
 run are suppressed while fast LNS and SCIP continue. This safeguard can be
 disabled explicitly for an ablation with
 `--continue-qqa-without-improvement`. See the official [PySCIPOpt heuristic
 tutorial](https://pyscipopt.readthedocs.io/en/latest/tutorials/heuristic.html)
 and [model API](https://pyscipopt.readthedocs.io/en/latest/api/model.html).
+
+Registering the opt-in heuristic is lightweight: NumPy state inspection is
+loaded only after a callback passes the SCIP-only timing/core prechecks, and
+the Torch-backed QQA runtime is loaded only after the selected core passes all
+remaining structural gates. Diagnostics expose `numerical_runtime_loads` and
+`numerical_runtime_initialisation`, so this one-time cost is visible rather
+than hidden in solver time. Structurally eligible instances that never reach a
+useful callback therefore retain the matched aggressive-SCIP execution path
+without paying the Torch startup cost.
 
 ## Python API
 
@@ -400,6 +411,17 @@ checksums both forms.
 Publication rejects absolute POSIX/Windows paths, loopback/private/link-local
 addresses, local/internal host suffixes, and environment-specific metadata
 keys before writing an artifact.
+
+For a screened small mixed QPLIB ablation, use a 64-variable boundary and an
+explicit `QML` allow-list; all other problem classes remain independent
+aggressive-SCIP controls:
+
+```bash
+qqa benchmark compare QPLIB_INSTANCES \
+  --format qplib --maximum-problem-variables 64 \
+  --qplib-problem-types QML --time-limit 30 \
+  --output qplib-screened.json
+```
 
 ## Third-party reproduction checklist
 
