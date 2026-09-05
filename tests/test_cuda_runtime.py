@@ -131,6 +131,7 @@ def test_cuda_wall_clock_deadline_accounts_for_asynchronous_work(monkeypatch):
         sol_size=8,
         num_epochs=10_000,
         time_limit=0.05,
+        device="cuda",
         learning_rate=0.05,
         optimizer="lightweight-adamw",
         record_history=False,
