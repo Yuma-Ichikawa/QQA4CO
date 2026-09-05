@@ -233,7 +233,10 @@ without paying the Torch startup cost.
 `maximum_overhead_fraction` applies to the complete measured callback wall
 time—not only the QQA epochs. State extraction, runtime initialisation,
 surrogate construction, candidate ranking, repair, and completion all consume
-the same cap. The accumulated value is available as `callback_runtime`.
+the same cap. QQA time allocation also retains a bounded safety reserve for
+epoch-granularity stopping and callback post-processing. The accumulated value
+is available as `callback_runtime`, and the planned safety allowance as
+`callback_deadline_safety_reserved`.
 
 ## Python API
 

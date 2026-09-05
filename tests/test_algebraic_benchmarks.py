@@ -931,6 +931,14 @@ def test_conditional_heuristic_requires_cold_start_overhead_reserve():
     active_model.free()
 
 
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [(1.0, 0.5), (10.0, 1.5), (100.0, 2.0)],
+)
+def test_conditional_heuristic_reserves_bounded_callback_deadline_safety(available, expected):
+    assert QQAHeuristic._callback_deadline_safety(available) == pytest.approx(expected)
+
+
 def test_completion_improvement_threshold_is_validated_before_solver_use():
     with pytest.raises(ValueError, match="minimum_relative_improvement"):
         complete_integer_assignment(

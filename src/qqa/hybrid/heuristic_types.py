@@ -238,6 +238,7 @@ class QQAHeuristicStats:
     inspection_runtime: float = 0.0
     numerical_runtime_loads: int = 0
     numerical_runtime_initialisation: float = 0.0
+    callback_deadline_safety_reserved: float = 0.0
     lp_candidate_counts: list[int] = field(default_factory=list)
     calls: int = 0
     qqa_calls: int = 0
@@ -296,10 +297,12 @@ class QQAHeuristicStats:
             "prechecks": self.prechecks,
             "small_core_skips": self.small_core_skips,
             "saturation_skips": self.saturation_skips,
+            "runtime_budget_skips": self.runtime_budget_skips,
             "callback_runtime": self.callback_runtime,
             "inspection_runtime": self.inspection_runtime,
             "numerical_runtime_loads": self.numerical_runtime_loads,
             "numerical_runtime_initialisation": self.numerical_runtime_initialisation,
+            "callback_deadline_safety_reserved": self.callback_deadline_safety_reserved,
             "lp_candidate_counts": list(self.lp_candidate_counts),
             "calls": self.calls,
             "qqa_calls": self.qqa_calls,

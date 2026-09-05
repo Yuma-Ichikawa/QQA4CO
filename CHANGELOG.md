@@ -66,6 +66,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Require a conservative cold-start allowance before loading the optional
   numerical runtime, keeping 1-, 10-, and 30-second default comparisons on the
   native SCIP path when the 5% overhead budget cannot absorb startup.
+- Reserve bounded callback-deadline slack before QQA execution so epoch-level
+  stopping and candidate post-processing do not consume the advertised
+  plugin-overhead allowance.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

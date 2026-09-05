@@ -246,6 +246,11 @@ class QQAHeuristic(_HeurBase):
         """Return whether the remaining plugin allowance can absorb cold start."""
         return self._remaining_overhead_budget() >= self.config.minimum_runtime_startup_time
 
+    @staticmethod
+    def _callback_deadline_safety(available: float) -> float:
+        """Reserve bounded slack for epoch-granularity and callback post-processing."""
+        return min(2.0, max(0.5, 0.15 * available))
+
     def _fast_path_supports_qqa(self, completion_feasible_before: int) -> bool:
         """Require completion evidence before escalating a primary hybrid call."""
         return bool(
@@ -832,9 +837,11 @@ class QQAHeuristic(_HeurBase):
                     0.5 * remaining,
                     max(0.05, 0.25 * overhead_remaining),
                 )
+                deadline_safety = self._callback_deadline_safety(overhead_remaining)
+                self.stats.callback_deadline_safety_reserved += deadline_safety
                 qqa_budget = min(
-                    remaining - completion_reserve,
-                    overhead_remaining - completion_reserve,
+                    remaining - completion_reserve - deadline_safety,
+                    overhead_remaining - completion_reserve - deadline_safety,
                 )
                 if qqa_budget <= 0.05:
                     return {
