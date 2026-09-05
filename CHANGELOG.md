@@ -63,6 +63,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Enforce the hybrid overhead cap against complete measured callback wall
   time, including state inspection, lazy numerical-runtime startup, candidate
   ranking, QQA, and completion instead of only QQA/completion substeps.
+- Require a conservative cold-start allowance before loading the optional
+  numerical runtime, keeping 1-, 10-, and 30-second default comparisons on the
+  native SCIP path when the 5% overhead budget cannot absorb startup.
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.

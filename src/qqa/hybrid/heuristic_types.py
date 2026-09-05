@@ -34,6 +34,7 @@ class QQAHeuristicConfig:
     minimum_qqa_time: float = 20.0
     maximum_call_time: float = 0.15
     maximum_call_time_fraction: float = 0.05
+    minimum_runtime_startup_time: float = 8.0
     fast_candidates: int = 0
     min_nodes_between_calls: int = 100
     local_branching_radius: int | None = None
@@ -188,6 +189,7 @@ class QQAHeuristicConfig:
             "minimum_call_time",
             "minimum_qqa_time",
             "maximum_call_time",
+            "minimum_runtime_startup_time",
             "learning_rate",
             "objective_weight",
             "row_penalty",
@@ -231,6 +233,7 @@ class QQAHeuristicStats:
     prechecks: int = 0
     small_core_skips: int = 0
     saturation_skips: int = 0
+    runtime_budget_skips: int = 0
     callback_runtime: float = 0.0
     inspection_runtime: float = 0.0
     numerical_runtime_loads: int = 0

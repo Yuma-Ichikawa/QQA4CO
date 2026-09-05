@@ -457,10 +457,14 @@ def run_benchmark_instance(
     tracker.attach(model)
     resolved_qqa_config = qqa_config or QQAHeuristicConfig()
     qqa_structurally_applicable = _qqa_is_applicable(algebraic, resolved_qqa_config)
-    qqa_budget_applicable = float(time_limit) - (perf_counter() - started) > max(
+    remaining_setup_budget = float(time_limit) - (perf_counter() - started)
+    qqa_budget_applicable = remaining_setup_budget > max(
         resolved_qqa_config.minimum_call_time,
         resolved_qqa_config.minimum_qqa_time,
         resolved_qqa_config.completion_time,
+    ) and (
+        resolved_qqa_config.maximum_overhead_fraction * float(time_limit)
+        >= resolved_qqa_config.minimum_runtime_startup_time
     )
     qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable and qqa_budget_applicable
     heuristic = (

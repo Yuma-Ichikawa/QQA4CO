@@ -242,6 +242,10 @@ class QQAHeuristic(_HeurBase):
             and self.stats.qqa_incumbent_improvements == 0
         )
 
+    def _runtime_startup_is_affordable(self) -> bool:
+        """Return whether the remaining plugin allowance can absorb cold start."""
+        return self._remaining_overhead_budget() >= self.config.minimum_runtime_startup_time
+
     def _fast_path_supports_qqa(self, completion_feasible_before: int) -> bool:
         """Require completion evidence before escalating a primary hybrid call."""
         return bool(
@@ -658,6 +662,14 @@ class QQAHeuristic(_HeurBase):
             if lp_candidate_count / self.config.core_size > self.config.maximum_core_saturation:
                 self.stats.saturation_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
+        # Importing the optional numerical stack is an indivisible cold-start
+        # operation. Do not begin it unless the complete callback-overhead
+        # allowance has a conservative startup reserve. This keeps short
+        # budgets on the native SCIP path instead of discovering only after a
+        # costly import that the measured cap has already been consumed.
+        if not self._runtime_startup_is_affordable():
+            self.stats.runtime_budget_skips += 1
+            return {"result": SCIP_RESULT.DIDNOTRUN}
         # Everything above is a cheap SCIP-only precheck. Load NumPy-based
         # state inspection only for a plausible callback; Torch remains lazy
         # until the selected core is known to satisfy every structural gate.

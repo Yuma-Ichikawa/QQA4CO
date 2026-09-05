@@ -55,6 +55,11 @@ def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
         default=defaults.maximum_call_time_fraction,
     )
     parser.add_argument(
+        "--minimum-runtime-startup-time",
+        type=float,
+        default=defaults.minimum_runtime_startup_time,
+    )
+    parser.add_argument(
         "--min-nodes-between-calls", type=int, default=defaults.min_nodes_between_calls
     )
     parser.add_argument("--fast-candidates", type=int, default=defaults.fast_candidates)
@@ -277,6 +282,7 @@ def _heuristic_config(args: argparse.Namespace, *, seed: int):
         minimum_qqa_time=args.min_qqa_time,
         maximum_call_time=args.maximum_call_time,
         maximum_call_time_fraction=args.maximum_call_time_fraction,
+        minimum_runtime_startup_time=args.minimum_runtime_startup_time,
         fast_candidates=args.fast_candidates,
         min_nodes_between_calls=args.min_nodes_between_calls,
         local_branching_radius=args.local_branching_radius,

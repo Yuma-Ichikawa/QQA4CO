@@ -147,6 +147,8 @@ def test_qqa_static_size_gate_avoids_registering_out_of_scope_plugins():
     )
     with pytest.raises(ValueError, match="valid three-character"):
         QQAHeuristicConfig(allowed_qplib_problem_types=("QXX",))
+    with pytest.raises(ValueError, match="minimum_runtime_startup_time"):
+        QQAHeuristicConfig(minimum_runtime_startup_time=-1.0)
 
 
 def test_linear_rows_share_one_structural_zero_hessian():
@@ -912,6 +914,23 @@ def test_conditional_heuristic_accounts_complete_callback_overhead(monkeypatch):
     active_model.free()
 
 
+def test_conditional_heuristic_requires_cold_start_overhead_reserve():
+    heuristic = QQAHeuristic(
+        QQAHeuristicConfig(
+            maximum_overhead_fraction=0.05,
+            minimum_runtime_startup_time=8.0,
+        )
+    )
+    pyscipopt = pytest.importorskip("pyscipopt")
+    active_model = pyscipopt.Model()
+    active_model.hideOutput()
+    active_model.setRealParam("limits/time", 30.0)
+    heuristic.model = active_model
+    assert heuristic._remaining_overhead_budget() == pytest.approx(1.5)
+    assert not heuristic._runtime_startup_is_affordable()
+    active_model.free()
+
+
 def test_completion_improvement_threshold_is_validated_before_solver_use():
     with pytest.raises(ValueError, match="minimum_relative_improvement"):
         complete_integer_assignment(
@@ -1354,6 +1373,36 @@ def test_sg_cqqa_skips_plugin_import_without_qqa_time_reserve(tmp_path, monkeypa
     assert result.run_config["torch_threads"] is None
 
 
+def test_sg_cqqa_skips_plugin_import_without_runtime_startup_reserve(tmp_path, monkeypatch):
+    path = tmp_path / "startup-reserve.mps"
+    _write_tiny_mps(path)
+
+    def unexpected_plugin(*args, **kwargs):
+        raise AssertionError("insufficient startup reserve must not construct the QQA plugin")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner.include_qqa_heuristic",
+        unexpected_plugin,
+    )
+    result = run_benchmark_instance(
+        path,
+        format="miplib",
+        solver="sg-cqqa",
+        time_limit=30.0,
+        qqa_config=QQAHeuristicConfig(
+            minimum_core_size=1,
+            minimum_qqa_time=1.0,
+            maximum_overhead_fraction=0.05,
+            minimum_runtime_startup_time=8.0,
+        ),
+    )
+    assert result.run_config["qqa_structurally_applicable"] is True
+    assert result.run_config["qqa_budget_applicable"] is False
+    assert result.run_config["qqa_applicable"] is False
+    assert result.run_config["qqa_plugin_active"] is False
+    assert result.run_config["torch_threads"] is None
+
+
 def test_benchmark_campaign_records_path_free_failures_and_continues(tmp_path):
     missing = tmp_path / "not-present.mps.gz"
     result = compare_benchmark_solvers(
@@ -1749,6 +1798,7 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert args.maximum_problem_variables == 32
     assert args.maximum_call_time == pytest.approx(0.15)
     assert args.min_qqa_time == pytest.approx(20.0)
+    assert args.minimum_runtime_startup_time == pytest.approx(8.0)
     assert args.fast_candidates == 0
     assert args.maximum_overhead_fraction == pytest.approx(0.05)
     assert args.worker_timeout is None

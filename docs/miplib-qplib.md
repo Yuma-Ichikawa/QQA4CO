@@ -208,9 +208,12 @@ as a structural bypass, not silently counted as a QQA result.
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
 for SCIP, and caps calls, candidates, nodes, completion time, and total plugin
 overhead. The Python and `qqa benchmark` defaults use the same conservative 5%
-cap and structural gates. The default 20-second QQA reserve bypasses the plugin
-entirely at 1- and 10-second campaign budgets, where isolated screening showed
-that framework startup cost dominates a small-core intervention. If the
+cap and structural gates. The default 20-second QQA reserve and conservative
+8-second numerical-runtime startup allowance bypass the plugin entirely at
+1-, 10-, and 30-second campaign budgets, where isolated CPU and CUDA screening
+showed that cold framework startup dominates a small-core intervention. The
+startup allowance is charged to the same 5% callback-overhead cap and can be
+changed explicitly with `--minimum-runtime-startup-time`. If the
 first QQA call does not improve the original incumbent, later QQA calls in that
 run are suppressed while fast LNS and SCIP continue. This safeguard can be
 disabled explicitly for an ablation with
