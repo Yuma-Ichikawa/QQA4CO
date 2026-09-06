@@ -18,6 +18,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+          token: ${{ secrets.QQA_MAIN_IMPORT_TOKEN }}
       - name: Verify and fast-forward the imported history
         shell: bash
         run: |
