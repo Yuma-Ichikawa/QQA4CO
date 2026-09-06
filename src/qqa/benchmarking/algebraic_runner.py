@@ -233,6 +233,24 @@ def _default_worker_timeout(time_limit: float) -> float:
     return time_limit + grace
 
 
+def _verification_reserve(time_limit: float) -> float:
+    """Reserve bounded wall time for original-coordinate verification."""
+    return min(0.25, max(0.01, 0.01 * time_limit))
+
+
+def _qqa_budget_is_applicable(config: QQAHeuristicConfig, solver_budget: float) -> bool:
+    """Use the same SCIP time limit that the callback will observe."""
+    return bool(
+        solver_budget
+        > max(
+            config.minimum_call_time,
+            config.minimum_qqa_time,
+            config.completion_time,
+        )
+        and config.maximum_overhead_fraction * solver_budget >= config.minimum_runtime_startup_time
+    )
+
+
 def _solution_sha256(names: tuple[str, ...], values: np.ndarray) -> str:
     """Hash one original-coordinate solution with unambiguous variable names."""
     digest = hashlib.sha256()
@@ -457,14 +475,14 @@ def run_benchmark_instance(
     tracker.attach(model)
     resolved_qqa_config = qqa_config or QQAHeuristicConfig()
     qqa_structurally_applicable = _qqa_is_applicable(algebraic, resolved_qqa_config)
-    remaining_setup_budget = float(time_limit) - (perf_counter() - started)
-    qqa_budget_applicable = remaining_setup_budget > max(
-        resolved_qqa_config.minimum_call_time,
-        resolved_qqa_config.minimum_qqa_time,
-        resolved_qqa_config.completion_time,
-    ) and (
-        resolved_qqa_config.maximum_overhead_fraction * float(time_limit)
-        >= resolved_qqa_config.minimum_runtime_startup_time
+    verification_reserve = _verification_reserve(float(time_limit))
+    estimated_solver_budget = max(
+        0.0,
+        float(time_limit) - (perf_counter() - started) - verification_reserve,
+    )
+    qqa_budget_applicable = _qqa_budget_is_applicable(
+        resolved_qqa_config,
+        estimated_solver_budget,
     )
     qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable and qqa_budget_applicable
     heuristic = (
@@ -485,7 +503,6 @@ def run_benchmark_instance(
     # once before entering this solver-specific clock.
     tracker.time_offset = perf_counter() - started
     remaining = float(time_limit) - tracker.time_offset
-    verification_reserve = min(0.25, max(0.01, 0.01 * float(time_limit)))
     solver_budget = max(0.0, remaining - verification_reserve)
     optimised = solver_budget > 1e-3
     if optimised:

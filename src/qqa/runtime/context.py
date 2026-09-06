@@ -47,7 +47,8 @@ class SolveContext:
         remaining = self.remaining
         if self.budget is None:
             return None
-        assert remaining is not None
+        if remaining is None:
+            raise RuntimeError("A bounded solve context has no remaining-time value.")
         return min(remaining, self.budget * fraction)
 
 

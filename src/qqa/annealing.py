@@ -235,6 +235,20 @@ def _schedule_checkpoint_descriptor(schedule: Schedule) -> dict[str, Any]:
     }
 
 
+def _schedule_value(schedule: Schedule, epoch: int, num_epochs: int) -> float:
+    """Evaluate a public schedule once and reject non-finite scalar outputs."""
+    raw_value = schedule(epoch, num_epochs)
+    if isinstance(raw_value, bool):
+        raise ValueError("schedule must return a finite real scalar, not a boolean.")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("schedule must return a finite real scalar.") from exc
+    if not math.isfinite(value):
+        raise ValueError("schedule must return a finite real scalar.")
+    return value
+
+
 def _reset_optimizer_rows(
     optimizer: Any,
     parameter: torch.Tensor,
@@ -463,9 +477,9 @@ def anneal(
         isinstance(time_limit, bool) or not math.isfinite(time_limit) or time_limit < 0
     ):
         raise ValueError("time_limit must be finite and non-negative, or None.")
-    if not math.isfinite(learning_rate) or learning_rate <= 0:
+    if isinstance(learning_rate, bool) or not math.isfinite(learning_rate) or learning_rate <= 0:
         raise ValueError(f"learning_rate must be > 0, got {learning_rate}.")
-    if not math.isfinite(temp) or temp < 0:
+    if isinstance(temp, bool) or not math.isfinite(temp) or temp < 0:
         raise ValueError(f"temp must be >= 0, got {temp}.")
     if (
         not isinstance(check_interval, int)
@@ -473,16 +487,18 @@ def anneal(
         or check_interval < 1
     ):
         raise ValueError(f"check_interval must be >= 1, got {check_interval}.")
-    if not math.isfinite(div_param) or not 0.0 <= div_param <= 1.0:
+    if isinstance(div_param, bool) or not math.isfinite(div_param) or not 0.0 <= div_param <= 1.0:
         raise ValueError(f"div_param must be in [0, 1], got {div_param}.")
     if mixed_precision not in ("fp32", "bf16"):
         raise ValueError(f"mixed_precision must be 'fp32' or 'bf16', got {mixed_precision!r}.")
-    if not math.isfinite(weight_decay) or weight_decay < 0:
+    if isinstance(weight_decay, bool) or not math.isfinite(weight_decay) or weight_decay < 0:
         raise ValueError(f"weight_decay must be finite and >= 0, got {weight_decay}.")
     if optimizer not in {"adamw", "lightweight-adamw", "mirror-descent"}:
         raise ValueError("optimizer must be 'adamw', 'lightweight-adamw', or 'mirror-descent'.")
     if gradient_clip_norm is not None and (
-        not math.isfinite(gradient_clip_norm) or gradient_clip_norm <= 0
+        isinstance(gradient_clip_norm, bool)
+        or not math.isfinite(gradient_clip_norm)
+        or gradient_clip_norm <= 0
     ):
         raise ValueError(f"gradient_clip_norm must be finite and > 0, got {gradient_clip_norm}.")
     if restart_patience is not None and (
@@ -491,15 +507,25 @@ def anneal(
         or restart_patience < 1
     ):
         raise ValueError("restart_patience must be a positive integer or None.")
-    if not math.isfinite(restart_fraction) or not 0 < restart_fraction < 1:
+    if (
+        isinstance(restart_fraction, bool)
+        or not math.isfinite(restart_fraction)
+        or not 0 < restart_fraction < 1
+    ):
         raise ValueError("restart_fraction must be finite and in (0, 1).")
-    if not math.isfinite(restart_jitter) or not 0 <= restart_jitter <= 1:
+    if (
+        isinstance(restart_jitter, bool)
+        or not math.isfinite(restart_jitter)
+        or not 0 <= restart_jitter <= 1
+    ):
         raise ValueError("restart_jitter must be finite and in [0, 1].")
-    if not isinstance(compile_core, bool):
-        raise TypeError("compile_core must be boolean.")
-    if not isinstance(cuda_graphs, bool):
-        raise TypeError("cuda_graphs must be boolean.")
     for name, value in (
+        ("record_history", record_history),
+        ("verbose", verbose),
+        ("polish", polish),
+        ("return_population", return_population),
+        ("compile_core", compile_core),
+        ("cuda_graphs", cuda_graphs),
         ("normalize_loss", normalize_loss),
         ("robust_scaling", robust_scaling),
         ("heterogeneous_replicas", heterogeneous_replicas),
@@ -575,6 +601,8 @@ def anneal(
             -2.0 if min_bg is None else min_bg,
             0.1 if max_bg is None else max_bg,
         )
+    elif not callable(schedule):
+        raise TypeError("schedule must be callable or None.")
 
     schedule_descriptor = _schedule_checkpoint_descriptor(schedule)
     checkpoint_config = {
@@ -917,7 +945,8 @@ def anneal(
             else float(best_obj_gpu.item())
         )
         if best_key_gpu is not None:
-            assert incumbent_keys is not None
+            if incumbent_keys is None:
+                raise RuntimeError("Incumbent keys disappeared during checkpoint restoration.")
             checkpoint_best_key = restored_checkpoint.tensors.get("best_incumbent_key")
             best_key_gpu = (
                 incumbent_keys(best_sol.unsqueeze(0))[0].detach().clone()
@@ -947,10 +976,11 @@ def anneal(
     # Pre-seed ``state`` with the post-init evaluation so ``on_train_end`` has
     # a valid CallbackState even when ``num_epochs == 0``. The loop below will
     # overwrite it as it iterates.
+    initial_bg = _schedule_value(schedule, start_epoch, num_epochs)
     state = CallbackState(
         epoch=-1,
         num_epochs=num_epochs,
-        bg=float(schedule(start_epoch, num_epochs)),
+        bg=initial_bg,
         x=x,
         losses=torch.zeros(1, device=x.device),
         penalties=torch.zeros(1, device=x.device),
@@ -1036,13 +1066,13 @@ def anneal(
         )
         initial_beta = (
             replica_portfolio.beta(
-                float(schedule(start_epoch, num_epochs)),
+                initial_bg,
                 0.0 if num_epochs <= 1 else start_epoch / (num_epochs - 1),
                 device=x.device,
                 dtype=x.dtype,
             )
             if replica_portfolio is not None
-            else x.new_tensor(float(schedule(start_epoch, num_epochs)))
+            else x.new_tensor(initial_bg)
         )
         graph_gradient = x.grad
         if graph_gradient is None:
@@ -1129,7 +1159,7 @@ def anneal(
         progress = 1.0 if num_epochs <= 1 else epoch / (num_epochs - 1)
         if callable(update_relaxation):
             update_relaxation(progress)
-        bg = float(schedule(epoch, num_epochs))
+        bg = initial_bg if epoch == start_epoch else _schedule_value(schedule, epoch, num_epochs)
         beta_value: float | torch.Tensor = (
             replica_portfolio.beta(bg, progress, device=x.device, dtype=x.dtype)
             if replica_portfolio is not None
@@ -1169,7 +1199,8 @@ def anneal(
                 best_obj_gpu = torch.minimum(best_obj_gpu, min_vals)
             else:
                 if best_key_gpu is not None:
-                    assert incumbent_keys is not None
+                    if incumbent_keys is None:
+                        raise RuntimeError("Incumbent keys disappeared during annealing.")
                     candidate_keys = incumbent_keys(x_disc)
                     min_idx = _lexicographic_argmin(candidate_keys)
                     candidate_key = candidate_keys[min_idx]
@@ -1351,7 +1382,8 @@ def anneal(
     )
     # The incumbent is initialised from a non-empty replica population before
     # polishing, so the helper's optional return cannot be ``None`` here.
-    assert best_sol is not None
+    if best_sol is None:
+        raise RuntimeError("Annealing finished without its initialized incumbent.")
     if polished_sol is not None and best_obj < prev_obj:
         score = safe_score_summary(problem, best_sol, fallback_obj=float(best_obj))
         if verbose:

@@ -130,7 +130,8 @@ class EventRecorder(Callback):
             return
         if self._buffer is None:
             self.on_train_begin(state)
-        assert self._buffer is not None
+        if self._buffer is None:
+            raise RuntimeError("Event recorder buffer was not initialized.")
         best = torch.as_tensor(state.best_obj, device=state.x.device, dtype=torch.float64)
         self._buffer[self._records] = torch.stack(
             (

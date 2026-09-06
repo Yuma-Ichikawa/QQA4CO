@@ -72,6 +72,10 @@ class SolverConfig:
             )
         if self.backend not in {"qqa", "sa", "pa", "isco"}:
             raise ValueError("backend must be qqa, sa, pa, or isco.")
+        if not isinstance(self.device, str) or not self.device.strip():
+            raise ValueError("device must be a non-empty string.")
+        if not isinstance(self.schedule, str) or not self.schedule.strip():
+            raise ValueError("schedule must be a non-empty string.")
         if self.budget is not None and (
             isinstance(self.budget, bool) or not math.isfinite(self.budget) or self.budget <= 0
         ):
@@ -102,21 +106,43 @@ class SolverConfig:
                 or scalar_value < 0
             ):
                 raise ValueError(f"{name} must be finite and >= 0.")
-        if not math.isfinite(self.min_bg) or not math.isfinite(self.max_bg):
+        if (
+            isinstance(self.min_bg, bool)
+            or isinstance(self.max_bg, bool)
+            or not math.isfinite(self.min_bg)
+            or not math.isfinite(self.max_bg)
+        ):
             raise ValueError("min_bg and max_bg must be finite.")
-        if isinstance(self.curve_rate, bool) or self.curve_rate < 2 or self.curve_rate % 2:
+        if (
+            isinstance(self.curve_rate, bool)
+            or not isinstance(self.curve_rate, int)
+            or self.curve_rate < 2
+            or self.curve_rate % 2
+        ):
             raise ValueError("curve_rate must be a positive even integer.")
         if self.diversity is not None and (
-            not math.isfinite(self.diversity) or not 0 <= self.diversity <= 1
+            isinstance(self.diversity, bool)
+            or not math.isfinite(self.diversity)
+            or not 0 <= self.diversity <= 1
         ):
             raise ValueError("diversity must be in [0, 1], or None.")
-        if not math.isfinite(self.restart_fraction) or not 0 < self.restart_fraction < 1:
+        if (
+            isinstance(self.restart_fraction, bool)
+            or not math.isfinite(self.restart_fraction)
+            or not 0 < self.restart_fraction < 1
+        ):
             raise ValueError("restart_fraction must be in (0, 1).")
         if self.gradient_clip_norm is not None and (
-            not math.isfinite(self.gradient_clip_norm) or self.gradient_clip_norm <= 0
+            isinstance(self.gradient_clip_norm, bool)
+            or not math.isfinite(self.gradient_clip_norm)
+            or self.gradient_clip_norm <= 0
         ):
             raise ValueError("gradient_clip_norm must be finite and > 0, or None.")
-        if not math.isfinite(self.memory_fraction) or not 0 < self.memory_fraction <= 1:
+        if (
+            isinstance(self.memory_fraction, bool)
+            or not math.isfinite(self.memory_fraction)
+            or not 0 < self.memory_fraction <= 1
+        ):
             raise ValueError("memory_fraction must be in (0, 1].")
         if self.mixed_precision not in {"fp32", "bf16"}:
             raise ValueError("mixed_precision must be 'fp32' or 'bf16'.")
@@ -127,6 +153,9 @@ class SolverConfig:
         if self.sparse_kernel not in {"auto", "torch", "triton"}:
             raise ValueError("sparse_kernel must be auto, torch, or triton.")
         for name in (
+            "polish",
+            "return_population",
+            "require_certificate",
             "deterministic",
             "compile_core",
             "cuda_graphs",

@@ -73,7 +73,8 @@ def solve_model_ir(problem: ModelIRProblem, **kwargs: Any) -> AnnealResult:
                 [result.final_population, torch.stack(extra).to(result.final_population)], dim=0
             )
         _prefer_feasible(problem, result)
-        assert controller is not None
+        if controller is None:
+            raise RuntimeError("Augmented-Lagrangian controller was not initialized.")
         result.diagnostics["augmented_lagrangian"] = controller.diagnostics()
         result.diagnostics["constraint_archive"] = archive.diagnostics()
     if not requested_population:

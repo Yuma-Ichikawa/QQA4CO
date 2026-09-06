@@ -14,6 +14,9 @@ from typing import Any
 from qqa.result import SolveResult
 from qqa.runtime.security import validate_portable_payload
 
+_PAYLOAD_MEMBERS = frozenset({"model-summary.json", "result.json", "events.json"})
+_PACKAGE_MEMBERS = _PAYLOAD_MEMBERS | {"manifest.json"}
+
 
 @dataclass(frozen=True, slots=True)
 class PackageManifest:
@@ -21,6 +24,25 @@ class PackageManifest:
     files: dict[str, str]
     model_fingerprint: str
     result_status: str
+
+    def __post_init__(self) -> None:
+        if isinstance(self.schema_version, bool) or not isinstance(self.schema_version, int):
+            raise ValueError("Result package schema version must be an integer.")
+        if not isinstance(self.files, dict):
+            raise TypeError("Result package files must be a dictionary.")
+        if any(
+            not isinstance(name, str)
+            or not name
+            or not isinstance(checksum, str)
+            or len(checksum) != 64
+            or any(character not in "0123456789abcdef" for character in checksum)
+            for name, checksum in self.files.items()
+        ):
+            raise ValueError("Result package files contain an invalid name or checksum.")
+        if not isinstance(self.model_fingerprint, str) or not self.model_fingerprint.strip():
+            raise ValueError("Result package model fingerprint must be non-empty.")
+        if not isinstance(self.result_status, str) or not self.result_status.strip():
+            raise ValueError("Result package result status must be non-empty.")
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -37,6 +59,10 @@ def export_result_package(
     """Write a self-verifying result package containing no machine metadata."""
     if not isinstance(result, SolveResult):
         raise TypeError("result must be a SolveResult.")
+    if not isinstance(model_summary, dict):
+        raise TypeError("model_summary must be a dictionary.")
+    if not isinstance(model_fingerprint, str) or not model_fingerprint.strip():
+        raise ValueError("model_fingerprint must be a non-empty string.")
     result_payload = result.to_dict(include_solutions=True)
     event_payload = [
         event.to_dict() if callable(getattr(event, "to_dict", None)) else event
@@ -74,21 +100,46 @@ def export_result_package(
 
 
 def verify_result_package(path: str | Path) -> PackageManifest:
-    """Validate member names, schema, and every content checksum."""
+    """Validate member names, schema, portable payloads, and every checksum."""
     with zipfile.ZipFile(path) as bundle:
         listed = bundle.namelist()
         names = set(listed)
-        expected_names = {"manifest.json", "model-summary.json", "result.json", "events.json"}
-        if names != expected_names or len(listed) != len(names):
+        if names != _PACKAGE_MEMBERS or len(listed) != len(names):
             raise ValueError("Result package contains an unexpected member set.")
-        raw = json.loads(bundle.read("manifest.json"))
-        manifest = PackageManifest(**raw)
+        try:
+            raw = json.loads(bundle.read("manifest.json"))
+            manifest = PackageManifest(**raw)
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise ValueError("Result package manifest is invalid.") from exc
         if manifest.schema_version != 1:
             raise ValueError("Unsupported result package schema.")
         validate_portable_payload(raw)
-        for name, expected in manifest.files.items():
-            if hashlib.sha256(bundle.read(name)).hexdigest() != expected:
+        if not isinstance(manifest.files, dict) or set(manifest.files) != _PAYLOAD_MEMBERS:
+            raise ValueError("Result package manifest does not cover every payload member.")
+        payloads: dict[str, Any] = {}
+        for name in sorted(_PAYLOAD_MEMBERS):
+            expected = manifest.files[name]
+            if (
+                not isinstance(expected, str)
+                or len(expected) != 64
+                or any(character not in "0123456789abcdef" for character in expected)
+            ):
+                raise ValueError(f"Result package checksum is invalid: {name}.")
+            raw_payload = bundle.read(name)
+            if hashlib.sha256(raw_payload).hexdigest() != expected:
                 raise ValueError(f"Result package checksum mismatch: {name}.")
+            try:
+                payload = json.loads(raw_payload)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise ValueError(f"Result package payload is not valid JSON: {name}.") from exc
+            validate_portable_payload(payload)
+            payloads[name] = payload
+        result_payload = payloads["result.json"]
+        if (
+            not isinstance(result_payload, dict)
+            or result_payload.get("status") != manifest.result_status
+        ):
+            raise ValueError("Result package status does not match its manifest.")
     return manifest
 
 

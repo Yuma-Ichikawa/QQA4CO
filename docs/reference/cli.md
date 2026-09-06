@@ -224,7 +224,9 @@ call-time/node spacing limits,
 `--allow-no-incumbent`, `--no-adaptive-row-lagrangian`,
 `--no-subscip-repair`, `--continue-qqa-without-improvement`, `--seed`, and
 `--device`. `--qplib-problem-types` is a three-character PROBTYPE allow-list;
-non-matching QPLIB inputs use the exact aggressive-SCIP bypass in paired runs.
+the two `--maximum-*-variables` flags accept a positive integer or `none` to
+remove that structural gate while the callback core remains bounded.
+Non-matching QPLIB inputs use the exact aggressive-SCIP bypass in paired runs.
 The time limit covers parsing/setup, QQA, continuous completion, and SCIP.
 
 `compare` runs a paired Cartesian product of input instances, `--solvers`, and

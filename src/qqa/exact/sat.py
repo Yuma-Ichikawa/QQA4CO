@@ -121,7 +121,8 @@ def solve_sat_model_ir(model: ModelIR, *, time_limit: float | None = None) -> SA
             hard.extend(_clauses(factor))
     soft: list[tuple[list[int], int]] = []
     for factor in objective:
-        assert factor.weights is not None
+        if factor.weights is None:
+            raise RuntimeError("Clause factor weights were not initialized.")
         for clause, weight in zip(_clauses(factor), factor.weights.tolist(), strict=True):
             rounded = int(round(float(weight)))
             if abs(rounded - float(weight)) > 1e-9 or rounded <= 0:

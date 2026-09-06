@@ -117,6 +117,21 @@ def test_discs_maxcut_limit(fake_discs_root):
     assert len(bench) == 1
 
 
+def test_discs_manifest_cannot_leave_its_subset(fake_discs_root):
+    manifest = fake_discs_root / "maxcut" / "ba" / "200" / "manifest.jsonl"
+    records = [json.loads(line) for line in manifest.read_text().splitlines()]
+    records[0]["file"] = "../outside.gpickle"
+    manifest.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    with pytest.raises(ValueError, match="portable .gpickle basename"):
+        discs_maxcut(graph_type="ba", subset="200")
+
+
+@pytest.mark.parametrize("limit", [-1, 1.5, True])
+def test_discs_limit_requires_a_nonnegative_integer(fake_discs_root, limit):
+    with pytest.raises(ValueError, match="limit"):
+        discs_maxcut(graph_type="ba", subset="200", limit=limit)
+
+
 def test_discs_mis(fake_discs_root):
     bench = discs_mis(graph_type="satlib")
     assert len(bench) == 1

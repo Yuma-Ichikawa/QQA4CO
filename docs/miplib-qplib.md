@@ -164,7 +164,10 @@ counts remain separate in the summary.
 
 The CLI also defaults to a conservative, empirically screened profile:
 instances with more than 32 original variables bypass the plugin; advanced
-users can raise `--maximum-problem-variables` explicitly. This is a
+users can raise `--maximum-problem-variables` explicitly or pass
+`--maximum-problem-variables none` to remove that gate while retaining the
+bounded uncertain core. `--maximum-integer-variables none` similarly removes
+the integer-count gate. This is a
 cost-control boundary, not a statement that larger instances are unsuitable
 for QQA. At a callback, fewer than 16 LP branching candidates or a selected
 core occupying more than 90% of the 32-position budget is rejected before

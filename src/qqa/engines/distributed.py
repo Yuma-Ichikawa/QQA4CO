@@ -182,7 +182,8 @@ def anneal_distributed_island(
         initial_state = select_diverse_migrants(pool, pool_objectives, count=sol_size)
         exchanges += 1
 
-    assert result is not None and best_solution is not None
+    if result is None or best_solution is None:
+        raise RuntimeError("Distributed annealing finished without an island result.")
     objective_tensor = torch.tensor(
         [best_objective], device=best_solution.device, dtype=torch.float64
     )

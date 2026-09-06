@@ -12,14 +12,44 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import pairwise
+from numbers import Integral, Real
 from typing import Protocol, runtime_checkable
 
 
 def _progress(epoch: int, num_epochs: int) -> float:
     """Return clamped endpoint-inclusive progress in ``[0, 1]``."""
+    if (
+        isinstance(epoch, bool)
+        or not isinstance(epoch, Integral)
+        or isinstance(num_epochs, bool)
+        or not isinstance(num_epochs, Integral)
+        or num_epochs < 0
+    ):
+        raise ValueError("epoch and num_epochs must be integers and num_epochs non-negative.")
     if num_epochs <= 1:
         return 1.0
     return min(1.0, max(0.0, epoch / (num_epochs - 1)))
+
+
+def _validate_bounds(minimum: float, maximum: float) -> None:
+    if (
+        isinstance(minimum, bool)
+        or isinstance(maximum, bool)
+        or not isinstance(minimum, Real)
+        or not isinstance(maximum, Real)
+        or not math.isfinite(minimum)
+        or not math.isfinite(maximum)
+    ):
+        raise ValueError("Schedule bounds must be finite real numbers.")
+
+
+def _logistic(value: float) -> float:
+    """Evaluate the logistic function without overflowing at large magnitudes."""
+    if value >= 0:
+        return 1.0 / (1.0 + math.exp(-value))
+    exponential = math.exp(value)
+    return exponential / (1.0 + exponential)
 
 
 @runtime_checkable
@@ -45,6 +75,9 @@ class LinearBGSchedule:
     min_bg: float = -2.0
     max_bg: float = 0.1
 
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+
     def __call__(self, epoch: int, num_epochs: int) -> float:
         return self.min_bg + (self.max_bg - self.min_bg) * _progress(epoch, num_epochs)
 
@@ -55,6 +88,9 @@ class CosineBGSchedule:
 
     min_bg: float = -2.0
     max_bg: float = 0.1
+
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
 
     def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
@@ -70,11 +106,26 @@ class ExponentialBGSchedule:
     max_bg: float = 0.1
     rate: float = 5.0
 
-    def __call__(self, epoch: int, num_epochs: int) -> float:
-        if not math.isfinite(self.rate) or self.rate <= 0:
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+        if (
+            isinstance(self.rate, bool)
+            or not isinstance(self.rate, Real)
+            or not math.isfinite(self.rate)
+            or self.rate <= 0
+        ):
             raise ValueError("rate must be finite and > 0.")
+
+    def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
-        weight = math.expm1(self.rate * t) / math.expm1(self.rate)
+        # The direct expm1 ratio overflows for large but finite rates. This
+        # algebraically equivalent form evaluates exponentials only at
+        # non-positive arguments and remains well-defined in the limit.
+        if self.rate < 1e-8:
+            weight = t
+        else:
+            denominator = -math.expm1(-self.rate)
+            weight = math.exp(self.rate * (t - 1.0)) * (-math.expm1(-self.rate * t)) / denominator
         return self.min_bg + (self.max_bg - self.min_bg) * weight
 
 
@@ -86,14 +137,22 @@ class SigmoidBGSchedule:
     max_bg: float = 0.1
     steepness: float = 10.0
 
-    def __call__(self, epoch: int, num_epochs: int) -> float:
-        if not math.isfinite(self.steepness) or self.steepness <= 0:
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+        if (
+            isinstance(self.steepness, bool)
+            or not isinstance(self.steepness, Real)
+            or not math.isfinite(self.steepness)
+            or self.steepness <= 0
+        ):
             raise ValueError("steepness must be finite and > 0.")
+
+    def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
-        low = 1.0 / (1.0 + math.exp(self.steepness / 2.0))
-        high = 1.0 / (1.0 + math.exp(-self.steepness / 2.0))
-        raw = 1.0 / (1.0 + math.exp(-self.steepness * (t - 0.5)))
-        weight = (raw - low) / (high - low)
+        low = _logistic(-self.steepness / 2.0)
+        high = _logistic(self.steepness / 2.0)
+        raw = _logistic(self.steepness * (t - 0.5))
+        weight = t if high == low else (raw - low) / (high - low)
         return self.min_bg + (self.max_bg - self.min_bg) * weight
 
 
@@ -105,9 +164,17 @@ class PolynomialBGSchedule:
     max_bg: float = 0.1
     power: float = 2.0
 
-    def __call__(self, epoch: int, num_epochs: int) -> float:
-        if not math.isfinite(self.power) or self.power <= 0:
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+        if (
+            isinstance(self.power, bool)
+            or not isinstance(self.power, Real)
+            or not math.isfinite(self.power)
+            or self.power <= 0
+        ):
             raise ValueError("power must be finite and > 0.")
+
+    def __call__(self, epoch: int, num_epochs: int) -> float:
         weight = _progress(epoch, num_epochs) ** self.power
         return self.min_bg + (self.max_bg - self.min_bg) * weight
 
@@ -119,17 +186,28 @@ class PiecewiseBGSchedule:
     points: tuple[tuple[float, float], ...]
 
     def __post_init__(self) -> None:
-        if len(self.points) < 2:
+        points = tuple(self.points)
+        if len(points) < 2:
             raise ValueError("points must contain at least two knots.")
-        progress = tuple(point[0] for point in self.points)
+        if any(
+            not isinstance(point, (tuple, list))
+            or len(point) != 2
+            or any(
+                isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value)
+                for value in point
+            )
+            for point in points
+        ):
+            raise ValueError("piecewise points must be finite real (progress, value) pairs.")
+        points = tuple((float(point[0]), float(point[1])) for point in points)
+        object.__setattr__(self, "points", points)
+        progress = tuple(point[0] for point in points)
         if progress[0] != 0.0 or progress[-1] != 1.0:
             raise ValueError("piecewise progress must start at 0 and end at 1.")
         if any(not 0 <= value <= 1 for value in progress):
             raise ValueError("piecewise progress must lie in [0, 1].")
-        if any(right <= left for left, right in zip(progress, progress[1:], strict=False)):
+        if any(right <= left for left, right in pairwise(progress)):
             raise ValueError("piecewise progress must be strictly increasing.")
-        if any(not math.isfinite(value) for _, value in self.points):
-            raise ValueError("piecewise values must be finite.")
 
     def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
@@ -149,11 +227,19 @@ class CyclicBGSchedule:
     cycles: int = 2
     amplitude: float = 0.2
 
-    def __call__(self, epoch: int, num_epochs: int) -> float:
-        if isinstance(self.cycles, bool) or self.cycles < 1:
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+        if isinstance(self.cycles, bool) or not isinstance(self.cycles, int) or self.cycles < 1:
             raise ValueError("cycles must be a positive integer.")
-        if not math.isfinite(self.amplitude) or self.amplitude < 0:
+        if (
+            isinstance(self.amplitude, bool)
+            or not isinstance(self.amplitude, Real)
+            or not math.isfinite(self.amplitude)
+            or self.amplitude < 0
+        ):
             raise ValueError("amplitude must be finite and >= 0.")
+
+    def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
         base = self.min_bg + (self.max_bg - self.min_bg) * t
         if t in {0.0, 1.0}:
@@ -172,11 +258,31 @@ class ReheatBGSchedule:
     strength: float = 0.25
     width: float = 0.1
 
-    def __call__(self, epoch: int, num_epochs: int) -> float:
-        if not 0 <= self.strength <= 1 or not 0 < self.width <= 1:
+    def __post_init__(self) -> None:
+        _validate_bounds(self.min_bg, self.max_bg)
+        reheats = tuple(self.reheats)
+        if (
+            isinstance(self.strength, bool)
+            or isinstance(self.width, bool)
+            or not isinstance(self.strength, Real)
+            or not isinstance(self.width, Real)
+            or not math.isfinite(self.strength)
+            or not math.isfinite(self.width)
+            or not 0 <= self.strength <= 1
+            or not 0 < self.width <= 1
+        ):
             raise ValueError("strength must be in [0, 1] and width in (0, 1].")
-        if any(not 0 < point < 1 for point in self.reheats):
+        if any(
+            isinstance(point, bool)
+            or not isinstance(point, Real)
+            or not math.isfinite(point)
+            or not 0 < point < 1
+            for point in reheats
+        ):
             raise ValueError("reheat points must lie strictly in (0, 1).")
+        object.__setattr__(self, "reheats", reheats)
+
+    def __call__(self, epoch: int, num_epochs: int) -> float:
         t = _progress(epoch, num_epochs)
         progress = t
         for point in self.reheats:
@@ -211,8 +317,12 @@ class AdaptiveBGSchedule:
             self.diversity_floor,
             self.reheat_strength,
             self.recovery,
+            self._offset,
         )
-        if any(not math.isfinite(value) for value in values):
+        if any(
+            isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value)
+            for value in values
+        ):
             raise ValueError("Adaptive schedule parameters must be finite.")
         if self.max_bg <= self.min_bg:
             raise ValueError("max_bg must exceed min_bg.")
@@ -220,6 +330,8 @@ class AdaptiveBGSchedule:
             raise ValueError("diversity_floor must lie in [0, 1].")
         if not 0 < self.reheat_strength <= 1 or not 0 < self.recovery <= 1:
             raise ValueError("reheat_strength and recovery must lie in (0, 1].")
+        if not -0.75 <= self._offset <= 0:
+            raise ValueError("Adaptive schedule offset must lie in [-0.75, 0].")
 
     def __call__(self, epoch: int, num_epochs: int) -> float:
         base = CosineBGSchedule(self.min_bg, self.max_bg)(epoch, num_epochs)
@@ -231,8 +343,13 @@ class AdaptiveBGSchedule:
 
     def observe(self, *, improved: bool, diversity_ratio: float | None = None) -> None:
         """Update the bounded reheat offset from one control window."""
+        if not isinstance(improved, bool):
+            raise TypeError("improved must be boolean.")
         if diversity_ratio is not None and (
-            not math.isfinite(diversity_ratio) or diversity_ratio < 0
+            isinstance(diversity_ratio, bool)
+            or not isinstance(diversity_ratio, Real)
+            or not math.isfinite(diversity_ratio)
+            or diversity_ratio < 0
         ):
             raise ValueError("diversity_ratio must be finite and non-negative or None.")
         collapsed = diversity_ratio is not None and diversity_ratio < self.diversity_floor
@@ -249,6 +366,8 @@ def make_schedule(
     maximum: float = 0.1,
 ) -> Schedule:
     """Build a validated standard schedule by a stable public name."""
+    if not isinstance(name, str) or not name.strip():
+        raise TypeError("Schedule name must be a non-empty string.")
     factories: dict[str, Callable[..., Schedule]] = {
         "linear": LinearBGSchedule,
         "cosine": CosineBGSchedule,

@@ -113,7 +113,8 @@ def merge_benchmark_campaigns(paths) -> BenchmarkComparisonResult:
             failure_keys.add(key)
             failures.append(failure)
 
-    assert base_config is not None
+    if base_config is None:
+        raise ValueError("At least one campaign is required for merging.")
     instance_names = sorted(all_instances)
     seed_values = sorted(all_seeds)
     expected_cells = {(name, seed) for name in instance_names for seed in seed_values}

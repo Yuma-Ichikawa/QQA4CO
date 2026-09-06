@@ -258,13 +258,17 @@ Checkpoints are atomic ZIP containers with JSON metadata, NumPy tensors, and a
 SHA-256 checksum for every tensor. They contain no pickle or executable code.
 The model fingerprint, optimizer state, CPU/CUDA RNG state, schedule state,
 incumbent, latent population, and historical archive are verified before
-resume. Dynamics-changing options must match; a run may extend its epoch
+resume. The loader requires the exact schema field/member set, simple tensor
+names, and lowercase SHA-256 digests before any tensor is decoded.
+Dynamics-changing options must match; a run may extend its epoch
 horizon. File paths are API arguments and are not written into provenance.
 
 `qqa.runtime.export_result_package` creates an independently verifiable model
 summary/result/event bundle. Portable-payload validation rejects absolute
 paths, private endpoints, credentials, host/server/cluster fields, non-finite
-numbers, and executable objects.
+numbers, and executable objects. Verification requires exactly those three
+payloads plus the manifest, a checksum for every payload, valid portable JSON,
+and agreement between the result status and manifest.
 
 ## Remote service and custom-code boundary
 

@@ -227,7 +227,8 @@ def _compile_expression(expression: ObjectiveIR, num_variables: int) -> Compiled
                     clause_count, clause_count + count, dtype=torch.long
                 ).repeat_interleave(width)
             )
-            assert factor.weights is not None
+            if factor.weights is None:
+                raise RuntimeError("Clause factor weights were not initialized.")
             clause_weights.append(factor.weights.to(torch.float64))
             clause_count += count
             factor_type_ids.append(_TYPE_IDS["clause"])

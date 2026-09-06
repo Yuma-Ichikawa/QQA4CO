@@ -121,7 +121,8 @@ class HistoryRecorder(Callback):
 
         if self._device_history is None:
             self.on_train_begin(state)
-        assert self._device_history is not None
+        if self._device_history is None:
+            raise RuntimeError("History metric buffer was not initialized.")
         loss_std = losses.std() if losses.numel() > 1 else losses.new_zeros(())
         penalty_std = penalties.std() if penalties.numel() > 1 else penalties.new_zeros(())
         div = state.diversity
@@ -137,7 +138,8 @@ class HistoryRecorder(Callback):
                 losses.new_tensor(state.bg),
             )
         ).to(self._device_history)
-        assert self._best_device_history is not None
+        if self._best_device_history is None:
+            raise RuntimeError("History incumbent buffer was not initialized.")
         self._best_device_history[self._records] = torch.as_tensor(
             state.best_obj,
             device=self._best_device_history.device,

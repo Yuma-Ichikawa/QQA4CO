@@ -8,9 +8,11 @@ information have distinct meanings.
 
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from numbers import Integral, Real
 from typing import Any
 
 import torch
@@ -76,18 +78,31 @@ class CandidateRecord:
     selected: bool = False
 
     def __post_init__(self) -> None:
-        if not self.candidate_id or not self.origin:
+        if (
+            not isinstance(self.candidate_id, str)
+            or not self.candidate_id.strip()
+            or not isinstance(self.origin, str)
+            or not self.origin.strip()
+        ):
             raise ValueError("Candidate id and origin must be non-empty.")
+        if not isinstance(self.selected, bool):
+            raise TypeError("Candidate selected must be boolean.")
         object.__setattr__(self, "coordinate_space", CoordinateSpace(self.coordinate_space))
         object.__setattr__(self, "feasibility", FeasibilityStatus(self.feasibility))
         for name in ("objective_value", "maximum_violation"):
             value = getattr(self, name)
             if value is not None and (
-                not math.isfinite(value) or value < 0 and name == "maximum_violation"
+                isinstance(value, bool)
+                or not isinstance(value, Real)
+                or not math.isfinite(value)
+                or value < 0
+                and name == "maximum_violation"
             ):
                 raise ValueError(
                     f"Candidate {name} must be finite and non-negative where applicable."
                 )
+            if value is not None:
+                object.__setattr__(self, name, float(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,15 +116,19 @@ class ConstraintViolation:
     satisfied: bool
 
     def __post_init__(self) -> None:
-        if not self.name:
+        if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("ConstraintViolation.name must be non-empty.")
+        if not isinstance(self.satisfied, bool):
+            raise TypeError("ConstraintViolation.satisfied must be boolean.")
         if not all(
-            math.isfinite(value)
+            not isinstance(value, bool) and isinstance(value, Real) and math.isfinite(value)
             for value in (self.raw_residual, self.scaled_residual, self.tolerance)
         ):
             raise ValueError("Constraint residuals and tolerance must be finite.")
         if self.tolerance < 0:
             raise ValueError("Constraint tolerance must be non-negative.")
+        for name in ("raw_residual", "scaled_residual", "tolerance"):
+            object.__setattr__(self, name, float(getattr(self, name)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +137,14 @@ class ConstraintReport:
 
     rows: tuple[ConstraintViolation, ...] = ()
     evaluated: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.evaluated, bool):
+            raise TypeError("ConstraintReport.evaluated must be boolean.")
+        rows = tuple(self.rows)
+        if any(not isinstance(row, ConstraintViolation) for row in rows):
+            raise TypeError("ConstraintReport.rows must contain ConstraintViolation values.")
+        object.__setattr__(self, "rows", rows)
 
     @property
     def feasible(self) -> bool:
@@ -170,8 +197,16 @@ class TimingReport:
             self.repair,
             self.certification,
         )
-        if any(not math.isfinite(value) or value < 0 for value in values):
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, Real)
+            or not math.isfinite(value)
+            or value < 0
+            for value in values
+        ):
             raise ValueError("Timing values must be finite and non-negative.")
+        for name in ("total", "compile", "warmup", "search", "repair", "certification"):
+            object.__setattr__(self, name, float(getattr(self, name)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,9 +219,18 @@ class ResourceReport:
     peak_host_memory_bytes: int | None = None
 
     def __post_init__(self) -> None:
-        for value in (self.peak_device_memory_bytes, self.peak_host_memory_bytes):
-            if value is not None and (isinstance(value, bool) or value < 0):
+        if not isinstance(self.device, str) or not self.device.strip():
+            raise ValueError("Resource device must be a non-empty string.")
+        if not isinstance(self.precision, str) or not self.precision.strip():
+            raise ValueError("Resource precision must be a non-empty string.")
+        for name in ("peak_device_memory_bytes", "peak_host_memory_bytes"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, Integral) or value < 0
+            ):
                 raise ValueError("Memory measurements must be non-negative integers or None.")
+            if value is not None:
+                object.__setattr__(self, name, int(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,10 +244,20 @@ class Provenance:
     transformations: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if not self.backend:
-            raise ValueError("backend must be non-empty.")
-        if isinstance(self.seed, bool) or not isinstance(self.seed, int) or self.seed < 0:
+        if not isinstance(self.backend, str) or not self.backend.strip():
+            raise ValueError("backend must be a non-empty string.")
+        if not isinstance(self.profile, str) or not self.profile.strip():
+            raise ValueError("profile must be a non-empty string.")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, Integral) or self.seed < 0:
             raise ValueError("seed must be a non-negative integer.")
+        if not isinstance(self.config, dict):
+            raise TypeError("config must be a dictionary.")
+        transformations = tuple(self.transformations)
+        if any(not isinstance(item, str) or not item.strip() for item in transformations):
+            raise ValueError("transformations must contain non-empty strings.")
+        object.__setattr__(self, "seed", int(self.seed))
+        object.__setattr__(self, "config", copy.deepcopy(self.config))
+        object.__setattr__(self, "transformations", transformations)
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,6 +320,22 @@ class SolveResult:
 
     def __post_init__(self) -> None:
         self.status = SolveStatus(self.status)
+        if not isinstance(self.feasible, bool):
+            raise TypeError("feasible must be boolean.")
+        if not isinstance(self.proven_optimal, bool):
+            raise TypeError("proven_optimal must be boolean.")
+        for name, expected_type in (
+            ("violations", ConstraintReport),
+            ("timings", TimingReport),
+            ("resources", ResourceReport),
+            ("provenance", Provenance),
+        ):
+            if not isinstance(getattr(self, name), expected_type):
+                raise TypeError(f"{name} must be a {expected_type.__name__}.")
+        for name in ("raw_solution", "repaired_solution", "population"):
+            value = getattr(self, name)
+            if value is not None and not torch.is_tensor(value):
+                raise TypeError(f"{name} must be a tensor or None.")
         if self.guarantee_level is None:
             if self.status in {
                 SolveStatus.OPTIMAL,
@@ -283,10 +353,20 @@ class SolveResult:
                 self.guarantee_level = GuaranteeLevel.UNKNOWN
         else:
             self.guarantee_level = GuaranteeLevel(self.guarantee_level)
-        for name in ("objective_value", "internal_energy", "merit_value"):
+        for name in (
+            "objective_value",
+            "internal_energy",
+            "merit_value",
+            "repaired_objective_value",
+            "best_bound",
+        ):
             value = getattr(self, name)
-            if value is not None and not math.isfinite(float(value)):
+            if value is not None and (
+                isinstance(value, bool) or not isinstance(value, Real) or not math.isfinite(value)
+            ):
                 raise ValueError(f"{name} must be finite.")
+            if value is not None:
+                setattr(self, name, float(value))
         if self.raw_solution is None and any(
             value is not None
             for value in (self.objective_value, self.internal_energy, self.merit_value)
@@ -302,10 +382,15 @@ class SolveResult:
             raise ValueError("selected_candidate_id must be 'raw' or 'repaired'.")
         if self.selected_candidate_id == "repaired" and self.repaired_solution is None:
             raise ValueError("A repaired selected candidate requires repaired_solution.")
-        if self.relative_gap is not None and (
-            not math.isfinite(self.relative_gap) or self.relative_gap < 0
-        ):
-            raise ValueError("relative_gap must be finite and non-negative or None.")
+        if self.relative_gap is not None:
+            if (
+                isinstance(self.relative_gap, bool)
+                or not isinstance(self.relative_gap, Real)
+                or not math.isfinite(self.relative_gap)
+                or self.relative_gap < 0
+            ):
+                raise ValueError("relative_gap must be finite and non-negative or None.")
+            self.relative_gap = float(self.relative_gap)
         if bool(self.feasible) != self.violations.feasible:
             raise ValueError("feasible must agree with violations.feasible.")
         if self.proven_optimal and self.status is not SolveStatus.OPTIMAL:
@@ -320,6 +405,10 @@ class SolveResult:
             raise ValueError("An exact guarantee requires a proven terminal status.")
         self.events = tuple(self.events)
         self.candidates = tuple(self.candidates)
+        if any(not isinstance(item, CandidateRecord) for item in self.candidates):
+            raise TypeError("candidates must contain CandidateRecord values.")
+        if not isinstance(self.score, dict) or not isinstance(self.diagnostics, dict):
+            raise TypeError("score and diagnostics must be dictionaries.")
         if self.candidates:
             selected = [item.candidate_id for item in self.candidates if item.selected]
             if selected != [self.selected_candidate_id]:

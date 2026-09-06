@@ -86,7 +86,9 @@ class VariableBlock:
         ):
             raise ValueError("VariableBlock.shape must contain positive integers.")
         if self.categories is not None and (
-            isinstance(self.categories, bool) or self.categories < 2
+            isinstance(self.categories, bool)
+            or not isinstance(self.categories, int)
+            or self.categories < 2
         ):
             raise ValueError("categories must be an integer >= 2 or None.")
         if (
@@ -220,7 +222,8 @@ class ClauseFactor:
         literals = torch.where(self.signs.to(values.device) > 0, selected, 1.0 - selected)
         unsatisfied = (1.0 - literals).prod(dim=-1)
         weights = self.weights
-        assert weights is not None
+        if weights is None:
+            raise RuntimeError("Clause factor weights were not initialized.")
         return (unsatisfied * weights.to(values)).sum(dim=-1)
 
 

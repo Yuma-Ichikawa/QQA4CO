@@ -62,7 +62,8 @@ def decision_explorer(result: Any, model: ModelIR | None = None) -> list[dict[st
             elif domains[index] is VariableDomain.SPIN:
                 alternative = -value
             if alternative is not None:
-                assert baseline_objective is not None and baseline_violation is not None
+                if baseline_objective is None or baseline_violation is None:
+                    raise RuntimeError("Decision explorer baseline was not initialized.")
                 counterfactual = solution.clone()
                 counterfactual[index] = alternative
                 objective_delta = (

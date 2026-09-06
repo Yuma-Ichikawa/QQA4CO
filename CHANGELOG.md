@@ -6,6 +6,34 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Revalidate the exact member set, complete checksum map, JSON payloads,
+  portability rules, and result status when opening result packages; reject
+  malformed checkpoint schemas and tensor checksum records before loading.
+- Isolate tensors, cuts, no-good assignments, and metadata published through
+  the exact-feedback bus so callers cannot mutate shared solver state.
+- Enforce finite numeric values, strict booleans, portable strings, and
+  integer memory counters across the backend-independent result contract.
+- Reject non-finite custom schedule outputs and evaluate stateful schedules
+  exactly once per epoch; keep exponential and sigmoid schedules finite at
+  extreme shape parameters.
+- Account for setup and verification time before deciding whether a bounded
+  QQA benchmark callback is affordable, and permit explicit `none` values for
+  the two structural size gates.
+- Use unique atomic benchmark-download temporary files, restrict redirects to
+  the original HTTPS origin, and reject unsafe or duplicate archive members.
+- Validate dataset-manifest members within their declared subset and avoid
+  opening records beyond an explicit loader limit.
+- Preserve runtime invariant checks under Python optimized mode by replacing
+  removable assertions with explicit failures at solver and recorder boundaries.
+
+### Changed
+
+- The weekly public QPLIB smoke comparison now verifies that at least one
+  measured `sg-cqqa` run performed a real QQA intervention rather than merely
+  registering the optional plugin.
+
 ## [0.11.0] - 2026-09-06
 
 ### Solver integrity and QQA core

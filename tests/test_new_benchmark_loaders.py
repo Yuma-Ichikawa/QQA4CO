@@ -211,6 +211,15 @@ def test_coloring_limit(fake_root):
     assert len(bench) == 1
 
 
+def test_coloring_limit_does_not_open_records_beyond_the_limit(fake_root):
+    manifest = fake_root / "coloring" / "myciel" / "manifest.jsonl"
+    records = [json.loads(line) for line in manifest.read_text().splitlines()]
+    records[1]["file"] = "missing.gpickle"
+    manifest.write_text("\n".join(json.dumps(record) for record in records) + "\n")
+    bench = coloring(graph_type="myciel", limit=1)
+    assert len(bench) == 1
+
+
 # --------------------------------------------------------------------------- #
 # MIS on RRG                                                                  #
 # --------------------------------------------------------------------------- #

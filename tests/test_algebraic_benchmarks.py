@@ -39,7 +39,9 @@ from qqa.benchmarking.algebraic_runner import (
     _default_worker_timeout,
     _native_process_error_type,
     _qqa_applicability_hint,
+    _qqa_budget_is_applicable,
     _qqa_is_applicable,
+    _verification_reserve,
 )
 from qqa.benchmarking.cli import _named_paths
 from qqa.benchmarking.metrics import (
@@ -1830,6 +1832,32 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert not args.include_solution_values
     assert not args.resume
     assert not args.continue_on_error
+
+
+def test_benchmark_cli_can_remove_structural_size_gates_explicitly():
+    args = build_parser().parse_args(
+        [
+            "benchmark",
+            "compare",
+            "public-instance.mps.gz",
+            "--output",
+            "comparison.json",
+            "--maximum-problem-variables",
+            "none",
+            "--maximum-integer-variables",
+            "unbounded",
+        ]
+    )
+    assert args.maximum_problem_variables is None
+    assert args.maximum_integer_variables is None
+
+
+def test_qqa_registration_budget_uses_the_effective_scip_limit():
+    config = QQAHeuristicConfig()
+    assert _qqa_budget_is_applicable(config, 160.0)
+    assert not _qqa_budget_is_applicable(config, 159.99)
+    assert _verification_reserve(1.0) == pytest.approx(0.01)
+    assert _verification_reserve(300.0) == pytest.approx(0.25)
 
 
 @pytest.mark.parametrize(

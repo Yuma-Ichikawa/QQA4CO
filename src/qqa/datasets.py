@@ -15,7 +15,8 @@ import json
 import os
 import pickle
 from dataclasses import dataclass
-from pathlib import Path
+from numbers import Integral
+from pathlib import Path, PureWindowsPath
 
 import networkx as nx
 import numpy as np
@@ -86,6 +87,52 @@ def _resolve(path: str | os.PathLike | None, default_subpath: str) -> Path:
 def _load_pickle(p: Path):
     with open(p, "rb") as fh:
         return pickle.load(fh)
+
+
+def _validate_limit(limit: int | None) -> None:
+    if limit is not None and (
+        isinstance(limit, bool) or not isinstance(limit, Integral) or limit < 0
+    ):
+        raise ValueError("limit must be a non-negative integer or None.")
+
+
+def _bounded_records(records: list[dict], limit: int | None, consumed: int = 0) -> list[dict]:
+    _validate_limit(limit)
+    return records if limit is None else records[: max(0, int(limit) - consumed)]
+
+
+def _manifest_member(subset_dir: Path, record: dict, suffix: str) -> Path:
+    if not isinstance(record, dict):
+        raise ValueError("Dataset manifest entries must be JSON objects.")
+    name = record.get("file")
+    if (
+        not isinstance(name, str)
+        or not name
+        or Path(name).name != name
+        or PureWindowsPath(name).name != name
+        or Path(name).suffix.lower() != suffix
+    ):
+        raise ValueError(f"Dataset manifest file must be a portable {suffix} basename.")
+    root = subset_dir.resolve()
+    member = (root / name).resolve()
+    if member.parent != root or not member.is_file():
+        raise ValueError(f"Dataset manifest file is missing or leaves its subset: {name!r}.")
+    return member
+
+
+def _manifest_subset(root: Path, name: object) -> Path:
+    if (
+        not isinstance(name, str)
+        or not name
+        or Path(name).name != name
+        or PureWindowsPath(name).name != name
+    ):
+        raise ValueError("Dataset manifest subset must be a portable directory name.")
+    resolved_root = root.resolve()
+    subset = (resolved_root / name).resolve()
+    if subset.parent != resolved_root or not subset.is_dir():
+        raise ValueError(f"Dataset manifest subset is missing or invalid: {name!r}.")
+    return subset
 
 
 # ----------------------------------------------------------------------------
@@ -338,11 +385,14 @@ def _read_manifest(subset_dir: Path) -> list[dict]:
             f"DISCS manifest not found at {manifest}. Did you run `./scripts/setup_discs_data.sh`?"
         )
     records: list[dict] = []
-    with open(manifest) as fh:
+    with open(manifest, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if line:
-                records.append(json.loads(line))
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError("Dataset manifest entries must be JSON objects.")
+                records.append(record)
     if not records:
         raise FileNotFoundError(f"DISCS manifest at {manifest} is empty.")
     return records
@@ -393,15 +443,18 @@ def _load_graphs_from_manifest(
     *,
     limit: int | None = None,
 ) -> tuple[list[nx.Graph], np.ndarray, list[dict]]:
-    if limit is not None:
-        records = records[:limit]
+    records = _bounded_records(records, limit)
     graphs: list[nx.Graph] = []
     bests: list[float] = []
     for rec in records:
         # When records come from a multi-subset query the per-record subset
         # directory differs; reconstruct it relative to the unified root.
-        per_dir = subset_dir if subset_dir.name == rec["subset"] else subset_dir / rec["subset"]
-        graph_path = per_dir / rec["file"]
+        per_dir = (
+            subset_dir
+            if subset_dir.name == rec.get("subset")
+            else _manifest_subset(subset_dir, rec.get("subset"))
+        )
+        graph_path = _manifest_member(per_dir, rec, ".gpickle")
         with open(graph_path, "rb") as fh:
             graphs.append(pickle.load(fh))
         bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
@@ -602,7 +655,7 @@ def _iter_subset_dirs(family_root: Path, subset: str | None) -> list[Path]:
 def _load_gpickle_records(records: list[dict], subset_dir: Path) -> list[nx.Graph]:
     graphs: list[nx.Graph] = []
     for rec in records:
-        with open(subset_dir / rec["file"], "rb") as fh:
+        with open(_manifest_member(subset_dir, rec, ".gpickle"), "rb") as fh:
             graphs.append(pickle.load(fh))
     return graphs
 
@@ -629,6 +682,7 @@ def coloring(
     used as the default K for the ``Coloring`` problem unless ``num_colors``
     is overridden here.
     """
+    _validate_limit(limit)
     base = (
         Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "coloring"
     )
@@ -638,7 +692,7 @@ def coloring(
     problems, bests, recs = [], [], []
     total = 0
     for sdir in subsets:
-        records = _subset_records(sdir)
+        records = _bounded_records(_subset_records(sdir), limit, total)
         graphs = _load_gpickle_records(records, sdir)
         for g, rec in zip(graphs, records, strict=True):
             if limit is not None and total >= limit:
@@ -671,6 +725,7 @@ def mis_rrg(
     ``subset`` is a ``d{D}_n{N}`` key (e.g. ``"d20_n10000"``); ``None`` loads
     every subset under ``data/mis-rrg/``.
     """
+    _validate_limit(limit)
     base = (
         Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "mis-rrg"
     )
@@ -678,7 +733,7 @@ def mis_rrg(
     problems, bests, recs = [], [], []
     total = 0
     for sdir in subsets:
-        records = _subset_records(sdir)
+        records = _bounded_records(_subset_records(sdir), limit, total)
         graphs = _load_gpickle_records(records, sdir)
         for g, rec in zip(graphs, records, strict=True):
             if limit is not None and total >= limit:
@@ -741,6 +796,7 @@ def ea3d(
     ``dist`` ∈ ``{"gaussian", "bimodal"}`` (``None`` = both). ``subset`` is
     the lattice-size tag ``"L{L}"`` (``None`` = every size).
     """
+    _validate_limit(limit)
     base = Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "ea3d"
     if dist is not None:
         base = base / dist
@@ -748,11 +804,13 @@ def ea3d(
     problems, bests, recs = [], [], []
     total = 0
     for sdir in subsets:
-        records = _subset_records(sdir)
+        records = _bounded_records(_subset_records(sdir), limit, total)
         for rec in records:
             if limit is not None and total >= limit:
                 break
-            problems.append(_reconstruct_ea3d_problem(sdir / rec["file"], device=device))
+            problems.append(
+                _reconstruct_ea3d_problem(_manifest_member(sdir, rec, ".npz"), device=device)
+            )
             bests.append(rec["best_known"] if rec["best_known"] is not None else np.nan)
             recs.append(rec)
             total += 1
@@ -792,13 +850,14 @@ def gset(
     ``qqa.MaxCut`` honours ``data["weight"]`` on each edge, so the
     objective is ``sum_{(u,v) ∈ cut} w(u,v)`` as standard.
     """
+    _validate_limit(limit)
 
     base = Path(root).expanduser().resolve() if root is not None else _default_data_dir() / "gset"
     subsets = _iter_subset_dirs(base, subset if subset is not None else "standard")
     problems, bests, recs = [], [], []
     total = 0
     for sdir in subsets:
-        records = _subset_records(sdir)
+        records = _bounded_records(_subset_records(sdir), limit, total)
         graphs = _load_gpickle_records(records, sdir)
         for g, rec in zip(graphs, records, strict=True):
             if limit is not None and total >= limit:
@@ -834,6 +893,7 @@ def balanced_partition(
     :class:`BalancedGraphPartition` (different objective from DISCS'
     NormCut but on the same underlying graphs).
     """
+    _validate_limit(limit)
     base_discs = (
         Path(root).expanduser().resolve()
         if root is not None
@@ -849,7 +909,7 @@ def balanced_partition(
     problems, bests, recs = [], [], []
     total = 0
     for sdir in subsets:
-        records = _subset_records(sdir)
+        records = _bounded_records(_subset_records(sdir), limit, total)
         graphs = _load_gpickle_records(records, sdir)
         for g, rec in zip(graphs, records, strict=True):
             if limit is not None and total >= limit:

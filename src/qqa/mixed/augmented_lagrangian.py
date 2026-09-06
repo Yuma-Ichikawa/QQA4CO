@@ -100,7 +100,8 @@ class ConstraintArchive:
                 self.feasibility_solution = values[feasibility_index].detach().clone()
                 self._feasibility_key = feasibility_key.detach().clone()
             else:
-                assert self._feasibility_key is not None
+                if self._feasibility_key is None:
+                    raise RuntimeError("Feasibility archive key was not initialized.")
                 current = self._feasibility_key.to(feasibility_key)
                 better = torch.zeros((), dtype=torch.bool, device=values.device)
                 equal = torch.ones((), dtype=torch.bool, device=values.device)
@@ -128,7 +129,8 @@ class ConstraintArchive:
                 self._objective_key = objective_value.detach().clone()
                 self._has_feasible = any_feasible.detach().clone()
             else:
-                assert self._objective_key is not None and self._has_feasible is not None
+                if self._objective_key is None or self._has_feasible is None:
+                    raise RuntimeError("Objective archive state was not initialized.")
                 old_key = self._objective_key.to(objective_value)
                 old_has = self._has_feasible.to(any_feasible)
                 better = any_feasible & (~old_has | (objective_value < old_key))

@@ -12,6 +12,7 @@ import zipfile
 from contextlib import suppress
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
+from numbers import Integral
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -79,6 +80,32 @@ class Checkpoint:
     metadata: dict[str, Any]
     schema_version: int = 1
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.model_fingerprint, str) or not self.model_fingerprint.strip():
+            raise ValueError("Checkpoint model_fingerprint must be a non-empty string.")
+        if (
+            isinstance(self.schema_version, bool)
+            or not isinstance(self.schema_version, Integral)
+            or self.schema_version != 1
+        ):
+            raise ValueError("Unsupported checkpoint schema.")
+        if isinstance(self.epoch, bool) or not isinstance(self.epoch, Integral) or self.epoch < 0:
+            raise ValueError("Checkpoint epoch must be a non-negative integer.")
+        if not isinstance(self.config, dict) or not isinstance(self.metadata, dict):
+            raise TypeError("Checkpoint config and metadata must be dictionaries.")
+        if not isinstance(self.tensors, dict) or any(
+            not isinstance(name, str)
+            or not name
+            or "/" in name
+            or "\\" in name
+            or not torch.is_tensor(value)
+            for name, value in self.tensors.items()
+        ):
+            raise TypeError("Checkpoint tensors must map simple names to tensors.")
+        validate_portable_payload(self.config)
+        validate_portable_payload(self.metadata)
+        validate_portable_payload({"model_fingerprint": self.model_fingerprint})
+
 
 def fingerprint_problem(problem: Any) -> str:
     """Hash model structure/source and numerical tensors without recording paths."""
@@ -133,12 +160,10 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 
 def save_checkpoint(checkpoint: Checkpoint, path: str | Path) -> Path:
     """Atomically write a checksum-protected checkpoint archive."""
+    if not isinstance(checkpoint, Checkpoint):
+        raise TypeError("checkpoint must be a Checkpoint.")
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    if checkpoint.schema_version != 1 or checkpoint.epoch < 0:
-        raise ValueError("Unsupported checkpoint schema or negative epoch.")
-    validate_portable_payload(checkpoint.config)
-    validate_portable_payload(checkpoint.metadata)
     tensor_payloads = {name: _tensor_bytes(value) for name, value in checkpoint.tensors.items()}
     checksums = {name: hashlib.sha256(value).hexdigest() for name, value in tensor_payloads.items()}
     manifest = {
@@ -149,6 +174,7 @@ def save_checkpoint(checkpoint: Checkpoint, path: str | Path) -> Path:
         "metadata": checkpoint.metadata,
         "tensor_checksums": checksums,
     }
+    validate_portable_payload(manifest)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
     os.close(descriptor)
     temporary = Path(temporary_name)
@@ -158,8 +184,6 @@ def save_checkpoint(checkpoint: Checkpoint, path: str | Path) -> Path:
                 "manifest.json", json.dumps(manifest, sort_keys=True, separators=(",", ":"))
             )
             for name, payload in tensor_payloads.items():
-                if not name or "/" in name or "\\" in name:
-                    raise ValueError("Checkpoint tensor names must be simple relative names.")
                 bundle.writestr(f"tensors/{name}.npy", payload)
         os.replace(temporary, target)
     finally:
@@ -184,21 +208,59 @@ def load_checkpoint(path: str | Path, *, device: str | torch.device = "cpu") -> 
             or sum(item.file_size for item in bundle.infolist()) > _MAX_ARCHIVE_BYTES
         ):
             raise ValueError("Invalid checkpoint archive layout.")
-        manifest = json.loads(bundle.read("manifest.json"))
-        if manifest.get("schema_version") != 1:
+        try:
+            manifest = json.loads(bundle.read("manifest.json"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("Checkpoint manifest is not valid JSON.") from exc
+        required_keys = {
+            "schema_version",
+            "model_fingerprint",
+            "config",
+            "epoch",
+            "metadata",
+            "tensor_checksums",
+        }
+        if not isinstance(manifest, dict) or set(manifest) != required_keys:
+            raise ValueError("Checkpoint manifest has an invalid field set.")
+        schema_version = manifest["schema_version"]
+        if (
+            isinstance(schema_version, bool)
+            or not isinstance(schema_version, int)
+            or schema_version != 1
+        ):
             raise ValueError("Unsupported checkpoint schema.")
-        validate_portable_payload(manifest.get("config", {}))
-        validate_portable_payload(manifest.get("metadata", {}))
+        if (
+            not isinstance(manifest["model_fingerprint"], str)
+            or not manifest["model_fingerprint"].strip()
+            or isinstance(manifest["epoch"], bool)
+            or not isinstance(manifest["epoch"], int)
+            or manifest["epoch"] < 0
+            or not isinstance(manifest["config"], dict)
+            or not isinstance(manifest["metadata"], dict)
+            or not isinstance(manifest["tensor_checksums"], dict)
+        ):
+            raise ValueError("Checkpoint manifest contains invalid field values.")
+        validate_portable_payload(manifest)
+        checksums = manifest["tensor_checksums"]
+        if any(
+            not isinstance(name, str)
+            or not name
+            or "/" in name
+            or "\\" in name
+            or not isinstance(expected, str)
+            or len(expected) != 64
+            or any(character not in "0123456789abcdef" for character in expected)
+            for name, expected in checksums.items()
+        ):
+            raise ValueError("Checkpoint manifest contains an invalid tensor checksum.")
         expected_members = {
             "manifest.json",
-            *(f"tensors/{name}.npy" for name in manifest.get("tensor_checksums", {})),
+            *(f"tensors/{name}.npy" for name in checksums),
         }
         if names != expected_members:
             raise ValueError("Checkpoint archive contains unexpected members.")
         tensors = {}
-        for name, expected in manifest.get("tensor_checksums", {}).items():
-            if not isinstance(name, str) or not name or "/" in name or "\\" in name:
-                raise ValueError("Invalid checkpoint tensor name.")
+        for name, expected in checksums.items():
             member = f"tensors/{name}.npy"
             payload = bundle.read(member)
             if hashlib.sha256(payload).hexdigest() != expected:
@@ -206,11 +268,11 @@ def load_checkpoint(path: str | Path, *, device: str | torch.device = "cpu") -> 
             array = np.load(io.BytesIO(payload), allow_pickle=False)
             tensors[name] = torch.from_numpy(array.copy()).to(device)
     return Checkpoint(
-        str(manifest["model_fingerprint"]),
-        dict(manifest["config"]),
-        int(manifest["epoch"]),
+        manifest["model_fingerprint"],
+        manifest["config"],
+        manifest["epoch"],
         tensors,
-        dict(manifest.get("metadata", {})),
+        manifest["metadata"],
     )
 
 

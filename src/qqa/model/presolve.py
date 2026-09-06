@@ -282,7 +282,8 @@ def _structurally_reduce_factor(
     if isinstance(factor, ClauseFactor):
         grouped: dict[int, tuple[list[list[int]], list[list[int]], list[float]]] = {}
         constant = 0.0
-        assert factor.weights is not None
+        if factor.weights is None:
+            raise RuntimeError("Clause factor weights were not initialized.")
         for clause_indices, clause_signs, clause_weight in zip(
             factor.indices.cpu().tolist(),
             factor.signs.cpu().tolist(),

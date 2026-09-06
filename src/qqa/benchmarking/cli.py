@@ -14,6 +14,22 @@ from pathlib import Path
 from typing import Any
 
 
+def _optional_positive_int(value: str) -> int | None:
+    """Parse a positive integer or an explicit unbounded sentinel."""
+    normalized = value.strip().lower()
+    if normalized in {"none", "unbounded"}:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "expected a positive integer, 'none', or 'unbounded'"
+        ) from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("expected a positive integer, 'none', or 'unbounded'")
+    return parsed
+
+
 def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
     """Register the shared, explicitly opt-in SG-CQQA tuning surface."""
     from qqa.hybrid.heuristic_types import QQAHeuristicConfig
@@ -21,10 +37,18 @@ def _add_heuristic_options(parser: argparse.ArgumentParser) -> None:
     defaults = QQAHeuristicConfig()
     parser.add_argument("--core-size", type=int, default=defaults.core_size)
     parser.add_argument(
-        "--maximum-problem-variables", type=int, default=defaults.maximum_problem_variables
+        "--maximum-problem-variables",
+        type=_optional_positive_int,
+        default=defaults.maximum_problem_variables,
+        metavar="N|none",
+        help="Skip larger models before plugin setup; 'none' enables bounded-core use at any size.",
     )
     parser.add_argument(
-        "--maximum-integer-variables", type=int, default=defaults.maximum_integer_variables
+        "--maximum-integer-variables",
+        type=_optional_positive_int,
+        default=defaults.maximum_integer_variables,
+        metavar="N|none",
+        help="Skip models with more integer variables; 'none' removes this structural gate.",
     )
     parser.add_argument("--qplib-problem-types", nargs="+", default=None)
     parser.add_argument("--minimum-core-size", type=int, default=defaults.minimum_core_size)

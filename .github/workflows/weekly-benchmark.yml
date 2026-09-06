@@ -33,8 +33,18 @@ jobs:
             --output weekly-public/miplib-result.json
           uv run qqa benchmark compare weekly-public/qplib/QPLIB_0031.qplib \
             --format qplib --solvers scip-aggressive sg-cqqa --seeds 0 1 \
-            --time-limit 10 --continue-on-error --quiet \
+            --time-limit 15 --threads 1 --maximum-problem-variables none \
+            --maximum-integer-variables none --min-qqa-time 1 \
+            --minimum-runtime-startup-time 1 --min-call-time 0.05 \
+            --maximum-call-time 12 --maximum-call-time-fraction 0.8 \
+            --maximum-overhead-fraction 0.5 --max-calls 1 \
+            --sol-size 32 --epochs 100 --fast-candidates 0 \
+            --continue-on-error --quiet \
             --output weekly-public/qplib-result.json
+      - name: Verify benchmark completion and an actual QQA intervention
+        run: |
+          jq -e '(.failures | length) == 0' weekly-public/miplib-result.json
+          jq -e '(.failures | length) == 0 and ([.results[] | select(.solver == "sg-cqqa") | (.qqa.qqa_calls // 0)] | any(. > 0))' weekly-public/qplib-result.json
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: weekly-benchmark

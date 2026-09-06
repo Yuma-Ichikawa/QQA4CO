@@ -113,7 +113,8 @@ class ChanceConstraintFactor:
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         residuals = torch.stack([factor.evaluate(values) for factor in self.scenarios], dim=-1)
         probabilities = self.probabilities
-        assert probabilities is not None
+        if probabilities is None:
+            raise RuntimeError("Scenario probabilities were not initialized.")
         probability = (torch.sigmoid(residuals / self.temperature) * probabilities.to(values)).sum(
             dim=-1
         )
@@ -160,8 +161,10 @@ class DistributionallyRobustChanceFactor:
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         residuals = torch.stack([factor.evaluate(values) for factor in self.scenarios], dim=-1)
-        assert self.probabilities is not None
-        nominal = (torch.sigmoid(residuals / self.temperature) * self.probabilities.to(values)).sum(
+        probabilities = self.probabilities
+        if probabilities is None:
+            raise RuntimeError("Scenario probabilities were not initialized.")
+        nominal = (torch.sigmoid(residuals / self.temperature) * probabilities.to(values)).sum(
             dim=-1
         )
         worst_probability = (nominal + self.ambiguity_radius).clamp_max(1.0)
@@ -198,8 +201,10 @@ class WassersteinDROFactor:
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         outcomes = torch.stack([factor.evaluate(values) for factor in self.scenarios], dim=-1)
-        assert self.probabilities is not None
-        nominal = (outcomes * self.probabilities.to(values)).sum(dim=-1)
+        probabilities = self.probabilities
+        if probabilities is None:
+            raise RuntimeError("Scenario probabilities were not initialized.")
+        nominal = (outcomes * probabilities.to(values)).sum(dim=-1)
         return nominal + self.radius * self.lipschitz_constant
 
 
@@ -234,8 +239,10 @@ class PhiDivergenceDROFactor:
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         outcomes = torch.stack([factor.evaluate(values) for factor in self.scenarios], dim=-1)
-        assert self.probabilities is not None
-        probabilities = self.probabilities.to(values)
+        probabilities = self.probabilities
+        if probabilities is None:
+            raise RuntimeError("Scenario probabilities were not initialized.")
+        probabilities = probabilities.to(values)
         if self.kind == "chi2":
             mean = (outcomes * probabilities).sum(dim=-1)
             variance = ((outcomes - mean.unsqueeze(-1)).square() * probabilities).sum(dim=-1)
@@ -268,8 +275,10 @@ class MomentAmbiguityDROFactor:
 
     def evaluate(self, values: torch.Tensor) -> torch.Tensor:
         outcomes = torch.stack([factor.evaluate(values) for factor in self.scenarios], dim=-1)
-        assert self.probabilities is not None
-        probability = self.probabilities.to(values)
+        probabilities = self.probabilities
+        if probabilities is None:
+            raise RuntimeError("Scenario probabilities were not initialized.")
+        probability = probabilities.to(values)
         mean = (outcomes * probability).sum(dim=-1)
         variance = ((outcomes - mean.unsqueeze(-1)).square() * probability).sum(dim=-1)
         factor = math.sqrt(self.confidence / (1.0 - self.confidence))
