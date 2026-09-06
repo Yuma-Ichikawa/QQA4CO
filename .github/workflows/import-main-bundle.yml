@@ -1,9 +1,11 @@
 name: Import verified main bundle
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
+      - ".github/workflows/import-main-bundle.yml"
       - ".github/transport/qqa-main.bundle"
 
 permissions:
@@ -32,6 +34,5 @@ jobs:
           export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
           export GIT_AUTHOR_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           export GIT_COMMITTER_DATE="$GIT_AUTHOR_DATE"
-          merged=$(printf '%s
-' 'Merge verified QQA4CO release history' | git commit-tree "$imported_tree" -p "$GITHUB_SHA" -p "$imported")
+          merged=$(git commit-tree "$imported_tree" -p "$GITHUB_SHA" -p "$imported" -m "Merge verified QQA4CO release history")
           git push origin "$merged:refs/heads/main"
