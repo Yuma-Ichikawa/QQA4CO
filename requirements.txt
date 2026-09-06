@@ -16,7 +16,7 @@
 # dependency-confusion protection or selecting stale utility packages from a
 # secondary index.
 --find-links https://download.pytorch.org/whl/cpu/torch/
-torch==2.13.0+cpu
+torch==2.14.0
 
 numpy==2.5.2
 networkx==3.6.1
