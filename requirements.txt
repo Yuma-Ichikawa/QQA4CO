@@ -27,7 +27,7 @@ tqdm==4.70.0
 # Interactive plots + GUI (REQUIRED by app/_common.py at import time).
 plotly==7.0.0
 pandas==3.0.5
-streamlit==1.62.0
+streamlit==1.63.0
 
 # Install this repository so ``import qqa`` works inside the app.
 # IMPORTANT: must be the LAST line. We bump pyproject.toml's ``version``
