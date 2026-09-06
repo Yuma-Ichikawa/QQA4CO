@@ -851,7 +851,12 @@ def compare_benchmark_solvers(
         raise ValueError("seeds must contain non-negative integers.")
 
     base_config = qqa_config or QQAHeuristicConfig()
-    qqa_config_metadata = asdict(base_config)
+    # Compare the same JSON-domain representation that is persisted in a
+    # checkpoint.  Dataclass tuples (notably the QPLIB PROBTYPE allow-list)
+    # otherwise become lists on disk and make a valid resume look different.
+    qqa_config_metadata = json.loads(
+        json.dumps(asdict(base_config), ensure_ascii=False, allow_nan=False)
+    )
     # Per-run seeds come from the explicit campaign ``seeds`` axis below.
     # Keeping the constructor seed here duplicates that axis and prevents
     # independently executed seed shards from validating as one campaign.

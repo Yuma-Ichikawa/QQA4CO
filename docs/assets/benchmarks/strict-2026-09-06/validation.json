@@ -1,0 +1,73 @@
+{
+  "miplib-1": {
+    "completed_runs": 2400,
+    "failures_by_outcome": {},
+    "requested_runs": 2400,
+    "runtime_over_budget_plus_0_1s": 897,
+    "verified_feasible_vectors": 937
+  },
+  "miplib-10": {
+    "completed_runs": 2400,
+    "failures_by_outcome": {},
+    "requested_runs": 2400,
+    "runtime_over_budget_plus_0_1s": 406,
+    "verified_feasible_vectors": 1580
+  },
+  "miplib-30": {
+    "completed_runs": 2392,
+    "failures_by_outcome": {
+      "timeout": 8
+    },
+    "requested_runs": 2400,
+    "runtime_over_budget_plus_0_1s": 201,
+    "verified_feasible_vectors": 1740
+  },
+  "miplib-300": {
+    "completed_runs": 2362,
+    "failures_by_outcome": {
+      "timeout": 38
+    },
+    "requested_runs": 2400,
+    "runtime_over_budget_plus_0_1s": 207,
+    "verified_feasible_vectors": 1951
+  },
+  "qplib-1": {
+    "completed_runs": 4294,
+    "failures_by_outcome": {
+      "timeout": 236
+    },
+    "requested_runs": 4530,
+    "runtime_over_budget_plus_0_1s": 1206,
+    "verified_feasible_vectors": 2445
+  },
+  "qplib-10": {
+    "completed_runs": 4235,
+    "failures_by_outcome": {
+      "backend_failure": 9,
+      "timeout": 286
+    },
+    "requested_runs": 4530,
+    "runtime_over_budget_plus_0_1s": 442,
+    "verified_feasible_vectors": 3332
+  },
+  "qplib-30": {
+    "completed_runs": 4261,
+    "failures_by_outcome": {
+      "backend_failure": 21,
+      "timeout": 248
+    },
+    "requested_runs": 4530,
+    "runtime_over_budget_plus_0_1s": 336,
+    "verified_feasible_vectors": 3611
+  },
+  "qplib-300": {
+    "completed_runs": 4157,
+    "failures_by_outcome": {
+      "backend_failure": 144,
+      "timeout": 229
+    },
+    "requested_runs": 4530,
+    "runtime_over_budget_plus_0_1s": 273,
+    "verified_feasible_vectors": 3764
+  }
+}

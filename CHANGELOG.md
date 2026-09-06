@@ -87,6 +87,13 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Make balanced solver order invariant to campaign sharding by deriving its
   phase from the portable instance name and seed, including independently
   executed structural-bypass cells.
+- Compare resumable campaign settings in their persisted JSON representation,
+  so tuple-valued QPLIB type allow-lists resume without a false configuration
+  mismatch after checkpoint serialization.
+- Publish the path-free aggregate and verification report for the complete
+  27,720-run MIPLIB/QPLIB campaign across four budgets and five seeds,
+  including failures, cold-clock overruns, instance-level inference, measured
+  QQA activation, and the absence of suite-wide SCIP dominance.
 
 ### Repository layout
 

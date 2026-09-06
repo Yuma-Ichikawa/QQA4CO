@@ -1137,11 +1137,13 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert suite.summary["by_problem_type"]["MIPLIB"]["instances"] == 2
 
     checkpoint = tmp_path / "comparison.json"
+    qqa_config = QQAHeuristicConfig(allowed_qplib_problem_types=("QML",))
     comparison = compare_benchmark_solvers(
         [path],
         solvers=("scip", "sg-cqqa"),
         seeds=(0,),
         baseline_solver="scip",
+        qqa_config=qqa_config,
         time_limit=1.0,
         checkpoint_file=checkpoint,
     )
@@ -1151,11 +1153,16 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert comparison.comparison_config["instances"] == ["portable.mps"]
     assert "seed" not in comparison.comparison_config["qqa_config"]
     assert str(tmp_path) not in json.dumps(comparison.to_dict())
+    checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert checkpoint_payload["comparison_config"]["qqa_config"]["allowed_qplib_problem_types"] == [
+        "QML"
+    ]
     resumed = compare_benchmark_solvers(
         [path],
         solvers=("scip", "sg-cqqa"),
         seeds=(0,),
         baseline_solver="scip",
+        qqa_config=qqa_config,
         time_limit=1.0,
         checkpoint_file=checkpoint,
         resume=True,

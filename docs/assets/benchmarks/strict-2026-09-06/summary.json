@@ -1,0 +1,489 @@
+{
+  "implementation_revision": "f30b9f82b79dcf9bc09c9538c7e3e75a8567f8fb",
+  "protocol": {
+    "budgets_seconds": [
+      1,
+      10,
+      30,
+      300
+    ],
+    "clock": "cold_end_to_end_from_isolated_interpreter_start",
+    "equivalent_baseline_reuse": false,
+    "execution_order": "balanced_by_portable_instance_name_and_seed",
+    "full_original_coordinate_solutions_retained_privately": true,
+    "instances": {
+      "miplib": 240,
+      "qplib": 453
+    },
+    "libraries": [
+      "miplib",
+      "qplib"
+    ],
+    "qqa_profiles": {
+      "miplib": {
+        "allowed_qplib_problem_types": null,
+        "core_dtype": "float64",
+        "core_size": 32,
+        "device": "cpu",
+        "epochs": 20,
+        "max_candidates": 4,
+        "maximum_call_time": 0.15,
+        "maximum_integer_variables": 2048,
+        "maximum_overhead_fraction": 0.05,
+        "maximum_problem_variables": 32,
+        "minimum_core_size": 16,
+        "minimum_qqa_time": 20.0,
+        "minimum_runtime_startup_time": 8.0,
+        "qqa_fix_fraction": 0.25,
+        "sol_size": 16
+      },
+      "qplib": {
+        "allowed_qplib_problem_types": [
+          "QML"
+        ],
+        "core_dtype": "float64",
+        "core_size": 32,
+        "device": "cpu",
+        "epochs": 20,
+        "max_candidates": 4,
+        "maximum_call_time": 0.15,
+        "maximum_integer_variables": 2048,
+        "maximum_overhead_fraction": 0.05,
+        "maximum_problem_variables": 64,
+        "minimum_core_size": 16,
+        "minimum_qqa_time": 20.0,
+        "minimum_runtime_startup_time": 8.0,
+        "qqa_fix_fraction": 0.25,
+        "sol_size": 16
+      }
+    },
+    "seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "solvers": [
+      "scip-aggressive",
+      "sg-cqqa"
+    ],
+    "threads_per_solver": 1
+  },
+  "rows": [
+    {
+      "baseline_feasible_runs": 470,
+      "budget_seconds": 1,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 2400,
+      "failed_runs": 0,
+      "failures_by_outcome": {},
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 98,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 25,
+        "ties": 1149,
+        "wins": 26
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 467,
+      "integral_instance_wtl": {
+        "losses": 21,
+        "ties": 185,
+        "wins": 27
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 123,
+        "ties": 936,
+        "wins": 141
+      },
+      "integral_sign_test_pvalue": 0.4708790136217118,
+      "library": "miplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 1200,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 2400
+    },
+    {
+      "baseline_feasible_runs": 790,
+      "budget_seconds": 10,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 2400,
+      "failed_runs": 0,
+      "failures_by_outcome": {},
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 169,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 9,
+        "ties": 1184,
+        "wins": 7
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 790,
+      "integral_instance_wtl": {
+        "losses": 51,
+        "ties": 141,
+        "wins": 41
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 261,
+        "ties": 696,
+        "wins": 243
+      },
+      "integral_sign_test_pvalue": 0.3481412903192065,
+      "library": "miplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 1200,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 2400
+    },
+    {
+      "baseline_feasible_runs": 870,
+      "budget_seconds": 30,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 2392,
+      "failed_runs": 8,
+      "failures_by_outcome": {
+        "timeout": 8
+      },
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 183,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 8,
+        "ties": 1183,
+        "wins": 5
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 870,
+      "integral_instance_wtl": {
+        "losses": 50,
+        "ties": 118,
+        "wins": 65
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 304,
+        "ties": 575,
+        "wins": 317
+      },
+      "integral_sign_test_pvalue": 0.19149593512028196,
+      "library": "miplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 1196,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 2400
+    },
+    {
+      "baseline_feasible_runs": 976,
+      "budget_seconds": 300,
+      "callback_deadline_safety_reserved_seconds": 8.426098293768737,
+      "completed_runs": 2362,
+      "failed_runs": 38,
+      "failures_by_outcome": {
+        "timeout": 38
+      },
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 203,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 1,
+        "ties": 2,
+        "wins": 2
+      },
+      "final_seed_wtl": {
+        "losses": 7,
+        "ties": 1159,
+        "wins": 13
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 975,
+      "integral_instance_wtl": {
+        "losses": 92,
+        "ties": 64,
+        "wins": 76
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 3,
+        "ties": 0,
+        "wins": 2
+      },
+      "integral_seed_wtl": {
+        "losses": 455,
+        "ties": 309,
+        "wins": 415
+      },
+      "integral_sign_test_pvalue": 0.247081971798657,
+      "library": "miplib",
+      "numerical_runtime_initialisation_seconds": 18.531990628049243,
+      "numerical_runtime_loads": 5,
+      "paired_seed_runs": 1179,
+      "qqa_executed_pairs": 5,
+      "qqa_incumbent_improvement_pairs": 1,
+      "qqa_plugin_active_runs": 5,
+      "requested_runs": 2400
+    },
+    {
+      "baseline_feasible_runs": 1224,
+      "budget_seconds": 1,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 4294,
+      "failed_runs": 236,
+      "failures_by_outcome": {
+        "timeout": 236
+      },
+      "final_instance_wtl": {
+        "losses": 4,
+        "ties": 252,
+        "wins": 1
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 64,
+        "ties": 2019,
+        "wins": 62
+      },
+      "final_sign_test_pvalue": 0.375,
+      "hybrid_feasible_runs": 1221,
+      "integral_instance_wtl": {
+        "losses": 71,
+        "ties": 261,
+        "wins": 91
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 408,
+        "ties": 1276,
+        "wins": 461
+      },
+      "integral_sign_test_pvalue": 0.13524792193400165,
+      "library": "qplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 2145,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 4530
+    },
+    {
+      "baseline_feasible_runs": 1666,
+      "budget_seconds": 10,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 4235,
+      "failed_runs": 295,
+      "failures_by_outcome": {
+        "backend_failure": 9,
+        "timeout": 286
+      },
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 350,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 14,
+        "ties": 2098,
+        "wins": 5
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 1666,
+      "integral_instance_wtl": {
+        "losses": 143,
+        "ties": 133,
+        "wins": 141
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 749,
+        "ties": 640,
+        "wins": 728
+      },
+      "integral_sign_test_pvalue": 0.9526959210558441,
+      "library": "qplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 2117,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 4530
+    },
+    {
+      "baseline_feasible_runs": 1805,
+      "budget_seconds": 30,
+      "callback_deadline_safety_reserved_seconds": 0,
+      "completed_runs": 4261,
+      "failed_runs": 269,
+      "failures_by_outcome": {
+        "backend_failure": 21,
+        "timeout": 248
+      },
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 377,
+        "wins": 2
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 11,
+        "ties": 2097,
+        "wins": 20
+      },
+      "final_sign_test_pvalue": 0.5,
+      "hybrid_feasible_runs": 1806,
+      "integral_instance_wtl": {
+        "losses": 155,
+        "ties": 104,
+        "wins": 161
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 828,
+        "ties": 484,
+        "wins": 816
+      },
+      "integral_sign_test_pvalue": 0.7785544502910261,
+      "library": "qplib",
+      "numerical_runtime_initialisation_seconds": 0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 2128,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 0,
+      "requested_runs": 4530
+    },
+    {
+      "baseline_feasible_runs": 1883,
+      "budget_seconds": 300,
+      "callback_deadline_safety_reserved_seconds": 0.0,
+      "completed_runs": 4157,
+      "failed_runs": 373,
+      "failures_by_outcome": {
+        "backend_failure": 144,
+        "timeout": 229
+      },
+      "final_instance_wtl": {
+        "losses": 0,
+        "ties": 392,
+        "wins": 0
+      },
+      "final_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "final_seed_wtl": {
+        "losses": 3,
+        "ties": 2067,
+        "wins": 7
+      },
+      "final_sign_test_pvalue": 1.0,
+      "hybrid_feasible_runs": 1881,
+      "integral_instance_wtl": {
+        "losses": 187,
+        "ties": 60,
+        "wins": 172
+      },
+      "integral_qqa_executed_seed_wtl": {
+        "losses": 0,
+        "ties": 0,
+        "wins": 0
+      },
+      "integral_seed_wtl": {
+        "losses": 903,
+        "ties": 282,
+        "wins": 892
+      },
+      "integral_sign_test_pvalue": 0.4600204512936048,
+      "library": "qplib",
+      "numerical_runtime_initialisation_seconds": 0.0,
+      "numerical_runtime_loads": 0,
+      "paired_seed_runs": 2077,
+      "qqa_executed_pairs": 0,
+      "qqa_incumbent_improvement_pairs": 0,
+      "qqa_plugin_active_runs": 5,
+      "requested_runs": 4530
+    }
+  ],
+  "schema_version": 1,
+  "snapshot_sha256": {
+    "miplib_archive": "c756eefd544d83b31809306b45d3549a1a5b9378e6aa78b68738b1a3b6a418fa",
+    "miplib_solutions": "9236602294c1a5aca5248b6f7d03689a7533ea3cbf3f3d92cff962e752e20af84",
+    "qplib_archive": "b3596e1264ed57c5f6a44e822679f5c9138e1985fe74bc8341c3becbc666b9fd",
+    "qplib_solutions": "6e024cd786b3049e572a96fbe89ddd0d73ff4d6bcac0c0427e9086d378dc0c43"
+  }
+}
