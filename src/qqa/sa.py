@@ -40,9 +40,10 @@ for paper-reproduction tests, but it is *no longer* the default sampler.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from time import time
+from time import perf_counter
 from typing import Any, Literal
 
 import numpy as np
@@ -67,6 +68,7 @@ class SAResult:
     history: dict = field(default_factory=dict)
     score: dict = field(default_factory=dict)
     polished_sol: torch.Tensor | None = None
+    diagnostics: dict = field(default_factory=dict)
 
 
 def _resolve_num_vars(problem) -> int:
@@ -351,6 +353,7 @@ def simulated_annealing(
     check_interval: int = 100,
     callback: Callable[[int, float, float], None] | None = None,
     polish: bool = True,
+    time_limit: float | None = None,
 ) -> SAResult:
     """Run GPU-parallel Simulated Annealing on ``problem``.
 
@@ -405,6 +408,8 @@ def simulated_annealing(
         raise ValueError(f"num_sweeps must be >= 0, got {num_sweeps}.")
     if history_stride < 1:
         raise ValueError(f"history_stride must be >= 1, got {history_stride}.")
+    if time_limit is not None and (not math.isfinite(time_limit) or time_limit < 0):
+        raise ValueError("time_limit must be finite and non-negative or None.")
 
     device = resolve_device(device)
     require_cuda_if_requested(device)
@@ -476,8 +481,12 @@ def simulated_annealing(
     best_per_chain = loss_curr.clone()
     best_state = x.clone()
 
-    runtime_start = time()
+    runtime_start = perf_counter()
+    deadline_reached = False
     for sweep in range(num_sweeps):
+        if time_limit is not None and perf_counter() - runtime_start >= time_limit:
+            deadline_reached = True
+            break
         beta_tensor = betas[sweep]
 
         with torch.no_grad():
@@ -523,7 +532,8 @@ def simulated_annealing(
                 f"mean_loss={mean_l:.4f}  best={best_obj:.4f}"
             )
 
-    runtime = time() - runtime_start
+    runtime = perf_counter() - runtime_start
+    deadline_reached |= time_limit is not None and runtime >= time_limit
     if verbose:
         print(f"[SA] done. best={best_obj:.6f}  runtime={runtime:.2f}s")
 
@@ -535,7 +545,7 @@ def simulated_annealing(
     # Default-on greedy 1-flip polish — mirrors ``qqa.anneal`` / ``population_annealing``
     # so every QQA4CO backend exposes the same post-processing contract.
     best_sol_disc, best_obj, polished_sol = apply_polish_if_improves(
-        problem, best_sol_disc, best_obj, polish=polish
+        problem, best_sol_disc, best_obj, polish=polish and not deadline_reached
     )
 
     score = safe_score_summary(problem, best_sol_disc, fallback_obj=float(best_obj))
@@ -547,4 +557,5 @@ def simulated_annealing(
         history=history,
         score=score,
         polished_sol=polished_sol,
+        diagnostics={"deadline_reached": deadline_reached, "time_limit": time_limit},
     )

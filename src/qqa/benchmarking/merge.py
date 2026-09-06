@@ -151,6 +151,14 @@ def merge_benchmark_campaigns(paths) -> BenchmarkComparisonResult:
         "failures_by_solver": {
             solver: sum(row.solver == solver for row in failures) for solver in solver_names
         },
+        "failures_by_type": {
+            error_type: sum(row.error_type == error_type for row in failures)
+            for error_type in sorted({row.error_type for row in failures})
+        },
+        "failures_by_outcome": {
+            outcome: sum(row.outcome == outcome for row in failures)
+            for outcome in sorted({row.outcome for row in failures})
+        },
     }
     return BenchmarkComparisonResult(
         tuple(results),

@@ -8,6 +8,8 @@ from dataclasses import asdict, dataclass, field
 from statistics import median
 from typing import Any, cast
 
+from qqa.benchmarking.hub import paired_metric_summary
+
 
 @dataclass(frozen=True, slots=True)
 class IncumbentPoint:
@@ -202,6 +204,12 @@ class BenchmarkResult:
     qqa: dict[str, Any] | None = None
     run_config: dict[str, Any] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
+    time_to_target: float | None = None
+    stage_timings: dict[str, float] = field(default_factory=dict)
+    peak_memory_mb: dict[str, float] = field(default_factory=dict)
+    outcome: str = "unknown"
+    solution_sha256: str | None = None
+    solution_values: tuple[float, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -215,8 +223,20 @@ class BenchmarkResult:
         values["trajectory"] = tuple(
             IncumbentPoint(**point) for point in values.get("trajectory", ())
         )
+        values["solution_values"] = tuple(values.get("solution_values", ()))
         allowed = cls.__dataclass_fields__
         return cls(**{key: value for key, value in values.items() if key in allowed})
+
+
+def _failure_outcome(error_type: str) -> str:
+    normalised = error_type.lower()
+    if "timeout" in normalised:
+        return "timeout"
+    if "outofmemory" in normalised or "memoryerror" in normalised or "oom" in normalised:
+        return "out_of_memory"
+    if "unsupported" in normalised or "notimplemented" in normalised:
+        return "unsupported"
+    return "backend_failure"
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +248,11 @@ class BenchmarkFailure:
     solver: str
     seed: int
     error_type: str
+    outcome: str = "backend_failure"
+
+    def __post_init__(self) -> None:
+        if self.outcome == "backend_failure":
+            object.__setattr__(self, "outcome", _failure_outcome(self.error_type))
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -248,6 +273,9 @@ def summarise_benchmarks(results: Sequence[BenchmarkResult]) -> dict[str, object
 
     def one_group(rows: Sequence[BenchmarkResult]) -> dict[str, object]:
         qqa_rows = [row.qqa for row in rows if row.qqa is not None]
+        plugin_active_runs = sum(bool(row.run_config.get("qqa_plugin_active")) for row in rows)
+        reused_runs = sum(bool(row.run_config.get("equivalent_baseline_reuse")) for row in rows)
+        qqa_executed_runs = sum(int(row.get("qqa_calls", 0)) > 0 for row in qqa_rows)
         candidates = sum(int(row.get("candidates", 0)) for row in qqa_rows)
         completed = sum(int(row.get("completion_feasible", 0)) for row in qqa_rows)
         accepted = sum(int(row.get("accepted", 0)) for row in qqa_rows)
@@ -274,10 +302,23 @@ def summarise_benchmarks(results: Sequence[BenchmarkResult]) -> dict[str, object
             "feasible_rate": (sum(int(row.feasible) for row in rows) / len(rows) if rows else 0.0),
             "median_runtime": _median([row.runtime for row in rows]),
             "median_time_to_first_feasible": _median([row.time_to_first_feasible for row in rows]),
+            "median_time_to_target": _median([row.time_to_target for row in rows]),
             "median_gap": _median([row.gap for row in rows]),
             "median_primal_error": _median([row.primal_error for row in rows]),
             "median_primal_integral": _median([row.primal_integral for row in rows]),
             "median_maximum_infeasibility": _median([row.maximum_infeasibility for row in rows]),
+            "median_peak_process_memory_mb": _median(
+                [row.peak_memory_mb.get("process_rss") for row in rows]
+            ),
+            "outcomes": {
+                outcome: sum(row.outcome == outcome for row in rows)
+                for outcome in sorted({row.outcome for row in rows})
+            },
+            "independently_executed_runs": len(rows) - reused_runs,
+            "equivalent_baseline_reuse_runs": reused_runs,
+            "qqa_plugin_active_runs": plugin_active_runs,
+            "qqa_executed_runs": qqa_executed_runs,
+            "qqa_active_rate": qqa_executed_runs / len(rows) if rows else 0.0,
             "hybrid_candidates": candidates,
             "hybrid_completion_rate": completed / candidates if candidates else 0.0,
             "hybrid_acceptance_rate": accepted / candidates if candidates else 0.0,
@@ -383,6 +424,121 @@ def _record_outcome(
     primal_integral_counts[labels[integral + 1]] += 1
 
 
+def _paired_instance_effects(
+    grouped: dict[tuple[str, int], dict[str, BenchmarkResult]],
+    *,
+    solver: str,
+    baseline_solver: str,
+    metric: str,
+) -> tuple[list[float], int]:
+    """Return seed-median effects, with each instance counted only once."""
+    by_instance: dict[str, list[float]] = {}
+    seed_pairs = 0
+    for (instance, _seed), group in grouped.items():
+        if baseline_solver not in group or solver not in group:
+            continue
+        candidate = group[solver]
+        baseline = group[baseline_solver]
+        if metric == "primal_integral":
+            left, right = candidate.primal_integral, baseline.primal_integral
+            if left is None or right is None:
+                continue
+            effect = float(left) - float(right)
+        else:
+            if not candidate.feasible or not baseline.feasible:
+                continue
+            if candidate.primal_error is not None and baseline.primal_error is not None:
+                effect = float(candidate.primal_error) - float(baseline.primal_error)
+            elif candidate.objective is not None and baseline.objective is not None:
+                scale = max(1.0, abs(float(baseline.objective)))
+                difference = float(candidate.objective) - float(baseline.objective)
+                effect = (
+                    difference / scale
+                    if candidate.objective_sense == "minimize"
+                    else -difference / scale
+                )
+            else:
+                continue
+        if not math.isfinite(effect):
+            continue
+        by_instance.setdefault(instance, []).append(effect)
+        seed_pairs += 1
+    return [float(median(values)) for _, values in sorted(by_instance.items())], seed_pairs
+
+
+def _statistical_summary(
+    grouped: dict[tuple[str, int], dict[str, BenchmarkResult]],
+    *,
+    solver: str,
+    baseline_solver: str,
+) -> dict[str, object]:
+    """Build deterministic inference with instance—not seed—as the unit."""
+    output: dict[str, object] = {
+        "confidence_unit": "instance_after_seed_median",
+        "bootstrap_samples": 2000,
+    }
+    for metric in ("primal_quality", "primal_integral"):
+        effects, seed_pairs = _paired_instance_effects(
+            grouped,
+            solver=solver,
+            baseline_solver=baseline_solver,
+            metric=metric,
+        )
+        if not effects:
+            output[metric] = {
+                "eligible_instances": 0,
+                "eligible_seed_pairs": 0,
+                "median_candidate_minus_baseline": None,
+                "confidence_interval": None,
+                "sign_test_pvalue": None,
+            }
+            continue
+        inference = paired_metric_summary(
+            effects,
+            [0.0] * len(effects),
+            lower_is_better=True,
+            bootstrap_samples=2000,
+            seed=0,
+        )
+        output[metric] = {
+            "eligible_instances": inference.pairs,
+            "eligible_seed_pairs": seed_pairs,
+            "wins": inference.wins,
+            "ties": inference.ties,
+            "losses": inference.losses,
+            "median_candidate_minus_baseline": inference.median_difference,
+            "confidence_interval": list(inference.confidence_interval),
+            "sign_test_pvalue": inference.sign_test_pvalue,
+        }
+    return output
+
+
+def _anytime_ecdf(rows: Sequence[BenchmarkResult]) -> dict[str, object]:
+    """Return a fixed-grid ECDF of time to first verified feasible solution."""
+    output: dict[str, object] = {}
+    for solver in sorted({row.solver for row in rows}):
+        selected = [row for row in rows if row.solver == solver]
+        fractions = (0.01, 0.03, 0.1, 0.3, 1.0)
+        points = []
+        for fraction in fractions:
+            reached = 0
+            for row in selected:
+                horizon = float(row.run_config.get("time_limit", row.runtime))
+                cutoff = fraction * horizon
+                reached += int(
+                    row.time_to_first_feasible is not None
+                    and float(row.time_to_first_feasible) <= cutoff
+                )
+            points.append(
+                {
+                    "normalised_time": fraction,
+                    "verified_feasible_fraction": reached / len(selected) if selected else 0.0,
+                }
+            )
+        output[solver] = {"runs": len(selected), "points": points}
+    return output
+
+
 def summarise_comparison(
     results: Sequence[BenchmarkResult],
     *,
@@ -453,6 +609,11 @@ def summarise_comparison(
         }
         if solver == "sg-cqqa":
             pairwise[solver]["qqa_intervention"] = qqa_intervention
+        pairwise[solver]["inference"] = _statistical_summary(
+            grouped,
+            solver=solver,
+            baseline_solver=baseline_solver,
+        )
     return {
         "baseline_solver": baseline_solver,
         "by_solver": {
@@ -460,6 +621,7 @@ def summarise_comparison(
             for solver in solvers
         },
         "pairwise": pairwise,
+        "anytime_ecdf": _anytime_ecdf(rows),
     }
 
 

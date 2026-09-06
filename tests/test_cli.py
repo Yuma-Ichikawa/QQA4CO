@@ -137,6 +137,10 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
     assert args.minimum_core_size == 16
     assert args.maximum_core_saturation == pytest.approx(0.9)
     assert args.maximum_call_time == pytest.approx(0.15)
+    assert args.min_qqa_time == pytest.approx(20.0)
+    assert args.minimum_runtime_startup_time == pytest.approx(8.0)
+    assert args.max_candidates == 4
+    assert args.core_dtype == "float64"
     assert args.qqa_fix_fraction == pytest.approx(0.25)
     assert args.minimum_relative_improvement == pytest.approx(0.001)
     assert args.qplib_problem_types is None
@@ -163,8 +167,10 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
         "minimum_core_size",
         "maximum_core_saturation",
         "completion_time",
+        "min_qqa_time",
         "minimum_relative_improvement",
         "maximum_overhead_fraction",
+        "core_dtype",
     ):
         assert getattr(run, option) == getattr(args, option)
 
@@ -172,6 +178,21 @@ def test_benchmark_compare_defaults_to_conservative_balanced_qqa_profile():
         ["benchmark", "merge", "shard.json.gz", "--output", "all.json", "--quiet"]
     )
     assert merged.quiet
+
+    published = build_parser().parse_args(
+        [
+            "benchmark",
+            "publish",
+            "--campaign",
+            "miplib=campaign.json",
+            "--snapshot",
+            "miplib=snapshot.json",
+            "--output",
+            "public-results",
+        ]
+    )
+    assert published.campaign == ["miplib=campaign.json"]
+    assert published.snapshot == ["miplib=snapshot.json"]
 
 
 def test_cli_score_summary_is_compact_and_auditable(capsys):

@@ -15,7 +15,7 @@ page is the explanation of how the flags interact.
 
 ```bash
 qqa version
-# 0.10.0
+# 0.11.0
 ```
 
 Prints the value of `qqa.__version__`, which is single-sourced from
@@ -194,6 +194,11 @@ qqa benchmark compare data/public-benchmarks/miplib/pk1.mps.gz \
   --baseline-solver scip-aggressive --seeds 0 1 2 \
   --time-limit 60 --output comparison.json
 qqa benchmark merge shard-0.json shard-1.json --output comparison.json
+qqa benchmark publish \
+  --campaign miplib=comparison.json \
+  --snapshot miplib=miplib-snapshot.json \
+  --implementation-revision COMMIT_SHA \
+  --output public-results
 ```
 
 `fetch` accepts `miplib` or `qplib`; omit `--instance` to download the full
@@ -203,7 +208,11 @@ PROBTYPE when available, and portable source provenance.
 `run` accepts `--solver scip`, `--solver scip-aggressive`, or
 `--solver sg-cqqa`. Shared flags are
 `--time-limit`, `--gap`, `--threads`, `--reference-file`, `--format`,
-`--output`, and `--quiet`. SG-CQQA additionally accepts `--core-size`,
+`--worker-timeout`, `--implementation-revision`,
+`--include-solution-values`, `--output`, and `--quiet`.
+The solution flag stores values in original variable order and can produce a
+large JSON file; a SHA-256 solution identity is recorded even when values are
+omitted. SG-CQQA additionally accepts `--core-size`,
 `--maximum-problem-variables`, `--maximum-integer-variables`,
 `--qplib-problem-types`, `--minimum-core-size`,
 `--maximum-core-saturation`, `--sol-size`, `--epochs`, `--max-calls`,
@@ -225,6 +234,17 @@ and win/tie/loss counts against `--baseline-solver`, including counts
 stratified by actual QQA execution. The defaults compare `scip-aggressive`
 against `sg-cqqa` in balanced order. This is the direct plugin ablation because
 both use the same aggressive native SCIP heuristic setting.
+The balanced order uses a stable hash of the portable instance basename plus
+the seed, so splitting a campaign into shards does not reset the order phase.
+
+For audit-grade cells, `--include-import-in-budget` starts before launching each
+isolated interpreter and therefore includes package startup and original-model
+parsing. `--isolate-all` gives every solver a fresh native process, and
+`--no-equivalent-baseline-reuse` independently executes structurally bypassed
+SG-CQQA cells. The summary still reports independent runs, equivalent reuse,
+QQA plugin activation, actual QQA calls, QQA-attributable improvements,
+normalized failure outcomes, stage durations, peak memory, and instance-level
+confidence intervals separately.
 
 `--threads` constrains SCIP workers, LP-solver threads, and (for SG-CQQA)
 Torch threads. Reproducible CPU campaigns should additionally cap the BLAS and
@@ -247,6 +267,10 @@ Cartesian grid; partial or overlapping campaign collections are rejected.
 `merge` combines disjoint comparison shards after checking that every setting
 except the instance list is identical. It rejects overlapping instances or
 duplicate solver/instance/seed rows and recomputes all medians and W/T/L counts.
+`benchmark publish` accepts repeatable `--campaign LIBRARY=PATH` and matching
+`--snapshot LIBRARY=PATH` options. It emits path-free compact/full artifacts
+and a checksum manifest; duplicate library names or mismatched sets are
+rejected.
 See the [MIPLIB/QPLIB guide](../miplib-qplib.md) for metric definitions and
 reproducibility guidance.
 

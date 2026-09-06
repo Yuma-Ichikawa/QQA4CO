@@ -52,6 +52,7 @@ class SolverConfig:
     return_population: bool = False
     exact_backend: Literal["auto", "none", "scip", "highs", "cpsat", "cuopt"] = "auto"
     require_certificate: bool = False
+    require_qqa_primal: bool = False
     deterministic: bool = False
     compile_core: bool = False
     sparse_kernel: Literal["auto", "torch", "triton"] = "auto"
@@ -125,7 +126,12 @@ class SolverConfig:
             raise ValueError("Unsupported exact_backend.")
         if self.sparse_kernel not in {"auto", "torch", "triton"}:
             raise ValueError("sparse_kernel must be auto, torch, or triton.")
-        for name in ("deterministic", "compile_core", "cuda_graphs"):
+        for name in (
+            "deterministic",
+            "compile_core",
+            "cuda_graphs",
+            "require_qqa_primal",
+        ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be boolean.")
         if self.cuda_graphs and self.heterogeneous_replicas and self.replica_exchange_interval:
@@ -155,7 +161,9 @@ class SolverConfig:
         ):
             raise ValueError("archive_size must be a non-negative integer.")
         if self.backend != "qqa" and (
-            self.require_certificate or self.exact_backend not in {"auto", "none"}
+            self.require_certificate
+            or self.require_qqa_primal
+            or self.exact_backend not in {"auto", "none"}
         ):
             raise ValueError(
                 "Exact certification requires backend='qqa'; SA, PA, and iSCO "

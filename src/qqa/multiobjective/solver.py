@@ -555,9 +555,9 @@ def pareto_anneal(
         isinstance(time_limit, bool)
         or not isinstance(time_limit, Real)
         or not math.isfinite(time_limit)
-        or time_limit <= 0
+        or time_limit < 0
     ):
-        raise ValueError("time_limit must be finite and positive or None.")
+        raise ValueError("time_limit must be finite and non-negative or None.")
     if (
         isinstance(learning_rate, bool)
         or not isinstance(learning_rate, Real)

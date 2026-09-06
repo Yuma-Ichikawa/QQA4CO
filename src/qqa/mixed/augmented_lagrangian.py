@@ -35,17 +35,41 @@ def normalised_residuals(problem, values: torch.Tensor) -> tuple[torch.Tensor, t
     )
 
 
-@dataclass(slots=True)
 class ConstraintArchive:
-    """Separate feasibility-first and feasible-objective incumbents."""
+    """Device-resident feasibility-first and feasible-objective incumbents."""
 
-    feasibility_solution: torch.Tensor | None = None
-    objective_solution: torch.Tensor | None = None
-    maximum_violation: float = math.inf
-    total_violation: float = math.inf
-    feasibility_objective: float = math.inf
-    objective: float = math.inf
-    observations: int = 0
+    def __init__(self) -> None:
+        self.feasibility_solution: torch.Tensor | None = None
+        self._objective_solution: torch.Tensor | None = None
+        self._feasibility_key: torch.Tensor | None = None
+        self._objective_key: torch.Tensor | None = None
+        self._has_feasible: torch.Tensor | None = None
+        self.observations = 0
+
+    @property
+    def objective_solution(self) -> torch.Tensor | None:
+        """Return the feasible incumbent, synchronising only on explicit access."""
+        if self._objective_solution is None or self._has_feasible is None:
+            return None
+        return self._objective_solution if bool(self._has_feasible.item()) else None
+
+    @property
+    def maximum_violation(self) -> float:
+        return math.inf if self._feasibility_key is None else float(self._feasibility_key[0].item())
+
+    @property
+    def total_violation(self) -> float:
+        return math.inf if self._feasibility_key is None else float(self._feasibility_key[1].item())
+
+    @property
+    def feasibility_objective(self) -> float:
+        return math.inf if self._feasibility_key is None else float(self._feasibility_key[2].item())
+
+    @property
+    def objective(self) -> float:
+        if self._objective_key is None or self.objective_solution is None:
+            return math.inf
+        return float(self._objective_key.item())
 
     @staticmethod
     def _objective(problem, values: torch.Tensor) -> torch.Tensor:
@@ -66,54 +90,62 @@ class ConstraintArchive:
             maximum = matrix.amax(dim=1)
             total = matrix.sum(dim=1)
             objective = self._objective(problem, values)
-            feasibility_index = min(
-                range(len(values)),
-                key=lambda index: (
-                    float(maximum[index]),
-                    float(total[index]),
-                    float(objective[index]),
-                    index,
-                ),
-            )
-            feasibility_key = (
-                float(maximum[feasibility_index]),
-                float(total[feasibility_index]),
-                float(objective[feasibility_index]),
-            )
-            current_key = (
-                self.maximum_violation,
-                self.total_violation,
-                self.feasibility_objective,
-            )
-            if feasibility_key < current_key:
+            keys = torch.stack((maximum, total, objective), dim=1)
+            order = torch.arange(len(values), device=values.device)
+            for column in range(keys.shape[1] - 1, -1, -1):
+                order = order[torch.argsort(keys[order, column], stable=True)]
+            feasibility_index = order[0]
+            feasibility_key = keys[feasibility_index]
+            if self.feasibility_solution is None:
                 self.feasibility_solution = values[feasibility_index].detach().clone()
-                (
-                    self.maximum_violation,
-                    self.total_violation,
-                    self.feasibility_objective,
-                ) = feasibility_key
+                self._feasibility_key = feasibility_key.detach().clone()
+            else:
+                assert self._feasibility_key is not None
+                current = self._feasibility_key.to(feasibility_key)
+                better = torch.zeros((), dtype=torch.bool, device=values.device)
+                equal = torch.ones((), dtype=torch.bool, device=values.device)
+                for column in range(len(feasibility_key)):
+                    better |= equal & (feasibility_key[column] < current[column])
+                    equal &= feasibility_key[column] == current[column]
+                self.feasibility_solution = torch.where(
+                    better, values[feasibility_index], self.feasibility_solution.to(values)
+                ).detach()
+                self._feasibility_key = torch.where(better, feasibility_key, current).detach()
 
             feasible = torch.ones(len(values), dtype=torch.bool, device=values.device)
             for row in problem.constraints:
                 feasible &= violations[row.name] <= row.tolerance
-            feasible_indices = torch.nonzero(feasible, as_tuple=False).reshape(-1).tolist()
-            if feasible_indices:
-                objective_index = min(
-                    feasible_indices,
-                    key=lambda index: (float(objective[index]), index),
-                )
-                objective_value = float(objective[objective_index])
-                if objective_value < self.objective:
-                    self.objective = objective_value
-                    self.objective_solution = values[objective_index].detach().clone()
+            feasible_objective = torch.where(
+                feasible,
+                objective,
+                torch.full_like(objective, torch.inf),
+            )
+            objective_index = torch.argmin(feasible_objective)
+            objective_value = feasible_objective[objective_index]
+            any_feasible = feasible.any()
+            if self._objective_solution is None:
+                self._objective_solution = values[objective_index].detach().clone()
+                self._objective_key = objective_value.detach().clone()
+                self._has_feasible = any_feasible.detach().clone()
+            else:
+                assert self._objective_key is not None and self._has_feasible is not None
+                old_key = self._objective_key.to(objective_value)
+                old_has = self._has_feasible.to(any_feasible)
+                better = any_feasible & (~old_has | (objective_value < old_key))
+                self._objective_solution = torch.where(
+                    better, values[objective_index], self._objective_solution.to(values)
+                ).detach()
+                self._objective_key = torch.where(better, objective_value, old_key).detach()
+                self._has_feasible = (old_has | any_feasible).detach()
         self.observations += len(values)
 
     def candidates(self) -> list[torch.Tensor]:
         result = []
         if self.feasibility_solution is not None:
             result.append(self.feasibility_solution)
-        if self.objective_solution is not None:
-            result.append(self.objective_solution)
+        objective_solution = self.objective_solution
+        if objective_solution is not None:
+            result.append(objective_solution)
         return result
 
     def diagnostics(self) -> dict[str, object]:
@@ -126,6 +158,57 @@ class ConstraintArchive:
                 self.objective if self.objective_solution is not None else None
             ),
         }
+
+    def checkpoint_tensors(self) -> dict[str, torch.Tensor]:
+        if self.feasibility_solution is None or self._feasibility_key is None:
+            return {}
+        result = {
+            "constraint_archive_feasibility_solution": self.feasibility_solution,
+            "constraint_archive_feasibility_key": self._feasibility_key,
+            "constraint_archive_observations": self._feasibility_key.new_tensor(
+                self.observations, dtype=torch.int64
+            ),
+        }
+        if (
+            self._objective_solution is not None
+            and self._objective_key is not None
+            and self._has_feasible is not None
+        ):
+            result.update(
+                {
+                    "constraint_archive_objective_solution": self._objective_solution,
+                    "constraint_archive_objective_key": self._objective_key,
+                    "constraint_archive_has_feasible": self._has_feasible,
+                }
+            )
+        return result
+
+    def restore_checkpoint_tensors(self, tensors: dict[str, torch.Tensor]) -> None:
+        required = {
+            "constraint_archive_feasibility_solution",
+            "constraint_archive_feasibility_key",
+            "constraint_archive_observations",
+        }
+        present = required & tensors.keys()
+        if not present:
+            return
+        if present != required:
+            raise ValueError("Checkpoint contains an incomplete constraint archive.")
+        self.feasibility_solution = tensors["constraint_archive_feasibility_solution"].clone()
+        self._feasibility_key = tensors["constraint_archive_feasibility_key"].clone()
+        self.observations = int(tensors["constraint_archive_observations"].cpu().item())
+        optional = {
+            "constraint_archive_objective_solution",
+            "constraint_archive_objective_key",
+            "constraint_archive_has_feasible",
+        }
+        optional_present = optional & tensors.keys()
+        if optional_present and optional_present != optional:
+            raise ValueError("Checkpoint contains an incomplete feasible-objective archive.")
+        if optional_present:
+            self._objective_solution = tensors["constraint_archive_objective_solution"].clone()
+            self._objective_key = tensors["constraint_archive_objective_key"].clone()
+            self._has_feasible = tensors["constraint_archive_has_feasible"].clone()
 
 
 @dataclass(slots=True)
@@ -142,8 +225,8 @@ class AdaptiveAugmentedLagrangian:
     improvement_ratio: float = 0.9
     balance_mu: float = 10.0
     updates: int = 0
-    rho_increases: int = 0
-    rho_decreases: int = 0
+    rho_increases: int | torch.Tensor = 0
+    rho_decreases: int | torch.Tensor = 0
 
     @classmethod
     def for_problem(
@@ -195,27 +278,25 @@ class AdaptiveAugmentedLagrangian:
         residuals, equality = normalised_residuals(problem, values)
         if residuals.shape[1] == 0:
             return
-        detached = residuals.detach().to(device="cpu", dtype=torch.float64)
-        violations = torch.where(equality.cpu(), detached.abs(), detached.clamp_min(0.0))
+        detached = residuals.detach().to(dtype=torch.float64)
+        equality = equality.to(device=detached.device)
+        self.multipliers = self.multipliers.to(detached)
+        self.rho = self.rho.to(detached)
+        self.previous_violation = self.previous_violation.to(detached)
+        self.previous_residual = self.previous_residual.to(detached)
+        violations = torch.where(equality, detached.abs(), detached.clamp_min(0.0))
         maximum = violations.amax(dim=1)
         total = violations.sum(dim=1)
-        # Exact lexicographic feasibility-first selection. A weighted scalar
-        # can reverse the order when two maximum violations are very close.
-        representative_index = min(
-            range(len(detached)),
-            key=lambda index: (
-                float(maximum[index]),
-                float(total[index]),
-                index,
-            ),
-        )
+        keys = torch.stack((maximum, total), dim=1)
+        order = torch.arange(len(detached), device=detached.device)
+        for column in range(keys.shape[1] - 1, -1, -1):
+            order = order[torch.argsort(keys[order, column], stable=True)]
+        representative_index = order[0]
         representative = detached[representative_index]
         current = violations.median(dim=0).values
 
-        self.multipliers[equality.cpu()] += (
-            self.rho[equality.cpu()] * representative[equality.cpu()]
-        )
-        inequality = ~equality.cpu()
+        self.multipliers[equality] += self.rho[equality] * representative[equality]
+        inequality = ~equality
         self.multipliers[inequality] = torch.clamp_min(
             self.multipliers[inequality] + self.rho[inequality] * representative[inequality],
             0.0,
@@ -234,8 +315,14 @@ class AdaptiveAugmentedLagrangian:
                 self.rho[decrease] / self.rho_growth,
                 min=self.minimum_rho,
             )
-            self.rho_increases += int(increase.sum().item())
-            self.rho_decreases += int(decrease.sum().item())
+            self.rho_increases = (
+                torch.as_tensor(self.rho_increases, device=detached.device, dtype=torch.int64)
+                + increase.sum()
+            )
+            self.rho_decreases = (
+                torch.as_tensor(self.rho_decreases, device=detached.device, dtype=torch.int64)
+                + decrease.sum()
+            )
         self.previous_violation = current
         self.previous_residual = representative
         self.updates += 1
@@ -243,19 +330,61 @@ class AdaptiveAugmentedLagrangian:
     def diagnostics(self) -> dict[str, object]:
         return {
             "updates": self.updates,
-            "multipliers": self.multipliers.tolist(),
-            "rho": self.rho.tolist(),
-            "previous_violation": self.previous_violation.tolist(),
+            "multipliers": self.multipliers.detach().cpu().tolist(),
+            "rho": self.rho.detach().cpu().tolist(),
+            "previous_violation": self.previous_violation.detach().cpu().tolist(),
             "primal_dual_balance_mu": self.balance_mu,
-            "rho_increases": self.rho_increases,
-            "rho_decreases": self.rho_decreases,
+            "rho_increases": int(torch.as_tensor(self.rho_increases).cpu().item()),
+            "rho_decreases": int(torch.as_tensor(self.rho_decreases).cpu().item()),
         }
+
+    def checkpoint_tensors(self) -> dict[str, torch.Tensor]:
+        reference = self.multipliers
+        return {
+            "al_multipliers": self.multipliers,
+            "al_rho": self.rho,
+            "al_previous_violation": self.previous_violation,
+            "al_previous_residual": self.previous_residual,
+            "al_updates": reference.new_tensor(self.updates, dtype=torch.int64),
+            "al_rho_increases": torch.as_tensor(
+                self.rho_increases, device=reference.device, dtype=torch.int64
+            ),
+            "al_rho_decreases": torch.as_tensor(
+                self.rho_decreases, device=reference.device, dtype=torch.int64
+            ),
+        }
+
+    def restore_checkpoint_tensors(self, tensors: dict[str, torch.Tensor]) -> None:
+        names = {
+            "multipliers",
+            "rho",
+            "previous_violation",
+            "previous_residual",
+            "updates",
+            "rho_increases",
+            "rho_decreases",
+        }
+        keys = {f"al_{name}" for name in names}
+        present = keys & tensors.keys()
+        if not present:
+            return
+        if present != keys:
+            raise ValueError("Checkpoint contains incomplete augmented-Lagrangian state.")
+        expected_shape = self.multipliers.shape
+        for name in ("multipliers", "rho", "previous_violation", "previous_residual"):
+            value = tensors[f"al_{name}"].to(torch.float64)
+            if value.shape != expected_shape:
+                raise ValueError(f"Checkpoint augmented-Lagrangian {name} shape is invalid.")
+            setattr(self, name, value.clone())
+        self.updates = int(tensors["al_updates"].cpu().item())
+        self.rho_increases = tensors["al_rho_increases"].to(torch.int64).clone()
+        self.rho_decreases = tensors["al_rho_decreases"].to(torch.int64).clone()
 
 
 class AdaptiveALCallback(Callback):
     """Update augmented-Lagrangian state on relaxed training points."""
 
-    def __init__(self, *, update_interval: int = 50) -> None:
+    def __init__(self, *, update_interval: int = 50, controller=None) -> None:
         if (
             isinstance(update_interval, bool)
             or not isinstance(update_interval, int)
@@ -263,16 +392,24 @@ class AdaptiveALCallback(Callback):
         ):
             raise ValueError("update_interval must be a positive integer.")
         self.update_interval = update_interval
+        self.controller = controller
 
     def on_epoch_end(self, state: CallbackState) -> None:
         if (state.epoch + 1) % self.update_interval != 0 and state.epoch != state.num_epochs - 1:
             return
-        controller = getattr(state.problem, "_augmented_lagrangian", None)
+        controller = self.controller or getattr(state.problem, "_augmented_lagrangian", None)
         if controller is None:
             return
         with torch.no_grad():
             values = state.relaxation.forward(state.x)
             controller.update(state.problem, values)
+
+    def checkpoint_tensors(self) -> dict[str, torch.Tensor]:
+        return {} if self.controller is None else self.controller.checkpoint_tensors()
+
+    def restore_checkpoint_tensors(self, tensors: dict[str, torch.Tensor]) -> None:
+        if self.controller is not None:
+            self.controller.restore_checkpoint_tensors(tensors)
 
 
 class ConstraintArchiveCallback(Callback):
@@ -293,6 +430,12 @@ class ConstraintArchiveCallback(Callback):
             return
         with torch.no_grad():
             self.archive.update(state.problem, state.relaxation.project(state.x))
+
+    def checkpoint_tensors(self) -> dict[str, torch.Tensor]:
+        return self.archive.checkpoint_tensors()
+
+    def restore_checkpoint_tensors(self, tensors: dict[str, torch.Tensor]) -> None:
+        self.archive.restore_checkpoint_tensors(tensors)
 
 
 __all__ = [

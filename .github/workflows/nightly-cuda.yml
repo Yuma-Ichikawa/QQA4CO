@@ -21,7 +21,7 @@ jobs:
       - name: Install CUDA test environment
         run: |
           uv sync --extra dev --extra triton
-          uv pip install --reinstall "torch==2.13.0+cu130" \
+          uv pip install --reinstall "torch==2.14.0+cu130" \
             --index-url https://download.pytorch.org/whl/cu130
       - name: Verify CUDA is available
         run: uv run --no-sync python -c "import torch; assert torch.cuda.is_available()"

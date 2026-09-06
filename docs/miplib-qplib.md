@@ -52,7 +52,7 @@ qqa benchmark run data/public-benchmarks/miplib/pk1.mps.gz \
   --solver sg-cqqa --time-limit 60 --threads 1 \
   --core-size 32 --maximum-problem-variables 32 \
   --minimum-core-size 16 --maximum-core-saturation 0.9 \
-  --sol-size 16 --epochs 20 --max-calls 1 --max-candidates 1 \
+  --sol-size 16 --epochs 20 --max-calls 1 --max-candidates 4 \
   --completion-time 0.25 --qqa-fix-fraction 0.25 \
   --minimum-relative-improvement 0.001 \
   --seed 0 --output pk1-sgcqqa.json
@@ -99,17 +99,49 @@ qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
 qqa benchmark merge miplib-shard-*.json --output miplib-campaign.json
 ```
 
+For an audit-grade product comparison, put isolated interpreter/package startup
+and original-model import inside every matched clock, isolate every native run,
+execute bypassed cells independently,
+and retain the verified final vector. The last option can make artifacts large:
+
+```bash
+qqa benchmark compare data/public-benchmarks/miplib/instances/*.mps.gz \
+  --format miplib --solvers scip-aggressive sg-cqqa \
+  --baseline-solver scip-aggressive --seeds 0 1 2 3 4 \
+  --time-limit 30 --threads 1 \
+  --reference-file data/public-benchmarks/miplib/miplib2017-v36.solu \
+  --include-import-in-budget --isolate-all \
+  --no-equivalent-baseline-reuse --include-solution-values \
+  --implementation-revision 0123456789abcdef0123456789abcdef01234567 \
+  --continue-on-error --output miplib-audit-30s.json --quiet
+```
+
+Repeat that pre-registered command at the 1, 10, 30, and 300 second budgets.
+The portable `audit-public.toml` manifest shipped in
+`qqa/benchmarking/manifests` fixes the complete public archives, hashes, seeds,
+solvers, metrics, and accounting rules. Split jobs by instance or seed when
+needed, then use `benchmark merge`; do not change the configuration after
+inspecting sealed results.
+
+Balanced execution order is derived from each portable instance basename and
+seed. It is therefore unchanged when the same suite is split into one-instance
+jobs, preventing process-startup and file-cache effects from acquiring a fixed
+solver direction after sharding.
+
 `--time-limit` is one total wall-clock budget. Input conversion and plugin
 setup are deducted before SCIP starts; every QQA call and continuous
 completion then runs inside SCIP's remaining solve time. This makes
 `--solver scip` and `--solver sg-cqqa` comparable at a matched budget.
-For a paired `compare` campaign, sparse algebraic import is common preparation
-outside each solver's identical deadline. MIP input is parsed once and reused.
-Each QPLIB solver run instead reparses the same public file in a disposable
-worker before starting its solver clock. This prevents nonlinear native state
-or allocator fragmentation from crossing instance/solver boundaries while
-keeping the measured phases symmetric. Solver-model setup, plugin setup,
-completion, QQA, and SCIP remain inside the matched deadline.
+By default, a paired `compare` campaign treats sparse algebraic import as common
+preparation outside each solver's identical deadline. Add
+`--include-import-in-budget` for a product-level clock beginning before each
+original input is parsed. QPLIB runs are process-isolated by default; add
+`--isolate-all` to give MIPLIB cells the same native-process and memory
+boundary. Solver-model setup, plugin setup, completion, QQA, verification, and
+SCIP are accounted separately in every result.
+The native worker timeout defaults to the requested budget plus a bounded
+15--60 second shutdown/serialization grace; set `--worker-timeout` explicitly
+when an external protocol requires a different process cap.
 
 SG-CQQA is a primal heuristic, not a replacement for SCIP's proof machinery:
 
@@ -126,7 +158,9 @@ for the bypassed SG-CQQA record, marked
 `equivalent_baseline_reuse: true`. This prevents two wall-clock-limited runs of
 an identical algorithm from being misreported as a QQA win or loss. Applicable
 instances are always solved independently. A standalone `benchmark run` also
-always performs the requested solve.
+always performs the requested solve. Use `--no-equivalent-baseline-reuse` when
+the protocol requires every requested cell to be independently executed; both
+counts remain separate in the summary.
 
 The CLI also defaults to a conservative, empirically screened profile:
 instances with more than 32 original variables bypass the plugin; advanced
@@ -173,14 +207,46 @@ as a structural bypass, not silently counted as a QQA result.
 
 The plugin runs only after useful LP-node timings, leaves a minimum time reserve
 for SCIP, and caps calls, candidates, nodes, completion time, and total plugin
-overhead. The Python configuration caps fast completion and QQA at 10% of
-SCIP's allotted time; the conservative `qqa benchmark` CLI uses 5%. If the
+overhead. The Python and `qqa benchmark` defaults use the same conservative 5%
+cap and structural gates. The default 20-second QQA reserve and conservative
+8-second numerical-runtime startup allowance bypass the plugin entirely at
+1-, 10-, and 30-second campaign budgets, where isolated CPU and CUDA screening
+showed that cold framework startup dominates a small-core intervention. The
+startup allowance is charged to the same 5% callback-overhead cap and can be
+changed explicitly with `--minimum-runtime-startup-time`. If the
 first QQA call does not improve the original incumbent, later QQA calls in that
 run are suppressed while fast LNS and SCIP continue. This safeguard can be
 disabled explicitly for an ablation with
 `--continue-qqa-without-improvement`. See the official [PySCIPOpt heuristic
 tutorial](https://pyscipopt.readthedocs.io/en/latest/tutorials/heuristic.html)
 and [model API](https://pyscipopt.readthedocs.io/en/latest/api/model.html).
+
+Registering the opt-in heuristic is lightweight: NumPy state inspection is
+loaded only after a callback passes the SCIP-only timing/core prechecks, and
+the Torch-backed QQA runtime is loaded only after the selected core passes all
+remaining structural gates. Diagnostics expose `numerical_runtime_loads` and
+`numerical_runtime_initialisation`, so this one-time cost is visible rather
+than hidden in solver time. Structurally eligible instances that never reach a
+useful callback therefore retain the matched aggressive-SCIP execution path
+without paying the Torch startup cost.
+
+`maximum_overhead_fraction` applies to the complete measured callback wall
+time—not only the QQA epochs. State extraction, runtime initialisation,
+surrogate construction, candidate ranking, repair, and completion all consume
+the same cap. QQA time allocation also retains a bounded safety reserve for
+epoch-granularity stopping and callback post-processing. Explicit GPU deadlines
+synchronise queued CUDA work before each check, so asynchronous launches cannot
+hide consumed wall time. The accumulated value is available as
+`callback_runtime`, the planned safety allowance as
+`callback_deadline_safety_reserved`, and each QQA call's stopping evidence as
+`qqa_completed_epochs` and `qqa_deadline_reached`.
+
+The surrogate search uses `float64` by default. A screened five-seed profile
+retained more improving general-integer candidates at this precision than at
+`float32`; completed candidates are independently checked and scored by SCIP
+against the original model in either case. Throughput-oriented experiments can
+select `--core-dtype float32` or set
+`QQAHeuristicConfig(core_dtype="float32")` explicitly.
 
 ## Python API
 
@@ -202,7 +268,7 @@ config = QQAHeuristicConfig(
     sol_size=16,
     epochs=20,
     max_calls=1,
-    max_candidates=1,
+    max_candidates=4,
     maximum_call_time=0.15,
     completion_time=0.25,
     completion_nodes=100,
@@ -210,6 +276,7 @@ config = QQAHeuristicConfig(
     subscip_repair=True,
     seed=0,
     threads=1,
+    core_dtype="float64",
 )
 result = run_miplib(
     "data/public-benchmarks/miplib/pk1.mps.gz",
@@ -253,6 +320,11 @@ appropriate certified status.
 - original-space objective and maximum infeasibility;
 - dual bound and SCIP-compatible relative gap;
 - primal integral when a reference objective is supplied;
+- time to a predeclared reference target and a fixed-grid anytime ECDF;
+- setup/plugin, solver, and post-solve verification durations;
+- process and available GPU peak-memory high-water marks;
+- a SHA-256 identity for the final original-coordinate solution, with the full
+  original-order vector when `--include-solution-values` is selected;
 - node count, overall hybrid and QQA-only completion/acceptance rates, and QQA
   call timings;
 - source basename, SHA-256, parser version, and reference snapshot name.
@@ -266,7 +338,9 @@ absolute error.
 
 Multi-file runs add overall and `PROBTYPE`-grouped feasible rates, median
 runtime/time-to-first-feasible/gap/infeasibility, and aggregate QQA
-completion/acceptance rates.
+completion/acceptance rates. Paired reports aggregate seed medians by instance,
+then provide deterministic bootstrap confidence intervals and a sign test;
+dependent seeds are never counted as independent problem instances.
 
 Use the same archive, reference file, total time, thread count, seed set, and
 hardware class for comparisons. MIPLIB solution records and QPLIB solution
@@ -274,10 +348,11 @@ records can be passed with `--reference-file`; they are read as reference
 values, never as a substitute for checking the returned point.
 For a single `benchmark run`, runtime, time to first feasible, and primal
 integral start before input parsing. In paired `compare`, one common algebraic
-import is excluded from every solver equally; all three clocks then start
-before solver-model construction. Primal integral always uses the configured
-time limit as its common horizon. If model setup exhausts that limit, SCIP is
-not started and the run is reported as `setup-time-limit`.
+import is excluded from every solver equally by default; all three clocks then
+start before solver-model construction. `--include-import-in-budget` instead
+uses the single-run product clock for every paired cell. Primal integral always
+uses the configured time limit as its common horizon. If model setup exhausts
+that limit, SCIP is not started and the run is reported as `setup-time-limit`.
 The thread option constrains both SCIP parallel workers and LP-solver threads;
 SG-CQQA also applies it to Torch. For externally reproducible CPU runs, cap
 BLAS/OpenMP threads in the execution environment as well.
@@ -299,7 +374,9 @@ configuration, then skips finished tuples. `--continue-on-error` stores only
 the source basename, format, solver, seed, and exception class; exception text
 is deliberately omitted because it can contain a machine path. Use
 `--retry-failures` with `--resume` after correcting an optional dependency or
-solver issue.
+solver issue. Timeout, out-of-memory, unsupported, and backend-failure outcomes
+are normalized and counted separately without converting a failed run into a
+win or tie.
 
 `benchmark merge` accepts disjoint `(instance, seed)` cells, so seed campaigns
 can be distributed independently as well as instance campaigns. It rejects
@@ -334,9 +411,39 @@ publish_benchmark_campaigns(
 )
 ```
 
+The same publication boundary is available from the CLI. Each library name
+must appear once in both option groups; input paths are used only for reading
+and are never serialised:
+
+```bash
+qqa benchmark publish \
+  --campaign miplib=miplib-campaign.json \
+  --campaign qplib=qplib-campaign.json \
+  --snapshot miplib=data/public-benchmarks/miplib/snapshot.json \
+  --snapshot qplib=data/public-benchmarks/qplib/snapshot.json \
+  --implementation-revision COMMIT_SHA \
+  --output public-results
+```
+
+The compact JSON omits full incumbent trajectories and solution vectors while
+retaining their point/value counts and solution hashes. The deterministic gzip
+artifact retains the complete original-coordinate records. `manifest.json`
+checksums both forms.
+
 Publication rejects absolute POSIX/Windows paths, loopback/private/link-local
 addresses, local/internal host suffixes, and environment-specific metadata
 keys before writing an artifact.
+
+For a screened small mixed QPLIB ablation, use a 64-variable boundary and an
+explicit `QML` allow-list; all other problem classes remain independent
+aggressive-SCIP controls:
+
+```bash
+qqa benchmark compare QPLIB_INSTANCES \
+  --format qplib --maximum-problem-variables 64 \
+  --qplib-problem-types QML --time-limit 30 \
+  --output qplib-screened.json
+```
 
 ## Third-party reproduction checklist
 

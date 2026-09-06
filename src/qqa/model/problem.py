@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -26,20 +26,50 @@ from qqa.relaxation import (
 )
 
 
-def _scalar_bound(value: torch.Tensor | float | None, *, block: str, side: str) -> float:
+def _bound_vector(
+    value: torch.Tensor | float | None,
+    *,
+    size: int,
+    block: str,
+    side: str,
+) -> torch.Tensor:
     if value is None:
         raise ValueError(
             f"Pure QQA requires an explicit finite {side} bound for variable block {block!r}."
         )
-    flat = torch.as_tensor(value).reshape(-1)
-    if flat.numel() != 1:
-        raise ValueError("QQA execution currently requires uniform bounds per block.")
+    flat = torch.as_tensor(value, dtype=torch.float64).reshape(-1)
+    if flat.numel() not in {1, size}:
+        raise ValueError(f"{side} bound for variable block {block!r} does not match its size.")
+    flat = flat.expand(size)
     if not torch.isfinite(flat).all():
         raise ValueError(
             f"Pure QQA requires a finite {side} bound for variable block {block!r}; "
             "no implicit [-10, 10] replacement is performed."
         )
-    return float(flat.item())
+    return flat
+
+
+def _bound_runs(lower: torch.Tensor, upper: torch.Tensor):
+    """Yield contiguous equal-bound runs without changing column order."""
+    start = 0
+    for stop in range(1, len(lower) + 1):
+        boundary = stop == len(lower) or (
+            lower[stop] != lower[start] or upper[stop] != upper[start]
+        )
+        if boundary:
+            yield start, stop, float(lower[start]), float(upper[start])
+            start = stop
+
+
+@dataclass(frozen=True, slots=True)
+class _FixedVariable:
+    """Internal zero-width-domain coordinate retained when all values are fixed."""
+
+    name: str
+    lower: float | int
+    upper: float | int
+    size: int
+    kind: str
 
 
 class ModelIRProblem(COProblem):
@@ -90,22 +120,37 @@ class ModelIRProblem(COProblem):
                 if block.domain is VariableDomain.BINARY:
                     variables.append(BinaryVariable(name, block.size))
                 elif block.domain is VariableDomain.INTEGER:
-                    lower = int(
-                        math.ceil(_scalar_bound(block.lower, block=block.name, side="lower"))
-                    )
-                    upper = int(
-                        math.floor(_scalar_bound(block.upper, block=block.name, side="upper"))
-                    )
-                    variables.append(IntegerVariable(name, lower, upper, block.size))
-                elif block.domain is VariableDomain.REAL:
-                    variables.append(
-                        RealVariable(
-                            name,
-                            _scalar_bound(block.lower, block=block.name, side="lower"),
-                            _scalar_bound(block.upper, block=block.name, side="upper"),
-                            block.size,
+                    lower = _bound_vector(
+                        block.lower, size=block.size, block=block.name, side="lower"
+                    ).ceil()
+                    upper = _bound_vector(
+                        block.upper, size=block.size, block=block.name, side="upper"
+                    ).floor()
+                    if torch.any(lower > upper):
+                        raise ValueError(
+                            f"Integer bounds for variable block {block.name!r} contain an empty domain."
                         )
+                    for run, (start, stop, lo, hi) in enumerate(_bound_runs(lower, upper)):
+                        variable_name = f"{name}_{run}"
+                        variables.append(
+                            _FixedVariable(variable_name, int(lo), int(hi), stop - start, "integer")
+                            if lo == hi
+                            else IntegerVariable(variable_name, int(lo), int(hi), stop - start)
+                        )
+                elif block.domain is VariableDomain.REAL:
+                    lower = _bound_vector(
+                        block.lower, size=block.size, block=block.name, side="lower"
                     )
+                    upper = _bound_vector(
+                        block.upper, size=block.size, block=block.name, side="upper"
+                    )
+                    for run, (start, stop, lo, hi) in enumerate(_bound_runs(lower, upper)):
+                        variable_name = f"{name}_{run}"
+                        variables.append(
+                            _FixedVariable(variable_name, lo, hi, stop - start, "real")
+                            if lo == hi
+                            else RealVariable(variable_name, lo, hi, stop - start)
+                        )
                 else:
                     raise NotImplementedError(
                         "Categorical/permutation ModelIR execution requires a native "
@@ -125,6 +170,32 @@ class ModelIRProblem(COProblem):
     def ranking_objective(self, values: torch.Tensor) -> torch.Tensor:
         """Canonical minimisation objective used only for incumbent ranking."""
         return self.internal_objective(values)
+
+    def incumbent_keys(self, values: torch.Tensor) -> torch.Tensor:
+        """Return device-resident feasibility-first lexicographic keys."""
+        values = self.model_ir._validate_values(values)
+        domain = self.model_ir.domain_violations(values)
+        residuals = [domain]
+        feasible = domain <= 1e-6
+        violations = self.constraint_violations(values)
+        for row in self.constraints:
+            violation = violations[row.name]
+            residuals.append(violation / row.scale)
+            feasible &= violation <= row.tolerance
+        matrix = torch.stack(residuals, dim=1)
+        maximum = matrix.amax(dim=1)
+        total = matrix.sum(dim=1)
+        internal = self.internal_objective(values)
+        zero = torch.zeros_like(maximum)
+        return torch.stack(
+            (
+                (~feasible).to(internal.dtype),
+                torch.where(feasible, zero, maximum),
+                torch.where(feasible, zero, total),
+                internal,
+            ),
+            dim=1,
+        )
 
     def constraint_values(self, values: torch.Tensor) -> dict[str, torch.Tensor]:
         values = self.model_ir._validate_values(values)
@@ -165,16 +236,23 @@ class ModelIRProblem(COProblem):
     def score_summary(self, x_disc: torch.Tensor) -> dict:
         structured = self.model_ir.structured_block is not None
         values = x_disc.unsqueeze(0) if x_disc.ndim == (2 if structured else 1) else x_disc
-        objective = self.objective_values(values)[0]
-        violations = self.constraint_violations(values)
-        rows = {}
-        feasible = True
+        verification = self.model_ir.verify_solution(values)
+        objective = verification.objective_values[0]
+        rows: dict[str, dict[str, Any]] = {}
+        domain_violation = float(verification.domain_violations[0].item())
+        feasible = domain_violation <= 1e-6
+        if not feasible:
+            rows["variable_domains"] = {
+                "violation": domain_violation,
+                "scaled_violation": domain_violation,
+                "tolerance": 1e-6,
+                "feasible": False,
+            }
         for constraint in self.model_ir.constraints:
-            violation = float(violations[constraint.name][0].item())
+            violation = float(verification.constraint_violations[constraint.name][0].item())
             satisfied = violation <= constraint.tolerance
-            feasible &= satisfied
             rows[constraint.name] = {
-                "lhs": float(constraint.expression.evaluate(values)[0].item()),
+                "lhs": float(verification.constraint_values[constraint.name][0].item()),
                 "sense": constraint.sense,
                 "rhs": constraint.rhs,
                 "violation": violation,
@@ -188,17 +266,21 @@ class ModelIRProblem(COProblem):
             "label": "objective",
             "value": float(objective.item()),
             "unit": "",
-            "feasible": feasible,
+            "feasible": bool(verification.feasible[0].item()),
             "extra": {
                 "constraints": rows,
+                "domain_violation": domain_violation,
+                "objective_finite": bool(verification.objective_finite[0].item()),
                 "sense": ObjectiveSense(self.model_ir.sense).value,
             },
         }
 
-    def repair_solution(self, values: torch.Tensor) -> torch.Tensor:
+    def repair_solution(
+        self, values: torch.Tensor, *, time_limit: float | None = None
+    ) -> torch.Tensor:
         from qqa.repair import repair_model_ir
 
-        return repair_model_ir(self.model_ir, values)
+        return repair_model_ir(self.model_ir, values, time_limit=time_limit)
 
 
 __all__ = ["ModelIRProblem"]

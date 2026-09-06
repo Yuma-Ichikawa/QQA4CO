@@ -66,6 +66,13 @@ class BenchmarkManifest:
     )
     cadence: tuple[str, ...] = ("pr", "nightly", "release")
     schema_version: int = 1
+    baseline_solver: str | None = None
+    execution_order: str = "balanced"
+    threads: int = 1
+    process_isolation: str = "qplib-only"
+    include_import_in_budget: bool = False
+    reuse_equivalent_baseline: bool = True
+    include_solution_values: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "track", BenchmarkTrack(self.track))
@@ -78,6 +85,21 @@ class BenchmarkManifest:
             raise ValueError("Benchmark seeds must be non-negative integers.")
         if not self.solvers or not self.metrics:
             raise ValueError("Benchmark solvers and metrics must be non-empty.")
+        if self.baseline_solver is not None and self.baseline_solver not in self.solvers:
+            raise ValueError("Benchmark baseline_solver must be included in solvers.")
+        if self.execution_order not in {"balanced", "fixed"}:
+            raise ValueError("Benchmark execution_order must be balanced or fixed.")
+        if isinstance(self.threads, bool) or not isinstance(self.threads, int) or self.threads < 1:
+            raise ValueError("Benchmark threads must be a positive integer.")
+        if self.process_isolation not in {"qplib-only", "all-solvers"}:
+            raise ValueError("Benchmark process_isolation must be qplib-only or all-solvers.")
+        for name in (
+            "include_import_in_budget",
+            "reuse_equivalent_baseline",
+            "include_solution_values",
+        ):
+            if not isinstance(getattr(self, name), bool):
+                raise TypeError(f"Benchmark {name} must be boolean.")
         if not self.cadence or not set(self.cadence) <= {"pr", "nightly", "weekly", "release"}:
             raise ValueError("Benchmark cadence must use pr/nightly/weekly/release.")
         validate_portable_payload(self.to_dict())

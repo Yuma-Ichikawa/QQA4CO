@@ -136,7 +136,11 @@ def publish_benchmark_campaigns(
         for row in results:
             compact = dict(row)
             trajectory = compact.pop("trajectory", [])
+            solution_values = compact.pop("solution_values", None)
             compact["trajectory_points"] = len(trajectory)
+            compact["solution_value_count"] = (
+                None if solution_values is None else len(solution_values)
+            )
             compact_results.append(compact)
         compact_payload = {
             "schema_version": 1,

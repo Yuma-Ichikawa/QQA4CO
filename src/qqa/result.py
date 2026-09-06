@@ -56,6 +56,40 @@ class FeasibilityStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
+class CoordinateSpace(str, Enum):
+    """Variable order used by a candidate at a solver boundary."""
+
+    ORIGINAL = "original"
+    REDUCED = "reduced"
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateRecord:
+    """Auditable identity and verification summary for one candidate."""
+
+    candidate_id: str
+    origin: str
+    coordinate_space: CoordinateSpace | str
+    objective_value: float | None
+    feasibility: FeasibilityStatus | str
+    maximum_violation: float | None = None
+    selected: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.candidate_id or not self.origin:
+            raise ValueError("Candidate id and origin must be non-empty.")
+        object.__setattr__(self, "coordinate_space", CoordinateSpace(self.coordinate_space))
+        object.__setattr__(self, "feasibility", FeasibilityStatus(self.feasibility))
+        for name in ("objective_value", "maximum_violation"):
+            value = getattr(self, name)
+            if value is not None and (
+                not math.isfinite(value) or value < 0 and name == "maximum_violation"
+            ):
+                raise ValueError(
+                    f"Candidate {name} must be finite and non-negative where applicable."
+                )
+
+
 @dataclass(frozen=True, slots=True)
 class ConstraintViolation:
     """One canonical constraint residual and its reporting tolerance."""
@@ -180,6 +214,7 @@ class CertificateMetadata:
     status: str
     verifier: str | None = None
     sha256: str | None = None
+    candidate_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.proof_system or not self.status:
@@ -188,6 +223,8 @@ class CertificateMetadata:
             len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256)
         ):
             raise ValueError("Certificate sha256 must be a lowercase hexadecimal digest.")
+        if self.candidate_id is not None and not self.candidate_id:
+            raise ValueError("Certificate candidate_id must be non-empty or None.")
 
 
 @dataclass(slots=True)
@@ -214,6 +251,8 @@ class SolveResult:
     plan: Any = None
     repaired_solution: torch.Tensor | None = None
     repaired_objective_value: float | None = None
+    selected_candidate_id: str | None = None
+    candidates: tuple[CandidateRecord, ...] = ()
     best_bound: float | None = None
     relative_gap: float | None = None
     proven_optimal: bool = False
@@ -257,6 +296,12 @@ class SolveResult:
             raise ValueError("repaired_objective_value requires repaired_solution.")
         if self.repaired_solution is not None and self.repaired_objective_value is None:
             raise ValueError("repaired_solution requires repaired_objective_value.")
+        if self.selected_candidate_id is None:
+            self.selected_candidate_id = "repaired" if self.repaired_solution is not None else "raw"
+        if self.selected_candidate_id not in {"raw", "repaired"}:
+            raise ValueError("selected_candidate_id must be 'raw' or 'repaired'.")
+        if self.selected_candidate_id == "repaired" and self.repaired_solution is None:
+            raise ValueError("A repaired selected candidate requires repaired_solution.")
         if self.relative_gap is not None and (
             not math.isfinite(self.relative_gap) or self.relative_gap < 0
         ):
@@ -274,11 +319,18 @@ class SolveResult:
         }:
             raise ValueError("An exact guarantee requires a proven terminal status.")
         self.events = tuple(self.events)
+        self.candidates = tuple(self.candidates)
+        if self.candidates:
+            selected = [item.candidate_id for item in self.candidates if item.selected]
+            if selected != [self.selected_candidate_id]:
+                raise ValueError("Candidate records must identify exactly the selected candidate.")
 
     @property
     def solution(self) -> torch.Tensor | None:
         """Preferred reported solution, using repair when available."""
-        return self.repaired_solution if self.repaired_solution is not None else self.raw_solution
+        if self.selected_candidate_id == "repaired":
+            return self.repaired_solution
+        return self.raw_solution
 
     @property
     def best_sol(self) -> torch.Tensor | None:
@@ -288,7 +340,7 @@ class SolveResult:
     @property
     def best_obj(self) -> float | None:
         """Compatibility alias for the original mathematical objective."""
-        if self.repaired_objective_value is not None:
+        if self.selected_candidate_id == "repaired":
             return self.repaired_objective_value
         return self.objective_value
 
@@ -313,6 +365,15 @@ class SolveResult:
             "guarantee_level": guarantee_level.value,
             "objective_value": self.objective_value,
             "repaired_objective_value": self.repaired_objective_value,
+            "selected_candidate_id": self.selected_candidate_id,
+            "candidates": [
+                {
+                    **asdict(candidate),
+                    "coordinate_space": CoordinateSpace(candidate.coordinate_space).value,
+                    "feasibility": FeasibilityStatus(candidate.feasibility).value,
+                }
+                for candidate in self.candidates
+            ],
             "internal_energy": self.internal_energy,
             "merit_value": self.merit_value,
             "feasible": self.feasible,
@@ -354,6 +415,8 @@ __all__ = [
     "ConstraintReport",
     "ConstraintViolation",
     "CertificateMetadata",
+    "CandidateRecord",
+    "CoordinateSpace",
     "FeasibilityStatus",
     "GuaranteeLevel",
     "Provenance",

@@ -43,6 +43,21 @@ def test_initial_population_is_bounded_deduplicated_and_deterministic():
     assert np.all(first <= upper)
 
 
+def test_initial_population_covers_general_integer_lattice_near_and_far():
+    population = build_initial_population(
+        [],
+        target=np.array([3.25]),
+        lower=np.array([0.0]),
+        upper=np.array([10.0]),
+        sol_size=64,
+        seed=19,
+    )
+
+    assert set(population[::2, 0]) <= {3.0, 4.0}
+    assert np.all(population == np.rint(population))
+    assert len(set(population[1::2, 0])) >= 8
+
+
 def test_repair_candidate_losses_are_evaluated_as_one_batch():
     class CountingProblem:
         def __init__(self):
@@ -81,6 +96,7 @@ def test_repair_candidate_losses_are_evaluated_as_one_batch():
 def test_core_solve_resolves_and_forwards_requested_device():
     class RecordingProblem:
         constraints = ()
+        dtype = torch.float32
 
         def __init__(self):
             self.options = None
@@ -103,6 +119,8 @@ def test_core_solve_resolves_and_forwards_requested_device():
     assert result == "result"
     assert problem.options is not None
     assert problem.options["device"] == resolve_device("auto")
-    assert problem.options["time_limit"] == 0.5
+    assert 0.0 < problem.options["time_limit"] <= 0.5
     assert problem.options["initial_state"].shape == (2, 3)
-    assert problem.options["initial_state"].dtype == torch.float64
+    assert problem.options["initial_state"].dtype == torch.float32
+    assert problem.options["record_history"] is False
+    assert problem.options["archive_size"] == 0

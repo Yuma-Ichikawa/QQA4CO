@@ -7,6 +7,7 @@ import json
 import math
 import os
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import networkx as nx
@@ -32,12 +33,17 @@ from qqa.benchmarking import (
 )
 from qqa.benchmarking import download as benchmark_download
 from qqa.benchmarking.algebraic_runner import (
+    _classify_outcome,
     _comparison_solver_order,
     _configure_scip_threads,
+    _default_worker_timeout,
+    _native_process_error_type,
     _qqa_applicability_hint,
     _qqa_is_applicable,
 )
+from qqa.benchmarking.cli import _named_paths
 from qqa.benchmarking.metrics import (
+    BenchmarkFailure,
     IncumbentPoint,
     SCIPProgressTracker,
     normalised_primal_error,
@@ -112,31 +118,39 @@ def test_qqa_static_size_gate_avoids_registering_out_of_scope_plugins():
     algebraic = _algebraic_fixture()
     assert _qqa_is_applicable(
         algebraic,
-        QQAHeuristicConfig(maximum_problem_variables=3),
+        QQAHeuristicConfig(maximum_problem_variables=3, minimum_core_size=1),
     )
     assert not _qqa_is_applicable(
         algebraic,
-        QQAHeuristicConfig(maximum_problem_variables=2),
+        QQAHeuristicConfig(maximum_problem_variables=2, minimum_core_size=1),
     )
     assert _qqa_is_applicable(
         algebraic,
-        QQAHeuristicConfig(maximum_integer_variables=2),
+        QQAHeuristicConfig(maximum_integer_variables=2, minimum_core_size=1),
     )
     assert not _qqa_is_applicable(
         algebraic,
-        QQAHeuristicConfig(maximum_integer_variables=1),
+        QQAHeuristicConfig(maximum_integer_variables=1, minimum_core_size=1),
+    )
+    assert not _qqa_is_applicable(
+        algebraic,
+        QQAHeuristicConfig(minimum_core_size=3),
     )
     qplib = replace(algebraic, problem_type="QML")
     assert _qqa_is_applicable(
         qplib,
-        QQAHeuristicConfig(allowed_qplib_problem_types=("qml",)),
+        QQAHeuristicConfig(allowed_qplib_problem_types=("qml",), minimum_core_size=1),
     )
     assert not _qqa_is_applicable(
         qplib,
-        QQAHeuristicConfig(allowed_qplib_problem_types=("LIQ",)),
+        QQAHeuristicConfig(allowed_qplib_problem_types=("LIQ",), minimum_core_size=1),
     )
     with pytest.raises(ValueError, match="valid three-character"):
         QQAHeuristicConfig(allowed_qplib_problem_types=("QXX",))
+    with pytest.raises(ValueError, match="minimum_runtime_startup_time"):
+        QQAHeuristicConfig(minimum_runtime_startup_time=-1.0)
+    with pytest.raises(ValueError, match="core_dtype"):
+        QQAHeuristicConfig(core_dtype="float16")
 
 
 def test_linear_rows_share_one_structural_zero_hessian():
@@ -178,6 +192,34 @@ def test_paired_benchmark_balances_solver_execution_order():
         seed=1,
         instance_index=0,
     ) == tuple(reversed(solvers))
+
+
+def test_balanced_solver_order_is_shard_invariant_and_seed_symmetric():
+    solvers = ("scip-aggressive", "sg-cqqa")
+    first = _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=0,
+        instance_index=0,
+        instance_name="portable-instance.mps.gz",
+    )
+    assert (
+        _comparison_solver_order(
+            solvers,
+            execution_order="balanced",
+            seed=0,
+            instance_index=999,
+            instance_name="portable-instance.mps.gz",
+        )
+        == first
+    )
+    assert _comparison_solver_order(
+        solvers,
+        execution_order="balanced",
+        seed=1,
+        instance_index=0,
+        instance_name="portable-instance.mps.gz",
+    ) == tuple(reversed(first))
 
 
 def test_algebraic_metadata_rejects_private_environment_fields():
@@ -436,6 +478,7 @@ def test_core_surrogate_uses_original_objective_and_active_lp_rows():
         adaptive_rows=True,
     )
     assert len(core_problem.constraints) == 1
+    assert core_problem.dtype == torch.float64
     assert core_problem.constraints[0].sense == "<="
     violating = torch.tensor([[1.0, 1.0]], dtype=torch.float64)
     expected = surrogate.merit_values(
@@ -457,6 +500,7 @@ def test_core_surrogate_uses_original_objective_and_active_lp_rows():
         QQAHeuristicConfig(),
     )
     assert static_problem.constraints == ()
+    assert static_problem.dtype == torch.float64
     assert static_problem.loss_fn(violating).item() == pytest.approx(expected)
     result = core_problem.solve(
         sol_size=4,
@@ -536,6 +580,14 @@ def test_elastic_repair_and_mixed_solver_archive_restore_feasibility():
     )
     assert result.diagnostics["constraint_archive"]["observations"] > 0
     assert result.score["feasible"]
+
+
+def test_real_decode_retains_inward_gradient_at_declared_bounds():
+    problem = _constrained_real_problem()
+    latent = torch.tensor([0.0], dtype=torch.float64, requires_grad=True)
+    problem.space.decode(latent).sum().backward()
+    assert latent.grad is not None
+    assert latent.grad.item() == pytest.approx(2.0)
 
 
 def test_conditional_heuristic_uses_qqa_guided_partial_fixings_for_lns_repair(monkeypatch):
@@ -837,6 +889,60 @@ def test_conditional_heuristic_suppresses_repeated_unproductive_qqa_calls():
     assert not ablation._qqa_has_stalled()
 
 
+def test_conditional_heuristic_accounts_complete_callback_overhead(monkeypatch):
+    heuristic = QQAHeuristic(QQAHeuristicConfig(maximum_overhead_fraction=0.05))
+    pyscipopt = pytest.importorskip("pyscipopt")
+    active_model = pyscipopt.Model()
+    active_model.hideOutput()
+    active_model.setRealParam("limits/time", 10.0)
+    heuristic.model = active_model
+    heuristic.stats.callback_runtime = 0.4
+    assert heuristic._remaining_overhead_budget() == pytest.approx(0.1)
+
+    heuristic.stats.callback_runtime = 0.0
+    heuristic.stats.numerical_runtime_initialisation = 0.6
+    assert heuristic._remaining_overhead_budget() == 0.0
+
+    times = iter((1.0, 1.25))
+    monkeypatch.setattr(scip_heuristic_module, "perf_counter", lambda: next(times))
+
+    def execute(heurtiming, nodeinfeasible):
+        assert (heurtiming, nodeinfeasible) == ("timing", False)
+        assert heuristic._active_callback_started_at == 1.0
+        return {"result": "complete"}
+
+    monkeypatch.setattr(heuristic, "_heurexec_impl", execute)
+    assert heuristic.heurexec("timing", False) == {"result": "complete"}
+    assert heuristic.stats.callback_runtime == pytest.approx(0.25)
+    assert heuristic._active_callback_started_at is None
+    active_model.free()
+
+
+def test_conditional_heuristic_requires_cold_start_overhead_reserve():
+    heuristic = QQAHeuristic(
+        QQAHeuristicConfig(
+            maximum_overhead_fraction=0.05,
+            minimum_runtime_startup_time=8.0,
+        )
+    )
+    pyscipopt = pytest.importorskip("pyscipopt")
+    active_model = pyscipopt.Model()
+    active_model.hideOutput()
+    active_model.setRealParam("limits/time", 30.0)
+    heuristic.model = active_model
+    assert heuristic._remaining_overhead_budget() == pytest.approx(1.5)
+    assert not heuristic._runtime_startup_is_affordable()
+    active_model.free()
+
+
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [(1.0, 0.5), (10.0, 1.5), (100.0, 2.0)],
+)
+def test_conditional_heuristic_reserves_bounded_callback_deadline_safety(available, expected):
+    assert QQAHeuristic._callback_deadline_safety(available) == pytest.approx(expected)
+
+
 def test_completion_improvement_threshold_is_validated_before_solver_use():
     with pytest.raises(ValueError, match="minimum_relative_improvement"):
         complete_integer_assignment(
@@ -866,12 +972,17 @@ def test_qqa_priority_preserves_mip_order_and_opens_qplib_early_window():
 
     linear_model = _algebraic_fixture()
     mip = RecordingModel()
-    scip_heuristic_module.include_qqa_heuristic(mip, algebraic=linear_model)
+    scip_heuristic_module.include_qqa_heuristic(
+        mip,
+        QQAHeuristicConfig(subscip_repair=False),
+        algebraic=linear_model,
+    )
     assert mip.priority == -1_200_000
 
     qplib = RecordingModel()
     scip_heuristic_module.include_qqa_heuristic(
         qplib,
+        QQAHeuristicConfig(subscip_repair=False),
         algebraic=replace(linear_model, problem_type="QML"),
     )
     assert qplib.priority == -1_100_000
@@ -1004,6 +1115,20 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert benchmark.feasible
     assert benchmark.objective == pytest.approx(-1.0)
     assert benchmark.reference_objective == pytest.approx(-1.0)
+    assert benchmark.provenance["model_statistics"] == {
+        "num_variables": 2,
+        "num_constraints": 2,
+        "variable_counts": {
+            "binary": 1,
+            "integer": 0,
+            "continuous": 1,
+            "implicit_integer": 0,
+        },
+        "objective_linear_nonzeros": 2,
+        "objective_quadratic_nonzeros": 0,
+        "constraint_linear_nonzeros": None,
+        "constraint_quadratic_nonzeros": None,
+    }
     assert str(tmp_path) not in json.dumps(benchmark.to_dict())
 
     suite = run_benchmark_suite([path, path], solver="scip", time_limit=1.0)
@@ -1012,11 +1137,13 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert suite.summary["by_problem_type"]["MIPLIB"]["instances"] == 2
 
     checkpoint = tmp_path / "comparison.json"
+    qqa_config = QQAHeuristicConfig(allowed_qplib_problem_types=("QML",))
     comparison = compare_benchmark_solvers(
         [path],
         solvers=("scip", "sg-cqqa"),
         seeds=(0,),
         baseline_solver="scip",
+        qqa_config=qqa_config,
         time_limit=1.0,
         checkpoint_file=checkpoint,
     )
@@ -1026,11 +1153,16 @@ def test_mps_import_scip_roundtrip_completion_and_benchmark(tmp_path):
     assert comparison.comparison_config["instances"] == ["portable.mps"]
     assert "seed" not in comparison.comparison_config["qqa_config"]
     assert str(tmp_path) not in json.dumps(comparison.to_dict())
+    checkpoint_payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+    assert checkpoint_payload["comparison_config"]["qqa_config"]["allowed_qplib_problem_types"] == [
+        "QML"
+    ]
     resumed = compare_benchmark_solvers(
         [path],
         solvers=("scip", "sg-cqqa"),
         seeds=(0,),
         baseline_solver="scip",
+        qqa_config=qqa_config,
         time_limit=1.0,
         checkpoint_file=checkpoint,
         resume=True,
@@ -1086,6 +1218,14 @@ def test_qplib_applicability_hint_uses_public_header(tmp_path):
         QQAHeuristicConfig(maximum_integer_variables=32),
         algebraic=None,
     )
+    small_binary = tmp_path / "small-binary.qplib"
+    small_binary.write_text("small\nQBL\nminimize\n8 # variables\n", encoding="utf-8")
+    assert not _qqa_applicability_hint(
+        small_binary,
+        "qplib",
+        QQAHeuristicConfig(minimum_core_size=16),
+        algebraic=None,
+    )
     assert not _qqa_applicability_hint(
         path,
         "qplib",
@@ -1123,6 +1263,40 @@ def test_structural_bypass_reuses_aggressive_failure(tmp_path, monkeypatch):
     assert {failure.error_type for failure in comparison.failures} == {"RuntimeError"}
 
 
+def test_independent_structural_bypass_preserves_balanced_order(tmp_path, monkeypatch):
+    path = tmp_path / "continuous.qplib"
+    path.write_text("continuous\nQCL\nminimize\n10 # variables\n", encoding="utf-8")
+    attempted = []
+
+    def fail_both(source, *, solver, **kwargs):  # noqa: ARG001
+        attempted.append(solver)
+        raise RuntimeError("synthetic worker failure")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner._run_isolated_benchmark_instance",
+        fail_both,
+    )
+    solvers = ("scip-aggressive", "sg-cqqa")
+    compare_benchmark_solvers(
+        [path],
+        solvers=solvers,
+        baseline_solver="scip-aggressive",
+        format="qplib",
+        time_limit=0.1,
+        continue_on_error=True,
+        reuse_equivalent_baseline=False,
+    )
+    assert attempted == list(
+        _comparison_solver_order(
+            solvers,
+            execution_order="balanced",
+            seed=0,
+            instance_index=0,
+            instance_name=path.name,
+        )
+    )
+
+
 def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
     from qqa.benchmarking.algebraic_runner import _run_isolated_benchmark_instance
     from qqa.hybrid import QQAHeuristicConfig
@@ -1144,12 +1318,14 @@ def test_disposable_native_benchmark_worker_roundtrip(tmp_path):
             "reference_file": None,
             "verbose": False,
         },
-        common_import=True,
+        common_import=False,
         worker_timeout=float(os.environ.get("QQA_TEST_WORKER_TIMEOUT_SECONDS", "300")),
     )
     assert result.status == "optimal"
     assert result.feasible
     assert result.objective == pytest.approx(-1.0)
+    assert result.run_config["metric_clock"] == "total_wall_clock"
+    assert result.stage_timings["setup_and_plugin"] > 0.01
     assert str(tmp_path) not in json.dumps(result.to_dict())
 
 
@@ -1191,6 +1367,61 @@ def test_sg_cqqa_continuous_model_uses_matched_aggressive_scip_fallback(tmp_path
     assert result.run_config["torch_threads"] is None
 
 
+def test_sg_cqqa_skips_plugin_import_without_qqa_time_reserve(tmp_path, monkeypatch):
+    path = tmp_path / "short.mps"
+    _write_tiny_mps(path)
+
+    def unexpected_plugin(*args, **kwargs):
+        raise AssertionError("insufficient budgets must not construct the QQA plugin")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner.include_qqa_heuristic",
+        unexpected_plugin,
+    )
+    result = run_benchmark_instance(
+        path,
+        format="miplib",
+        solver="sg-cqqa",
+        time_limit=0.1,
+        qqa_config=QQAHeuristicConfig(minimum_core_size=1, minimum_qqa_time=1.0),
+    )
+    assert result.run_config["qqa_structurally_applicable"] is True
+    assert result.run_config["qqa_budget_applicable"] is False
+    assert result.run_config["qqa_applicable"] is False
+    assert result.run_config["qqa_plugin_active"] is False
+    assert result.run_config["torch_threads"] is None
+
+
+def test_sg_cqqa_skips_plugin_import_without_runtime_startup_reserve(tmp_path, monkeypatch):
+    path = tmp_path / "startup-reserve.mps"
+    _write_tiny_mps(path)
+
+    def unexpected_plugin(*args, **kwargs):
+        raise AssertionError("insufficient startup reserve must not construct the QQA plugin")
+
+    monkeypatch.setattr(
+        "qqa.benchmarking.algebraic_runner.include_qqa_heuristic",
+        unexpected_plugin,
+    )
+    result = run_benchmark_instance(
+        path,
+        format="miplib",
+        solver="sg-cqqa",
+        time_limit=30.0,
+        qqa_config=QQAHeuristicConfig(
+            minimum_core_size=1,
+            minimum_qqa_time=1.0,
+            maximum_overhead_fraction=0.05,
+            minimum_runtime_startup_time=8.0,
+        ),
+    )
+    assert result.run_config["qqa_structurally_applicable"] is True
+    assert result.run_config["qqa_budget_applicable"] is False
+    assert result.run_config["qqa_applicable"] is False
+    assert result.run_config["qqa_plugin_active"] is False
+    assert result.run_config["torch_threads"] is None
+
+
 def test_benchmark_campaign_records_path_free_failures_and_continues(tmp_path):
     missing = tmp_path / "not-present.mps.gz"
     result = compare_benchmark_solvers(
@@ -1208,6 +1439,8 @@ def test_benchmark_campaign_records_path_free_failures_and_continues(tmp_path):
         "completed_runs": 0,
         "failed_runs": 2,
         "failures_by_solver": {"scip": 1, "sg-cqqa": 1},
+        "failures_by_type": {"FileNotFoundError": 2},
+        "failures_by_outcome": {"backend_failure": 2},
     }
     payload = json.dumps(result.to_dict())
     assert str(tmp_path) not in payload
@@ -1318,6 +1551,35 @@ def test_disjoint_campaign_shards_merge_and_recompute_aggregates(tmp_path):
         merge_benchmark_campaigns([shards[0]])
 
 
+def test_merged_campaign_retains_failure_outcome_taxonomy(tmp_path):
+    source = tmp_path / "failures.json"
+    source.write_text(
+        json.dumps(
+            {
+                "results": [],
+                "summary": {},
+                "comparison_config": {
+                    "instances": ["hard.qplib"],
+                    "solvers": ["scip-aggressive", "sg-cqqa"],
+                    "seeds": [0],
+                    "baseline_solver": "scip-aggressive",
+                    "format": "qplib",
+                    "qqa_config": {"seed": 0},
+                },
+                "failures": [
+                    BenchmarkFailure(
+                        "hard.qplib", "qplib", "scip-aggressive", 0, "WorkerTimeout"
+                    ).to_dict(),
+                    BenchmarkFailure("hard.qplib", "qplib", "sg-cqqa", 0, "MemoryError").to_dict(),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    campaign = merge_benchmark_campaigns([source]).summary["campaign"]
+    assert campaign["failures_by_outcome"] == {"out_of_memory": 1, "timeout": 1}
+
+
 def test_comparison_stratifies_actual_qqa_execution():
     def result(instance, solver, objective, *, qqa=None):
         return BenchmarkResult(
@@ -1371,11 +1633,22 @@ def test_comparison_stratifies_actual_qqa_execution():
         "ties": 0,
         "wins": 0,
     }
+    inference = summary["pairwise"]["sg-cqqa"]["inference"]
+    assert inference["confidence_unit"] == "instance_after_seed_median"
+    assert inference["primal_quality"]["eligible_instances"] == 2
+    assert summary["anytime_ecdf"]["sg-cqqa"]["runs"] == 2
 
 
 def test_public_campaign_artifacts_are_deterministic_and_path_free(tmp_path):
     campaign = {
-        "results": [],
+        "results": [
+            {
+                "solver": "scip",
+                "trajectory": [{"time": 0.1, "primal_bound": 1.0}],
+                "solution_sha256": "abc",
+                "solution_values": [1.0, 0.0],
+            }
+        ],
         "summary": {"campaign": {"requested_runs": 0, "completed_runs": 0}},
         "comparison_config": {
             "instances": ["public.mps.gz"],
@@ -1423,6 +1696,10 @@ def test_public_campaign_artifacts_are_deterministic_and_path_free(tmp_path):
     ).read_bytes()
     with gzip.open(first / "miplib-campaign.json.gz", "rt", encoding="utf-8") as stream:
         assert json.load(stream) == campaign
+    compact = json.loads((first / "miplib-results.json").read_text(encoding="utf-8"))
+    assert "solution_values" not in compact["results"][0]
+    assert compact["results"][0]["solution_value_count"] == 2
+    assert compact["results"][0]["trajectory_points"] == 1
     assert str(tmp_path) not in json.dumps(manifest)
 
     campaign["comparison_config"]["source"] = str(tmp_path / "private.mps")
@@ -1440,6 +1717,16 @@ def test_public_campaign_artifacts_are_deterministic_and_path_free(tmp_path):
             tmp_path / "bad-revision",
             implementation_revision="not-a-commit",
         )
+
+
+def test_publication_cli_named_paths_are_explicit_and_unique():
+    assert _named_paths(["MIPLIB=campaign.json"], option="--campaign") == {
+        "miplib": Path("campaign.json")
+    }
+    with pytest.raises(ValueError, match="NAME=PATH"):
+        _named_paths(["campaign.json"], option="--campaign")
+    with pytest.raises(ValueError, match="duplicate"):
+        _named_paths(["miplib=one.json", "MIPLIB=two.json"], option="--campaign")
 
 
 def test_benchmark_metrics_handle_infinite_scip_gap_and_primal_integral():
@@ -1529,8 +1816,51 @@ def test_benchmark_compare_cli_has_portable_conservative_defaults():
     assert args.seeds == (0,)
     assert args.maximum_problem_variables == 32
     assert args.maximum_call_time == pytest.approx(0.15)
-    assert args.min_qqa_time == pytest.approx(2.0)
+    assert args.min_qqa_time == pytest.approx(20.0)
+    assert args.minimum_runtime_startup_time == pytest.approx(8.0)
+    assert args.max_candidates == 4
+    assert args.core_dtype == "float64"
     assert args.fast_candidates == 0
     assert args.maximum_overhead_fraction == pytest.approx(0.05)
+    assert args.worker_timeout is None
+    assert args.implementation_revision is None
+    assert not args.no_equivalent_baseline_reuse
+    assert not args.isolate_all
+    assert not args.include_import_in_budget
+    assert not args.include_solution_values
     assert not args.resume
     assert not args.continue_on_error
+
+
+@pytest.mark.parametrize(
+    ("error_type", "outcome"),
+    [
+        ("WorkerTimeout", "timeout"),
+        ("MemoryError", "out_of_memory"),
+        ("UnsupportedFactor", "unsupported"),
+        ("NativeSolverProcessError", "backend_failure"),
+    ],
+)
+def test_benchmark_failures_have_portable_outcomes(error_type, outcome):
+    failure = BenchmarkFailure("instance", "miplib", "sg-cqqa", 0, error_type)
+    assert failure.outcome == outcome
+
+
+def test_native_worker_exit_types_preserve_only_portable_diagnostics():
+    assert _native_process_error_type(None) == "NativeSolverProcessError"
+    assert _native_process_error_type(-11) == "NativeSolverSignal11"
+    assert _native_process_error_type(2) == "NativeSolverExit2"
+
+
+def test_default_worker_timeout_has_bounded_budget_relative_grace():
+    assert _default_worker_timeout(1.0) == pytest.approx(16.0)
+    assert _default_worker_timeout(30.0) == pytest.approx(45.0)
+    assert _default_worker_timeout(300.0) == pytest.approx(330.0)
+    assert _default_worker_timeout(10_000.0) == pytest.approx(10_060.0)
+
+
+def test_zero_gap_without_optimal_status_is_not_promoted_to_a_certificate():
+    assert _classify_outcome(status="timelimit", feasible=True) == "feasible"
+    assert (
+        _classify_outcome(status="optimal", feasible=True) == "optimal_with_qualified_certificate"
+    )

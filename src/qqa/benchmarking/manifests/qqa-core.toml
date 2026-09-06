@@ -1,7 +1,7 @@
 name = "qqa-core-portable"
 track = "qqa-primal"
 schema_version = 1
-budgets = [1.0, 10.0, 60.0]
+budgets = [1.0, 10.0, 30.0, 300.0]
 seeds = [0, 1, 2, 3, 4]
 solvers = ["qqa", "sa"]
 metrics = ["feasible", "objective", "time_to_first_feasible", "primal_integral"]

@@ -37,12 +37,19 @@ def plot_optimization_cockpit(
     constraint_labels = [_short_label(name) for name in constraint_names]
     constraint_values = [max(0.0, row.scaled_residual) for row in getattr(violations, "rows", ())]
     objective_value = getattr(result, "best_obj", None)
-    objective_number = 0.0 if objective_value is None else float(objective_value)
+    objective_number = None if objective_value is None else float(objective_value)
+    bound_value = getattr(result, "best_bound", None)
     status = getattr(result, "status", "unknown")
     status_text = str(getattr(status, "value", status))
     guarantee = getattr(result, "guarantee_level", "unknown")
     guarantee_text = str(getattr(guarantee, "value", guarantee))
     feasibility = getattr(getattr(violations, "status", None), "value", "unknown")
+    if feasibility == "unknown":
+        empty_constraint_message = "Constraint verification unavailable"
+    elif feasibility == "feasible":
+        empty_constraint_message = "No declared constraints<br>Variable domains verified"
+    else:
+        empty_constraint_message = "No residual details available<br>Candidate is infeasible"
 
     if backend == "plotly":
         try:
@@ -99,23 +106,33 @@ def plot_optimization_cockpit(
             )
         else:
             figure.add_annotation(
-                text="No declared constraints<br>Feasibility verified",
+                text=empty_constraint_message,
                 showarrow=False,
                 font={"size": 16, "color": "#475569"},
                 row=2,
                 col=1,
             )
-        figure.add_trace(
-            go.Indicator(
-                mode="number+delta",
-                value=objective_number,
-                number={"valueformat": ".6g"},
-                delta={"reference": float(getattr(result, "best_bound", 0.0) or 0.0)},
-                title={"text": f"{status_text} · {guarantee_text}<br>objective / bound"},
-            ),
-            row=2,
-            col=2,
-        )
+        if objective_number is None:
+            figure.add_annotation(
+                text=f"{status_text} · {guarantee_text}<br>objective unavailable",
+                showarrow=False,
+                font={"size": 16, "color": "#475569"},
+                row=2,
+                col=2,
+            )
+        else:
+            indicator_options: dict[str, Any] = {
+                "mode": "number" if bound_value is None else "number+delta",
+                "value": objective_number,
+                "number": {"valueformat": ".6g"},
+                "title": {
+                    "text": f"{status_text} · {guarantee_text}<br>"
+                    + ("objective" if bound_value is None else "objective / bound")
+                },
+            }
+            if bound_value is not None:
+                indicator_options["delta"] = {"reference": float(bound_value)}
+            figure.add_trace(go.Indicator(**indicator_options), row=2, col=2)
         figure.update_layout(title={"text": title, "x": 0.5}, template="plotly_white", height=720)
         figure.update_xaxes(title_text="Elapsed seconds", row=1, col=1)
         figure.update_xaxes(
@@ -158,7 +175,7 @@ def plot_optimization_cockpit(
         axes[1, 0].text(
             0.5,
             0.55,
-            "No declared constraints\nFeasibility verified",
+            empty_constraint_message.replace("<br>", "\n"),
             ha="center",
             va="center",
             color="#475569",
@@ -168,7 +185,8 @@ def plot_optimization_cockpit(
     axes[1, 1].text(
         0.5,
         0.55,
-        f"status: {status_text}\nobjective: {objective_number:.6g}\n"
+        f"status: {status_text}\nobjective: "
+        f"{'unavailable' if objective_number is None else f'{objective_number:.6g}'}\n"
         f"feasibility: {feasibility}\nguarantee: {guarantee_text}",
         ha="center",
         va="center",

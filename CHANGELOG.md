@@ -6,6 +6,95 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-06
+
+### Solver integrity and QQA core
+
+- Enforce original-model variable domains, finite values, coordinate-space
+  identity, feasibility-first candidate selection, and candidate/certificate
+  linkage across pure QQA, repair, and optional exact completion.
+- Centralise float64 original-model verification of objective finiteness,
+  domains, bounds, integrality, structured variables, and constraints in
+  `ModelIR.verify_solution` for every result-construction path.
+- Apply replica learning-rate and preconditioner scales to the effective Adam
+  update, normalise convexification consistently, preserve fixed per-coordinate
+  bounds, and keep adaptive augmented-Lagrangian/archive state on device.
+- Add structural sparse-factor presolve, complete adaptive/checkpoint state,
+  observed event timestamps, static original-objective incumbents, and
+  auditable stage execution diagnostics.
+- Preserve recorded trajectories and prior restart/exchange counters and epoch
+  masks across pickle-free checkpoint resume, with interrupted-versus-
+  uninterrupted parity coverage.
+- Preserve inward repair gradients at declared continuous bounds across
+  PyTorch clamp-derivative changes while retaining exact forward bounds.
+
+### Deadlines, hybrid execution, and observability
+
+- Introduce one monotonic solve context shared by compile, warm-up, search,
+  repair, baseline, and certification stages; record skipped deadline stages
+  instead of silently overrunning the requested budget.
+- Make I/O, presolve, and runtime facades lazy, avoid importing Torch in native
+  SCIP-only workers, and include isolated interpreter/package startup in the
+  strict end-to-end benchmark clock.
+- Pass QQA incumbents into CP-SAT, make QUBO-to-SCIP certification reachable,
+  distinguish capability, planning, and actual execution, and add an explicit
+  opt-in mode that requires a QQA-generated primal.
+- Keep unavailable cockpit values unknown, distinguish search merit from the
+  mathematical objective, and remove the obsolete external Polyfill script
+  from the documentation site.
+
+### Public benchmark protocol
+
+- Add the complete MIPLIB/QPLIB audit manifest with fixed public snapshot
+  hashes, 1/10/30/300-second budgets, five seeds, and a direct aggressive-SCIP
+  ablation.
+- Add optional all-solver process isolation, model import inside the matched
+  deadline, independent bypass execution, bounded native workers, original-
+  coordinate solution hashes/values, stage timings, peak memory, target time,
+  anytime ECDFs, instance-level bootstrap intervals, and normalized failure
+  outcomes.
+- Preserve path-free failure records and separate independent runs, equivalent
+  baseline reuse, QQA activation, and QQA-attributable improvements.
+- Add a `qqa benchmark publish` command for deterministic, path-checked
+  compact/full MIPLIB and QPLIB artifacts, keep full solution vectors out of
+  the compact form, and record portable original-model structure metadata.
+- Align Python and CLI hybrid defaults on the conservative screened profile,
+  bypass QQA when the integer core or remaining budget cannot reach its minimum,
+  and retain portable native signal/exit diagnostics.
+- Require a 20-second QQA reserve by default after short-budget screening;
+  1- and 10-second comparisons stay on the matched SCIP path.
+- Delay the optional Torch-backed heuristic runtime until a SCIP callback
+  passes every cheap timing and structural gate, and report its one-time
+  initialisation cost separately in heuristic diagnostics.
+- Enforce the hybrid overhead cap against complete measured callback wall
+  time, including state inspection, lazy numerical-runtime startup, candidate
+  ranking, QQA, and completion instead of only QQA/completion substeps.
+- Require a conservative cold-start allowance before loading the optional
+  numerical runtime, keeping 1-, 10-, and 30-second default comparisons on the
+  native SCIP path when the 5% overhead budget cannot absorb startup.
+- Reserve bounded callback-deadline slack before QQA execution so epoch-level
+  stopping and candidate post-processing do not consume the advertised
+  plugin-overhead allowance.
+- Synchronise CUDA work at explicit wall-clock deadline checks, report QQA
+  epoch/deadline diagnostics, and use configurable core precision while SCIP
+  validates completed candidates against the original model.
+- Remove history and duplicate historical-archive work from the bounded hybrid
+  callback while retaining its best/final population and constraint archive.
+- Seed general-integer QQA cores with alternating LP-centred randomized
+  rounding and broad lattice samples instead of pathological bound-only draws.
+- Adopt the screened float64/four-candidate hybrid profile, which produced
+  more final-quality wins without losses across its five-seed tuning campaign.
+- Make balanced solver order invariant to campaign sharding by deriving its
+  phase from the portable instance name and seed, including independently
+  executed structural-bypass cells.
+- Compare resumable campaign settings in their persisted JSON representation,
+  so tuple-valued QPLIB type allow-lists resume without a false configuration
+  mismatch after checkpoint serialization.
+- Publish the path-free aggregate and verification report for the complete
+  27,720-run MIPLIB/QPLIB campaign across four budgets and five seeds,
+  including failures, cold-clock overruns, instance-level inference, measured
+  QQA activation, and the absence of suite-wide SCIP dominance.
+
 ### Repository layout
 
 - Consolidate historical benchmark aggregates in the documentation and remove

@@ -11,29 +11,19 @@ import math
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from time import perf_counter
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
-import torch
-
-from qqa.algebraic import AlgebraicModel
-from qqa.decomposition import (
-    complete_integer_assignment,
-    complete_integer_assignment_dive,
-    create_completion_template,
-)
-from qqa.hybrid.core_problem import build_core_problem
-from qqa.hybrid.core_selector import select_uncertain_integer_core
-from qqa.hybrid.heuristic_runtime import (
-    build_initial_population,
-    rank_repair_candidates,
-    select_repair_positions,
-    solve_core_problem,
-)
 from qqa.hybrid.heuristic_types import QQAHeuristicConfig, QQAHeuristicStats
-from qqa.hybrid.neighborhood import build_neighborhood, within_local_branching
-from qqa.hybrid.surrogate import build_core_surrogate, generate_surrogate_candidates
-from qqa.mixed import MixedProblem
-from qqa.presolve import extract_scip_state
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from qqa.algebraic import AlgebraicModel
+    from qqa.mixed import MixedProblem
+else:
+    AlgebraicModel = Any
+    MixedProblem = Any
+    NDArray = Any
 
 try:  # Keep importing qqa independent from the optional SCIP wheel.
     from pyscipopt import Heur as _HeurBase
@@ -43,10 +33,39 @@ except (ImportError, OSError):  # pragma: no cover - optional dependency
         pass
 
 
-# Private compatibility aliases for callers that exercised the pre-refactor
-# test seams. Internal code uses the descriptive helper names above.
-_core_problem = build_core_problem
-_select_repair_positions = select_repair_positions
+# Private compatibility wrappers for callers that exercised the pre-refactor
+# test seams. Imports stay inside the wrappers so registering an inapplicable
+# heuristic never pays Torch's process-startup cost.
+def _core_problem(*args: Any, **kwargs: Any):
+    from qqa.hybrid.core_problem import build_core_problem
+
+    return build_core_problem(*args, **kwargs)
+
+
+def _select_repair_positions(*args: Any, **kwargs: Any):
+    from qqa.hybrid.heuristic_runtime import select_repair_positions
+
+    return select_repair_positions(*args, **kwargs)
+
+
+def _create_completion_template(model):
+    from qqa.decomposition import create_completion_template
+
+    return create_completion_template(model)
+
+
+def complete_integer_assignment(*args: Any, **kwargs: Any):
+    """Compatibility seam that keeps decomposition imports demand-driven."""
+    from qqa.decomposition import complete_integer_assignment as complete
+
+    return complete(*args, **kwargs)
+
+
+def complete_integer_assignment_dive(*args: Any, **kwargs: Any):
+    """Demand-driven wrapper around SCIP's in-place completion dive."""
+    from qqa.decomposition import complete_integer_assignment_dive as complete
+
+    return complete(*args, **kwargs)
 
 
 class QQAHeuristic(_HeurBase):
@@ -59,7 +78,7 @@ class QQAHeuristic(_HeurBase):
         completion_template=None,
         completion_template_factory: Callable[[], object] | None = None,
         algebraic: AlgebraicModel | None = None,
-        incumbent_provider: Callable[[], np.ndarray | None] | None = None,
+        incumbent_provider: Callable[[], NDArray | None] | None = None,
         feedback_bus=None,
     ):
         self.config = config or QQAHeuristicConfig()
@@ -73,9 +92,13 @@ class QQAHeuristic(_HeurBase):
         self._archive: set[bytes] = set()
         self._lns_archive: set[bytes] = set()
         self._reference_pool: list[dict[str, float]] = []
+        self._numerical_runtime_loaded = False
+        self._active_callback_started_at: float | None = None
 
-    def _reference_disagreement(self, state) -> np.ndarray:
+    def _reference_disagreement(self, state) -> NDArray:
         """Return node-aligned disagreement across recent LP references."""
+        import numpy as np
+
         current = {
             state.names[index]: float(state.lp_values[index]) for index in state.integer_indices
         }
@@ -109,12 +132,14 @@ class QQAHeuristic(_HeurBase):
     def _reference_initial_values(
         self,
         state,
-        selected_indices: np.ndarray,
-        lower: np.ndarray,
-        upper: np.ndarray,
-    ) -> list[np.ndarray]:
+        selected_indices: NDArray,
+        lower: NDArray,
+        upper: NDArray,
+    ) -> list[NDArray]:
+        import numpy as np
+
         names = [state.names[index] for index in selected_indices]
-        result: list[np.ndarray] = []
+        result: list[NDArray] = []
         for reference in reversed(self._reference_pool):
             if not all(name in reference for name in names):
                 continue
@@ -123,6 +148,8 @@ class QQAHeuristic(_HeurBase):
         return result
 
     def _with_external_incumbent(self, state):
+        import numpy as np
+
         if self.algebraic is None or self.incumbent_provider is None:
             return state
         external = self.incumbent_provider()
@@ -151,6 +178,8 @@ class QQAHeuristic(_HeurBase):
 
     def _external_incumbent_objective(self) -> float | None:
         """Evaluate the benchmark-visible incumbent before solution injection."""
+        import numpy as np
+
         if self.algebraic is None or self.incumbent_provider is None:
             return None
         external = self.incumbent_provider()
@@ -192,7 +221,18 @@ class QQAHeuristic(_HeurBase):
             return math.inf
         if not math.isfinite(limit) or limit >= 1e19:
             return math.inf
-        used = self.stats.qqa_runtime + self.stats.completion_runtime
+        measured = self.stats.callback_runtime
+        if self._active_callback_started_at is not None:
+            measured += perf_counter() - self._active_callback_started_at
+        # Component counters remain useful when private numerical helpers are
+        # exercised directly, outside SCIP's registered callback wrapper.
+        components = (
+            self.stats.inspection_runtime
+            + self.stats.numerical_runtime_initialisation
+            + self.stats.qqa_runtime
+            + self.stats.completion_runtime
+        )
+        used = max(measured, components)
         return max(0.0, self.config.maximum_overhead_fraction * limit - used)
 
     def _qqa_has_stalled(self) -> bool:
@@ -201,6 +241,15 @@ class QQAHeuristic(_HeurBase):
             and self.stats.qqa_calls > 0
             and self.stats.qqa_incumbent_improvements == 0
         )
+
+    def _runtime_startup_is_affordable(self) -> bool:
+        """Return whether the remaining plugin allowance can absorb cold start."""
+        return self._remaining_overhead_budget() >= self.config.minimum_runtime_startup_time
+
+    @staticmethod
+    def _callback_deadline_safety(available: float) -> float:
+        """Reserve bounded slack for epoch-granularity and callback post-processing."""
+        return min(2.0, max(0.5, 0.15 * available))
 
     def _fast_path_supports_qqa(self, completion_feasible_before: int) -> bool:
         """Require completion evidence before escalating a primary hybrid call."""
@@ -212,14 +261,17 @@ class QQAHeuristic(_HeurBase):
     def _rank_population(
         self,
         problem: MixedProblem,
-        population: list[np.ndarray],
+        population: list[NDArray],
         state,
         selection,
         positions: list[int],
-        selected_indices: np.ndarray,
+        selected_indices: NDArray,
         *,
         enforce_incumbent_filter: bool = True,
-    ) -> list[np.ndarray]:
+    ) -> list[NDArray]:
+        import numpy as np
+        import torch
+
         if not population:
             return []
         population_array = np.stack(population)
@@ -257,17 +309,25 @@ class QQAHeuristic(_HeurBase):
 
     def _complete_population(
         self,
-        population: list[np.ndarray],
+        population: list[NDArray],
         problem: MixedProblem,
         state,
         selection,
         positions: list[int],
-        selected_indices: np.ndarray,
+        selected_indices: NDArray,
         neighborhood,
         seen_now: set[bytes],
         *,
         source: str,
     ) -> tuple[bool, bool]:
+        import numpy as np
+
+        from qqa.hybrid.heuristic_runtime import (
+            rank_repair_candidates,
+            select_repair_positions,
+        )
+        from qqa.hybrid.neighborhood import within_local_branching
+
         if source not in {"fast", "qqa"}:
             raise ValueError("source must be 'fast' or 'qqa'.")
         accepted_any = False
@@ -533,7 +593,21 @@ class QQAHeuristic(_HeurBase):
                 break
         return accepted_any, improved_any
 
-    def heurexec(self, heurtiming, nodeinfeasible):  # noqa: ARG002 - SCIP callback signature
+    def heurexec(self, heurtiming, nodeinfeasible):
+        """Account for the complete plugin callback, including lazy startup."""
+        callback_started = perf_counter()
+        self._active_callback_started_at = callback_started
+        try:
+            return self._heurexec_impl(heurtiming, nodeinfeasible)
+        finally:
+            self.stats.callback_runtime += perf_counter() - callback_started
+            self._active_callback_started_at = None
+
+    def _heurexec_impl(
+        self,
+        heurtiming,
+        nodeinfeasible,
+    ):  # noqa: ARG002 - SCIP callback signature
         from pyscipopt import SCIP_LPSOLSTAT, SCIP_RESULT
 
         self.stats.callbacks += 1
@@ -593,11 +667,29 @@ class QQAHeuristic(_HeurBase):
             if lp_candidate_count / self.config.core_size > self.config.maximum_core_saturation:
                 self.stats.saturation_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
+        # Importing the optional numerical stack is an indivisible cold-start
+        # operation. Do not begin it unless the complete callback-overhead
+        # allowance has a conservative startup reserve. This keeps short
+        # budgets on the native SCIP path instead of discovering only after a
+        # costly import that the measured cap has already been consumed.
+        if not self._runtime_startup_is_affordable():
+            self.stats.runtime_budget_skips += 1
+            return {"result": SCIP_RESULT.DIDNOTRUN}
+        # Everything above is a cheap SCIP-only precheck. Load NumPy-based
+        # state inspection only for a plausible callback; Torch remains lazy
+        # until the selected core is known to satisfy every structural gate.
+        import numpy as np
+
+        from qqa.hybrid.core_selector import select_uncertain_integer_core
+        from qqa.presolve import extract_scip_state
+
         inspection_started = perf_counter()
         try:
             state = self._with_external_incumbent(extract_scip_state(self.model))
             disagreement = self._reference_disagreement(state)
             if self.feedback_bus is not None:
+                import torch
+
                 self.feedback_bus.publish(
                     lp_primal=torch.as_tensor(state.lp_values, dtype=torch.float64),
                     reduced_costs=torch.as_tensor(state.reduced_costs, dtype=torch.float64),
@@ -644,6 +736,26 @@ class QQAHeuristic(_HeurBase):
             if len(selected_indices) / self.config.core_size > self.config.maximum_core_saturation:
                 self.stats.saturation_skips += 1
                 return {"result": SCIP_RESULT.DIDNOTRUN}
+            # This is the first point at which a QQA call can be useful. The
+            # heavy optimisation stack is deliberately imported here rather
+            # than at plugin registration or at every SCIP-only callback.
+            runtime_started = perf_counter()
+            from qqa.hybrid.core_problem import build_core_problem
+            from qqa.hybrid.heuristic_runtime import (
+                build_initial_population,
+                solve_core_problem,
+            )
+            from qqa.hybrid.neighborhood import build_neighborhood
+            from qqa.hybrid.surrogate import (
+                build_core_surrogate,
+                generate_surrogate_candidates,
+            )
+
+            if not self._numerical_runtime_loaded:
+                self.stats.numerical_runtime_loads += 1
+                self.stats.numerical_runtime_initialisation += perf_counter() - runtime_started
+                self._numerical_runtime_loaded = True
+
             self.stats.calls += 1
             self.stats.call_nodes.append(node_number)
             self.stats.call_times.append(float(self.model.getSolvingTime()))
@@ -725,9 +837,11 @@ class QQAHeuristic(_HeurBase):
                     0.5 * remaining,
                     max(0.05, 0.25 * overhead_remaining),
                 )
+                deadline_safety = self._callback_deadline_safety(overhead_remaining)
+                self.stats.callback_deadline_safety_reserved += deadline_safety
                 qqa_budget = min(
-                    remaining - completion_reserve,
-                    overhead_remaining - completion_reserve,
+                    remaining - completion_reserve - deadline_safety,
+                    overhead_remaining - completion_reserve - deadline_safety,
                 )
                 if qqa_budget <= 0.05:
                     return {
@@ -765,6 +879,12 @@ class QQAHeuristic(_HeurBase):
                 )
                 self.stats.qqa_calls += 1
                 self.stats.qqa_runtime += perf_counter() - qqa_started
+                completed_epochs = result.diagnostics.get("completed_epochs")
+                if isinstance(completed_epochs, int):
+                    self.stats.qqa_completed_epochs.append(completed_epochs)
+                self.stats.qqa_deadline_reached += int(
+                    result.diagnostics.get("deadline_reached") is True
+                )
                 al_diagnostics = result.diagnostics.get("adaptive_augmented_lagrangian")
                 if isinstance(al_diagnostics, Mapping):
                     self.stats.qqa_al_updates += int(al_diagnostics.get("updates", 0))
@@ -803,7 +923,7 @@ def include_qqa_heuristic(
     config: QQAHeuristicConfig | None = None,
     *,
     algebraic: AlgebraicModel | None = None,
-    incumbent_provider: Callable[[], np.ndarray | None] | None = None,
+    incumbent_provider: Callable[[], NDArray | None] | None = None,
     completion_template_factory: Callable[[], object] | None = None,
     feedback_bus=None,
 ) -> QQAHeuristic:
@@ -817,7 +937,7 @@ def include_qqa_heuristic(
     if not needs_completion_template:
         completion_template_factory = None
     completion_template = (
-        create_completion_template(model)
+        _create_completion_template(model)
         if needs_completion_template and completion_template_factory is None
         else None
     )

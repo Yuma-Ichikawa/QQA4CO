@@ -32,6 +32,7 @@ class CoreRowProblem(MixedProblem):
         surrogate: CoreSurrogate,
         *,
         row_penalty: float,
+        dtype: torch.dtype,
     ) -> None:
         constraints: list[Constraint] = []
         source_rows: list[int] = []
@@ -99,11 +100,11 @@ class CoreRowProblem(MixedProblem):
             objective,
             constraints=constraints,
             name="scip-guided-integer-core",
-            dtype=torch.float64,
+            dtype=dtype,
         )
         self._core_names = tuple(names)
-        self._row_matrix = torch.as_tensor(surrogate.row_matrix, dtype=torch.float64)
-        self._row_offset = torch.as_tensor(surrogate.row_offset, dtype=torch.float64)
+        self._row_matrix = torch.as_tensor(surrogate.row_matrix, dtype=dtype)
+        self._row_offset = torch.as_tensor(surrogate.row_offset, dtype=dtype)
         self._constraint_source_rows = tuple(source_rows)
         self._row_device_cache: dict[
             tuple[torch.device, torch.dtype], tuple[torch.Tensor, torch.Tensor]
@@ -139,6 +140,7 @@ def build_core_problem(
     *,
     adaptive_rows: bool = False,
 ) -> tuple[MixedProblem, list[str]]:
+    dtype = torch.float32 if config.core_dtype == "float32" else torch.float64
     declarations: list[VariableSpec] = []
     names = []
     targets = []
@@ -160,19 +162,19 @@ def build_core_problem(
         reduced.append(float(state.reduced_costs[variable_index]))
         weights.append(float(max(0.1, selection.scores[position])))
 
-    target_vector = torch.tensor(targets, dtype=torch.float64)
-    span_vector = torch.tensor(spans, dtype=torch.float64)
-    reduced_vector = torch.tensor(reduced, dtype=torch.float64)
+    target_vector = torch.tensor(targets, dtype=dtype)
+    span_vector = torch.tensor(spans, dtype=dtype)
+    reduced_vector = torch.tensor(reduced, dtype=dtype)
     reduced_vector /= reduced_vector.abs().amax().clamp_min(1.0)
-    weight_vector = torch.tensor(weights, dtype=torch.float64)
-    quadratic = torch.tensor(surrogate.quadratic, dtype=torch.float64)
-    linear = torch.tensor(surrogate.linear, dtype=torch.float64)
+    weight_vector = torch.tensor(weights, dtype=dtype)
+    quadratic = torch.tensor(surrogate.quadratic, dtype=dtype)
+    linear = torch.tensor(surrogate.linear, dtype=dtype)
     adaptive_rows = bool(adaptive_rows and surrogate.num_rows)
-    row_matrix = torch.tensor(surrogate.row_matrix, dtype=torch.float64)
-    row_offset = torch.tensor(surrogate.row_offset, dtype=torch.float64)
-    row_lower = torch.tensor(surrogate.row_lower, dtype=torch.float64)
-    row_upper = torch.tensor(surrogate.row_upper, dtype=torch.float64)
-    row_scale = torch.tensor(surrogate.row_scale, dtype=torch.float64)
+    row_matrix = torch.tensor(surrogate.row_matrix, dtype=dtype)
+    row_offset = torch.tensor(surrogate.row_offset, dtype=dtype)
+    row_lower = torch.tensor(surrogate.row_lower, dtype=dtype)
+    row_upper = torch.tensor(surrogate.row_upper, dtype=dtype)
+    row_scale = torch.tensor(surrogate.row_scale, dtype=dtype)
     constant_cache: dict[tuple[torch.device, torch.dtype], tuple[torch.Tensor, ...]] = {}
 
     def objective(values: Mapping[str, torch.Tensor]) -> torch.Tensor:
@@ -240,13 +242,14 @@ def build_core_problem(
             names,
             surrogate,
             row_penalty=config.row_penalty,
+            dtype=dtype,
         )
     else:
         problem = MixedProblem(
             declarations,
             objective,
             name="scip-guided-integer-core",
-            dtype=torch.float64,
+            dtype=dtype,
         )
     return problem, names
 

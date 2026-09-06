@@ -156,12 +156,17 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
         fallbacks.append("optional exact completion")
     if replicas < requested:
         reasons.append(f"Replica count was reduced from {requested} to fit the memory budget.")
-    relaxation_fraction = 0.08 if "linear" in structure and resolved.backend == "qqa" else 0.0
+    qqa_planned = not (
+        exact is not None and (inspection.missing_bounds or inspection.unsupported_qqa)
+    )
+    relaxation_fraction = (
+        0.08 if qqa_planned and "linear" in structure and resolved.backend == "qqa" else 0.0
+    )
     if exact is None:
         qqa_fraction = 0.90 - relaxation_fraction
         refinement_fraction = 0.10
         exact_fraction = 0.0
-    else:
+    elif qqa_planned:
         qqa_fraction = 0.25
         if inspection.num_variables >= 1000:
             qqa_fraction += 0.10
@@ -172,6 +177,13 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
         qqa_fraction = min(0.60, qqa_fraction)
         refinement_fraction = 0.07
         exact_fraction = max(0.10, 1.0 - relaxation_fraction - qqa_fraction - refinement_fraction)
+    else:
+        qqa_fraction = 0.0
+        refinement_fraction = 0.0
+        exact_fraction = 1.0 - relaxation_fraction
+        reasons.append(
+            "QQA primal search is not planned because its declared factor/bound contract is unmet."
+        )
     stages = [PlanStage("compile", "factor-registry", "lowering")]
     previous = "compile"
     if relaxation_fraction:
@@ -186,31 +198,33 @@ def build_plan(model: Any, config: SolverConfig) -> SolverPlan:
             )
         )
         previous = "relaxation"
-    stages.append(
-        PlanStage(
-            "qqa-primal",
-            primary,
-            "population-primal-search",
-            (previous,),
-            qqa_fraction,
+    if qqa_planned:
+        stages.append(
+            PlanStage(
+                "qqa-primal",
+                primary,
+                "population-primal-search",
+                (previous,),
+                qqa_fraction,
+            )
         )
-    )
-    stages.append(
-        PlanStage(
-            "repair-and-lns",
-            "+".join(refinements) or "domain-repair",
-            "feasibility-and-incumbent-improvement",
-            ("qqa-primal",),
-            refinement_fraction,
+        stages.append(
+            PlanStage(
+                "repair-and-lns",
+                "+".join(refinements) or "domain-repair",
+                "feasibility-and-incumbent-improvement",
+                ("qqa-primal",),
+                refinement_fraction,
+            )
         )
-    )
+        previous = "repair-and-lns"
     if exact is not None:
         stages.append(
             PlanStage(
                 "certificate",
                 exact,
                 "completion-bound-and-proof",
-                ("qqa-primal", "repair-and-lns"),
+                (("qqa-primal", "repair-and-lns") if qqa_planned else (previous,)),
                 exact_fraction,
             )
         )

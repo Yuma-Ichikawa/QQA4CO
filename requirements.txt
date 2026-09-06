@@ -16,7 +16,7 @@
 # dependency-confusion protection or selecting stale utility packages from a
 # secondary index.
 --find-links https://download.pytorch.org/whl/cpu/torch/
-torch==2.13.0+cpu
+torch==2.14.0+cpu
 
 numpy==2.5.2
 networkx==3.6.1
@@ -27,7 +27,7 @@ tqdm==4.70.0
 # Interactive plots + GUI (REQUIRED by app/_common.py at import time).
 plotly==7.0.0
 pandas==3.0.5
-streamlit==1.62.0
+streamlit==1.63.0
 
 # Install this repository so ``import qqa`` works inside the app.
 # IMPORTANT: must be the LAST line. We bump pyproject.toml's ``version``

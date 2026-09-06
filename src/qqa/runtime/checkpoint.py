@@ -10,7 +10,8 @@ import os
 import tempfile
 import zipfile
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -20,6 +21,53 @@ import torch
 from qqa.runtime.security import validate_portable_payload
 
 _MAX_ARCHIVE_BYTES = 2 * 1024**3
+
+
+def _update_fingerprint(digest, value: Any) -> None:
+    """Hash model semantics recursively without serialising environment data."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        digest.update(json.dumps(value, sort_keys=True, allow_nan=True).encode())
+        return
+    if isinstance(value, Enum):
+        _update_fingerprint(digest, value.value)
+        return
+    if isinstance(value, torch.Tensor):
+        array = value.detach().cpu().contiguous().numpy()
+        digest.update(str((array.dtype, array.shape)).encode())
+        digest.update(array.tobytes())
+        return
+    if isinstance(value, np.ndarray):
+        array = np.ascontiguousarray(value)
+        digest.update(str((array.dtype, array.shape)).encode())
+        digest.update(array.tobytes())
+        return
+    if isinstance(value, dict) or hasattr(value, "items"):
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0])):
+            _update_fingerprint(digest, str(key))
+            _update_fingerprint(digest, item)
+        return
+    if isinstance(value, (list, tuple)):
+        digest.update(f"sequence:{len(value)}".encode())
+        for item in value:
+            _update_fingerprint(digest, item)
+        return
+    if is_dataclass(value):
+        digest.update(f"{type(value).__module__}.{type(value).__qualname__}".encode())
+        for item in fields(value):
+            _update_fingerprint(digest, item.name)
+            _update_fingerprint(digest, getattr(value, item.name))
+        return
+    if callable(value):
+        digest.update(f"callable:{value.__module__}.{value.__qualname__}".encode())
+        with suppress(OSError, TypeError):
+            digest.update(inspect.getsource(value).encode())
+        closure = getattr(value, "__closure__", None)
+        if closure:
+            for cell in closure:
+                with suppress(ValueError):
+                    _update_fingerprint(digest, cell.cell_contents)
+        return
+    digest.update(f"opaque:{type(value).__module__}.{type(value).__qualname__}".encode())
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +103,7 @@ def fingerprint_problem(problem: Any) -> str:
                 tensors.append(value)
     model_ir = getattr(problem, "model_ir", None)
     if model_ir is not None:
+        _update_fingerprint(digest, model_ir)
         expressions = [model_ir.objective, *(row.expression for row in model_ir.constraints)]
         for expression in expressions:
             for factor in expression.factors:

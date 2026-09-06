@@ -12,10 +12,15 @@ from qqa.model.bounds import (
     tighten_singleton_bounds,
 )
 from qqa.model.ir import (
+    CardinalityFactor,
+    ClauseFactor,
     ConstraintIR,
     Factor,
+    HigherOrderFactor,
+    LinearFactor,
     ModelIR,
     ObjectiveIR,
+    QuadraticEdgeFactor,
     VariableBlock,
     VariableDomain,
 )
@@ -142,6 +147,183 @@ def _fixed_coordinates(model: ModelIR) -> tuple[torch.Tensor, torch.Tensor]:
     )
 
 
+def _structurally_reduce_factor(
+    factor: Factor,
+    *,
+    remap: torch.Tensor,
+    fixed_by_index: torch.Tensor,
+) -> tuple[list[Factor], float] | None:
+    """Reduce built-in sparse factors without rebuilding full vectors.
+
+    ``None`` delegates uncommon/native factors to :class:`EmbeddedFactor`,
+    preserving correctness while common MIP/QUBO factors retain sparse GPU
+    execution after fixed-variable elimination.
+    """
+    if isinstance(factor, LinearFactor):
+        linear_factor_indices = factor.indices.cpu()
+        linear_factor_weights = factor.weights.cpu()
+        linear_mapped = remap[linear_factor_indices]
+        linear_active = linear_mapped >= 0
+        constant = float(
+            (
+                linear_factor_weights[~linear_active]
+                * fixed_by_index[linear_factor_indices[~linear_active]]
+            )
+            .sum()
+            .item()
+        )
+        factors: list[Factor] = []
+        if linear_active.any():
+            factors.append(
+                LinearFactor(linear_mapped[linear_active], linear_factor_weights[linear_active])
+            )
+        return factors, constant
+
+    if isinstance(factor, QuadraticEdgeFactor):
+        source, target = factor.edge_index.cpu()
+        quadratic_factor_weights = factor.weights.cpu()
+        mapped_source, mapped_target = remap[source], remap[target]
+        source_active, target_active = mapped_source >= 0, mapped_target >= 0
+        both_active = source_active & target_active
+        factors = []
+        if both_active.any():
+            factors.append(
+                QuadraticEdgeFactor(
+                    torch.stack((mapped_source[both_active], mapped_target[both_active])),
+                    quadratic_factor_weights[both_active],
+                )
+            )
+        one_active = source_active ^ target_active
+        if one_active.any():
+            quadratic_active_indices = torch.where(
+                source_active[one_active], mapped_source[one_active], mapped_target[one_active]
+            )
+            quadratic_fixed_indices = torch.where(
+                source_active[one_active], target[one_active], source[one_active]
+            )
+            factors.append(
+                LinearFactor(
+                    quadratic_active_indices,
+                    quadratic_factor_weights[one_active] * fixed_by_index[quadratic_fixed_indices],
+                )
+            )
+        neither_active = ~source_active & ~target_active
+        constant = float(
+            (
+                quadratic_factor_weights[neither_active]
+                * fixed_by_index[source[neither_active]]
+                * fixed_by_index[target[neither_active]]
+            )
+            .sum()
+            .item()
+        )
+        return factors, constant
+
+    if isinstance(factor, HigherOrderFactor):
+        linear_indices: list[int] = []
+        linear_weights: list[float] = []
+        quadratic_indices: list[list[int]] = []
+        quadratic_weights: list[float] = []
+        higher: dict[int, tuple[list[list[int]], list[float]]] = {}
+        constant = 0.0
+        for higher_indices, higher_weight in zip(
+            factor.indices.cpu().tolist(), factor.weights.cpu().tolist(), strict=True
+        ):
+            remaining_indices = [int(remap[index]) for index in higher_indices if remap[index] >= 0]
+            coefficient = float(higher_weight)
+            for index in higher_indices:
+                if remap[index] < 0:
+                    coefficient *= float(fixed_by_index[index])
+            if coefficient == 0.0:
+                continue
+            if not remaining_indices:
+                constant += coefficient
+            elif len(remaining_indices) == 1:
+                linear_indices.append(remaining_indices[0])
+                linear_weights.append(coefficient)
+            elif len(remaining_indices) == 2:
+                quadratic_indices.append(remaining_indices)
+                quadratic_weights.append(coefficient)
+            else:
+                grouped_rows, grouped_weights = higher.setdefault(len(remaining_indices), ([], []))
+                grouped_rows.append(remaining_indices)
+                grouped_weights.append(coefficient)
+        factors = []
+        if linear_indices:
+            factors.append(LinearFactor(torch.tensor(linear_indices), torch.tensor(linear_weights)))
+        if quadratic_indices:
+            factors.append(
+                QuadraticEdgeFactor(
+                    torch.tensor(quadratic_indices).T.contiguous(),
+                    torch.tensor(quadratic_weights),
+                )
+            )
+        for grouped_rows, grouped_weights in higher.values():
+            factors.append(
+                HigherOrderFactor(torch.tensor(grouped_rows), torch.tensor(grouped_weights))
+            )
+        return factors, constant
+
+    if isinstance(factor, CardinalityFactor):
+        cardinality_indices = factor.indices.cpu()
+        cardinality_mapped = remap[cardinality_indices]
+        cardinality_active = cardinality_mapped >= 0
+        fixed_sum = float(fixed_by_index[cardinality_indices[~cardinality_active]].sum().item())
+        if not cardinality_active.any():
+            return [], float(factor.weight * (fixed_sum - factor.target) ** 2)
+        return [
+            CardinalityFactor(
+                cardinality_mapped[cardinality_active],
+                factor.target - fixed_sum,
+                factor.weight,
+            )
+        ], 0.0
+
+    if isinstance(factor, ClauseFactor):
+        grouped: dict[int, tuple[list[list[int]], list[list[int]], list[float]]] = {}
+        constant = 0.0
+        assert factor.weights is not None
+        for clause_indices, clause_signs, clause_weight in zip(
+            factor.indices.cpu().tolist(),
+            factor.signs.cpu().tolist(),
+            factor.weights.cpu().tolist(),
+            strict=True,
+        ):
+            clause_active_indices: list[int] = []
+            clause_active_signs: list[int] = []
+            satisfied = False
+            for index, sign in zip(clause_indices, clause_signs, strict=True):
+                mapped_index = int(remap[index])
+                if mapped_index >= 0:
+                    clause_active_indices.append(mapped_index)
+                    clause_active_signs.append(sign)
+                    continue
+                value = float(fixed_by_index[index])
+                satisfied |= (sign > 0 and value == 1.0) or (sign < 0 and value == 0.0)
+            if satisfied:
+                continue
+            if not clause_active_indices:
+                constant += float(clause_weight)
+                continue
+            clause_rows, grouped_signs, grouped_weights = grouped.setdefault(
+                len(clause_active_indices), ([], [], [])
+            )
+            clause_rows.append(clause_active_indices)
+            grouped_signs.append(clause_active_signs)
+            grouped_weights.append(float(clause_weight))
+        factors = [
+            ClauseFactor(
+                torch.tensor(clause_rows),
+                torch.tensor(grouped_signs),
+                torch.tensor(grouped_weights),
+            )
+            for clause_rows, grouped_signs, grouped_weights in grouped.values()
+        ]
+        return factors, constant
+
+    return None
+
+
 def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult:
     """Apply safe reductions and return an explicit original-space decoder."""
     if not isinstance(model, ModelIR):
@@ -192,22 +374,37 @@ def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult
     else:
         variables = list(model.variables)
 
+    remap = torch.full((model.num_variables,), -1, dtype=torch.long)
+    remap[active_indices] = torch.arange(len(active_indices))
+    fixed_by_index = torch.zeros(model.num_variables, dtype=torch.float64)
+    fixed_by_index[fixed_indices] = fixed_values
+
     def expression(source: ObjectiveIR) -> ObjectiveIR:
         if not eliminate:
             return source
-        return ObjectiveIR(
-            tuple(
-                EmbeddedFactor(
-                    factor,
-                    model.num_variables,
-                    active_indices,
-                    fixed_indices,
-                    fixed_values,
+        factors: list[Factor] = []
+        constant = float(source.constant)
+        for factor in source.factors:
+            reduced_factor = _structurally_reduce_factor(
+                factor,
+                remap=remap,
+                fixed_by_index=fixed_by_index,
+            )
+            if reduced_factor is None:
+                factors.append(
+                    EmbeddedFactor(
+                        factor,
+                        model.num_variables,
+                        active_indices,
+                        fixed_indices,
+                        fixed_values,
+                    )
                 )
-                for factor in source.factors
-            ),
-            source.constant,
-        )
+                continue
+            reduced_factors, fixed_constant = reduced_factor
+            factors.extend(reduced_factors)
+            constant += fixed_constant
+        return ObjectiveIR(tuple(factors), constant)
 
     constraints = []
     empty = 0
@@ -215,8 +412,10 @@ def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult
     rescaled = 0
     seen = set()
     for row in model.constraints:
-        if not row.expression.factors:
-            if not _constant_constraint_satisfied(row):
+        reduced_expression = expression(row.expression)
+        if not reduced_expression.factors:
+            reduced_row = replace(row, expression=reduced_expression)
+            if not _constant_constraint_satisfied(reduced_row):
                 raise PresolveInfeasibleError(
                     f"Constant constraint {row.name!r} proves the model infeasible."
                 )
@@ -241,7 +440,7 @@ def presolve_model(model: ModelIR, *, auto_scale: bool = True) -> PresolveResult
             if inferred > scale:
                 scale = inferred
                 rescaled += 1
-        constraints.append(replace(row, expression=expression(row.expression), scale=scale))
+        constraints.append(replace(row, expression=reduced_expression, scale=scale))
 
     reduced = ModelIR(
         tuple(variables),

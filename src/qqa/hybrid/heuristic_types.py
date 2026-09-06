@@ -8,38 +8,39 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True, slots=True)
 class QQAHeuristicConfig:
-    core_size: int = 64
-    maximum_problem_variables: int | None = None
-    maximum_integer_variables: int | None = None
+    core_size: int = 32
+    maximum_problem_variables: int | None = 32
+    maximum_integer_variables: int | None = 2048
     allowed_qplib_problem_types: tuple[str, ...] | None = None
-    sol_size: int = 32
-    epochs: int = 120
-    max_calls: int = 4
-    max_candidates: int = 8
+    sol_size: int = 16
+    epochs: int = 20
+    max_calls: int = 1
+    max_candidates: int = 4
     frequency: int = 10
     maximum_depth: int = 20
-    minimum_core_size: int = 1
-    maximum_core_saturation: float = 1.0
-    completion_time: float = 1.0
-    completion_nodes: int = 500
-    dive_lp_iterations: int = 500
+    minimum_core_size: int = 16
+    maximum_core_saturation: float = 0.9
+    completion_time: float = 0.25
+    completion_nodes: int = 100
+    dive_lp_iterations: int = 300
     dive_max_repair_changes: int = 12
     use_dive_completion: bool = True
-    subscip_repair: bool = False
-    qqa_fix_fraction: float = 0.125
+    subscip_repair: bool = True
+    qqa_fix_fraction: float = 0.25
     repair_beam_width: int = 16
     reference_pool_size: int = 3
-    minimum_relative_improvement: float = 0.0
-    minimum_call_time: float = 3.0
+    minimum_relative_improvement: float = 0.001
+    minimum_call_time: float = 1.0
     minimum_qqa_time: float = 20.0
-    maximum_call_time: float = 2.0
+    maximum_call_time: float = 0.15
     maximum_call_time_fraction: float = 0.05
-    fast_candidates: int = 2
-    min_nodes_between_calls: int = 10
+    minimum_runtime_startup_time: float = 8.0
+    fast_candidates: int = 0
+    min_nodes_between_calls: int = 100
     local_branching_radius: int | None = None
     learning_rate: float = 0.05
     diversity: float = 0.05
-    max_lp_rows: int = 128
+    max_lp_rows: int = 64
     objective_weight: float = 1.0
     row_penalty: float = 20.0
     proximity_weight: float = 0.02
@@ -48,10 +49,11 @@ class QQAHeuristicConfig:
     require_incumbent: bool = True
     adaptive_row_lagrangian: bool = True
     stop_qqa_after_nonimproving_call: bool = True
-    maximum_overhead_fraction: float = 0.1
+    maximum_overhead_fraction: float = 0.05
     threads: int = 1
     seed: int = 0
     device: str = "cpu"
+    core_dtype: str = "float64"
     verbose: bool = False
 
     def __post_init__(self) -> None:
@@ -150,6 +152,8 @@ class QQAHeuristicConfig:
             raise ValueError("local_branching_radius must be a positive integer or None.")
         if not isinstance(self.device, str) or not self.device.strip():
             raise ValueError("device must be a non-empty string.")
+        if self.core_dtype not in {"float32", "float64"}:
+            raise ValueError("core_dtype must be 'float32' or 'float64'.")
         if not isinstance(self.require_surrogate_improvement, bool):
             raise TypeError("require_surrogate_improvement must be a bool.")
         if not isinstance(self.require_incumbent, bool):
@@ -188,6 +192,7 @@ class QQAHeuristicConfig:
             "minimum_call_time",
             "minimum_qqa_time",
             "maximum_call_time",
+            "minimum_runtime_startup_time",
             "learning_rate",
             "objective_weight",
             "row_penalty",
@@ -231,11 +236,18 @@ class QQAHeuristicStats:
     prechecks: int = 0
     small_core_skips: int = 0
     saturation_skips: int = 0
+    runtime_budget_skips: int = 0
+    callback_runtime: float = 0.0
     inspection_runtime: float = 0.0
+    numerical_runtime_loads: int = 0
+    numerical_runtime_initialisation: float = 0.0
+    callback_deadline_safety_reserved: float = 0.0
     lp_candidate_counts: list[int] = field(default_factory=list)
     calls: int = 0
     qqa_calls: int = 0
     qqa_runtime: float = 0.0
+    qqa_completed_epochs: list[int] = field(default_factory=list)
+    qqa_deadline_reached: int = 0
     qqa_al_updates: int = 0
     qqa_archive_observations: int = 0
     completion_runtime: float = 0.0
@@ -290,11 +302,18 @@ class QQAHeuristicStats:
             "prechecks": self.prechecks,
             "small_core_skips": self.small_core_skips,
             "saturation_skips": self.saturation_skips,
+            "runtime_budget_skips": self.runtime_budget_skips,
+            "callback_runtime": self.callback_runtime,
             "inspection_runtime": self.inspection_runtime,
+            "numerical_runtime_loads": self.numerical_runtime_loads,
+            "numerical_runtime_initialisation": self.numerical_runtime_initialisation,
+            "callback_deadline_safety_reserved": self.callback_deadline_safety_reserved,
             "lp_candidate_counts": list(self.lp_candidate_counts),
             "calls": self.calls,
             "qqa_calls": self.qqa_calls,
             "qqa_runtime": self.qqa_runtime,
+            "qqa_completed_epochs": list(self.qqa_completed_epochs),
+            "qqa_deadline_reached": self.qqa_deadline_reached,
             "qqa_al_updates": self.qqa_al_updates,
             "qqa_archive_observations": self.qqa_archive_observations,
             "completion_runtime": self.completion_runtime,

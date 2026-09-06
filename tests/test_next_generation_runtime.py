@@ -241,7 +241,10 @@ def test_general_qpbo_exact_probe_matches_bruteforce() -> None:
 
 
 def test_cp_scheduling_runtime_enforces_no_overlap() -> None:
-    pytest.importorskip("ortools.sat.python.cp_model")
+    from qqa.hybrid.capabilities import cpsat_available
+
+    if not cpsat_available():
+        pytest.skip("OR-Tools CP-SAT is unavailable")
     starts = torch.arange(3)
     model = ModelIR(
         (VariableBlock("start", "integer", (3,), 0, 8),),
@@ -299,6 +302,71 @@ def test_anneal_checkpoint_can_resume_without_embedding_its_path(tmp_path) -> No
     )
     assert resumed.diagnostics["resumed"] is True
     assert resumed.diagnostics["completed_epochs"] == 4
+
+
+def test_checkpoint_resume_matches_uninterrupted_trajectory(tmp_path, monkeypatch) -> None:
+    from qqa.runtime import checkpoint as checkpoint_module
+    from qqa.schedule import AdaptiveBGSchedule
+
+    class PlannedInterruption(RuntimeError):
+        pass
+
+    target = tmp_path / "trajectory.qqacp"
+    problem = qqa.MaxCut(__import__("networkx").cycle_graph(8))
+    real_save = checkpoint_module.save_checkpoint
+
+    def save_then_interrupt(checkpoint, path):
+        real_save(checkpoint, path)
+        if checkpoint.epoch == 4 and not checkpoint.metadata["completed"]:
+            raise PlannedInterruption
+
+    common = {
+        "sol_size": 8,
+        "num_epochs": 12,
+        "optimizer": "lightweight-adamw",
+        "check_interval": 2,
+        "restart_patience": 3,
+        "replica_exchange_interval": 2,
+        "heterogeneous_replicas": True,
+        "archive_size": 8,
+        "archive_interval": 2,
+        "polish": False,
+        "verbose": False,
+    }
+    qqa.fix_seed(17)
+    monkeypatch.setattr(checkpoint_module, "save_checkpoint", save_then_interrupt)
+    with pytest.raises(PlannedInterruption):
+        qqa.anneal(
+            problem,
+            schedule=AdaptiveBGSchedule(),
+            checkpoint_path=str(target),
+            checkpoint_interval=1,
+            **common,
+        )
+    monkeypatch.setattr(checkpoint_module, "save_checkpoint", real_save)
+
+    qqa.fix_seed(17)
+    uninterrupted = qqa.anneal(
+        problem,
+        schedule=AdaptiveBGSchedule(),
+        **common,
+    )
+    resumed = qqa.anneal(
+        problem,
+        schedule=AdaptiveBGSchedule(),
+        resume_from=str(target),
+        **common,
+    )
+
+    torch.testing.assert_close(resumed.best_sol, uninterrupted.best_sol, rtol=0, atol=0)
+    assert resumed.best_obj == pytest.approx(uninterrupted.best_obj, rel=0, abs=0)
+    assert resumed.history == uninterrupted.history
+    assert resumed.diagnostics["restart_count"] == uninterrupted.diagnostics["restart_count"]
+    assert (
+        resumed.diagnostics["replica_exchange_count"]
+        == uninterrupted.diagnostics["replica_exchange_count"]
+    )
+    assert resumed.diagnostics["resume_semantics"] == "resume"
 
 
 def test_untrusted_python_and_private_metadata_are_fail_closed() -> None:

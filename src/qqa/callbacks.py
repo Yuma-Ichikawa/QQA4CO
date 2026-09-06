@@ -145,6 +145,44 @@ class HistoryRecorder(Callback):
         )
         self._records += 1
 
+    def checkpoint_tensors(self) -> dict[str, torch.Tensor]:
+        """Return recorded device history for trajectory-identical resume."""
+        if self._device_history is None or self._best_device_history is None or self._records == 0:
+            return {}
+        return {
+            "history_metrics": self._device_history[: self._records].detach(),
+            "history_best_objective": self._best_device_history[: self._records].detach(),
+            "history_records": torch.tensor(
+                self._records,
+                device=self._device_history.device,
+                dtype=torch.int64,
+            ),
+        }
+
+    def restore_checkpoint_tensors(self, tensors: dict[str, torch.Tensor]) -> None:
+        """Restore history after :meth:`on_train_begin` allocates buffers."""
+        required = {"history_metrics", "history_best_objective", "history_records"}
+        present = required & tensors.keys()
+        if not present:
+            return
+        if present != required:
+            raise ValueError("Checkpoint contains incomplete history tensors.")
+        if self._device_history is None or self._best_device_history is None:
+            raise RuntimeError("History buffers must be initialised before checkpoint restore.")
+        records = int(tensors["history_records"].detach().cpu().item())
+        metrics = tensors["history_metrics"]
+        best = tensors["history_best_objective"]
+        if (
+            records < 0
+            or records > len(self._device_history)
+            or metrics.shape != (records, self._device_history.shape[1])
+            or best.shape != (records, *self._best_device_history.shape[1:])
+        ):
+            raise ValueError("Checkpoint history tensors do not match the active run.")
+        self._device_history[:records].copy_(metrics.to(self._device_history))
+        self._best_device_history[:records].copy_(best.to(self._best_device_history))
+        self._records = records
+
     def on_train_end(self, state: CallbackState) -> None:  # noqa: ARG002 - state unused
         matrix = (
             torch.empty((0, 7))

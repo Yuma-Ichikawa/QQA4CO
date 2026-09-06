@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import json
 import math
 import os
@@ -32,11 +33,16 @@ from qqa.benchmarking.metrics import (
     summarise_comparison,
 )
 from qqa.hybrid.heuristic_types import QQAHeuristicConfig
-from qqa.hybrid.scip_heuristic import include_qqa_heuristic
 from qqa.io import load_mps, load_qplib
-from qqa.presolve import build_scip_model
 
 _RETAINED_NATIVE_MODELS: list[object] = []
+
+
+def include_qqa_heuristic(*args, **kwargs):
+    """Load the optional Torch/SCIP plugin only for an active hybrid run."""
+    from qqa.hybrid.scip_heuristic import include_qqa_heuristic as include
+
+    return include(*args, **kwargs)
 
 
 def detect_format(path: str | Path) -> str:
@@ -85,6 +91,8 @@ def _load_model(
 ):
     algebraic = _load_algebraic(path, format) if algebraic is None else algebraic
     if format == "qplib":
+        from qqa.presolve import build_scip_model
+
         scip, variables = build_scip_model(algebraic)
         return algebraic, scip, variables
     try:
@@ -124,6 +132,118 @@ def _software_versions(*, qplib: bool) -> dict[str, str]:
     return versions
 
 
+def _model_statistics(algebraic: AlgebraicModel, solver_model) -> dict[str, object]:
+    """Return portable original-model structure for benchmark stratification.
+
+    MIPLIB execution intentionally imports objective and variable metadata into
+    the algebraic representation without duplicating every row.  Ask SCIP for
+    the original row count in that case while keeping coefficient nonzero
+    counts explicitly marked as unavailable.  QPLIB keeps the complete sparse
+    algebraic model, so all counts are available directly.
+    """
+    summary = algebraic.summary()
+    materialised_constraints = algebraic.num_constraints > 0
+    try:
+        num_constraints = int(solver_model.getNConss())
+    except Exception:
+        num_constraints = algebraic.num_constraints
+    return {
+        "num_variables": algebraic.num_variables,
+        "num_constraints": num_constraints,
+        "variable_counts": dict(summary["variable_counts"]),
+        "objective_linear_nonzeros": summary["objective_linear_nonzeros"],
+        "objective_quadratic_nonzeros": summary["objective_quadratic_nonzeros"],
+        "constraint_linear_nonzeros": (
+            summary["constraint_linear_nonzeros"] if materialised_constraints else None
+        ),
+        "constraint_quadratic_nonzeros": (
+            summary["constraint_quadratic_nonzeros"] if materialised_constraints else None
+        ),
+    }
+
+
+def _peak_memory_mb() -> dict[str, float]:
+    """Return process/GPU high-water marks without machine identity."""
+    memory: dict[str, float] = {}
+    try:
+        import resource
+
+        usage = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        divisor = 1024.0 * 1024.0 if sys.platform == "darwin" else 1024.0
+        memory["process_rss"] = usage / divisor
+    except ImportError:  # pragma: no cover - the module is unavailable on Windows
+        pass
+    torch_module = sys.modules.get("torch")
+    if torch_module is not None:
+        try:
+            if torch_module.cuda.is_available():
+                memory["cuda_allocated"] = float(torch_module.cuda.max_memory_allocated()) / 2**20
+        except (AttributeError, RuntimeError):
+            pass
+    return memory
+
+
+def _time_to_reference(
+    trajectory: tuple | list,
+    reference: float | None,
+    *,
+    objective_sense: str,
+) -> float | None:
+    if reference is None or not math.isfinite(reference):
+        return None
+    tolerance = 1e-8 * max(1.0, abs(reference))
+    for point in trajectory:
+        reached = (
+            point.primal_bound <= reference + tolerance
+            if objective_sense == "minimize"
+            else point.primal_bound >= reference - tolerance
+        )
+        if reached:
+            return float(point.time)
+    return None
+
+
+def _classify_outcome(*, status: str, feasible: bool) -> str:
+    normalised = status.lower().replace(" ", "")
+    if feasible and "optimal" in normalised:
+        return "optimal_with_qualified_certificate"
+    if feasible:
+        return "feasible"
+    if "infeasible" in normalised:
+        return "infeasible_proven"
+    if "unbounded" in normalised:
+        return "unbounded_proven"
+    if "timelimit" in normalised or "setup-time-limit" in normalised:
+        return "timeout"
+    return "no_feasible_found"
+
+
+def _native_process_error_type(returncode: int | None) -> str:
+    """Describe a failed worker without exposing command lines or host state."""
+    if returncode is None:
+        return "NativeSolverProcessError"
+    if returncode < 0:
+        return f"NativeSolverSignal{abs(returncode)}"
+    return f"NativeSolverExit{returncode}"
+
+
+def _default_worker_timeout(time_limit: float) -> float:
+    """Bound an isolated worker while allowing result-serialization grace."""
+    grace = max(15.0, min(60.0, 0.1 * time_limit))
+    return time_limit + grace
+
+
+def _solution_sha256(names: tuple[str, ...], values: np.ndarray) -> str:
+    """Hash one original-coordinate solution with unambiguous variable names."""
+    digest = hashlib.sha256()
+    for name in names:
+        encoded = name.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, "little"))
+        digest.update(encoded)
+    digest.update(np.asarray(values, dtype="<f8").tobytes(order="C"))
+    return digest.hexdigest()
+
+
 def _configure_scip_threads(model, threads: int) -> None:
     """Apply one auditable thread limit to SCIP and its LP solver.
 
@@ -141,7 +261,7 @@ def _qqa_is_applicable(
 ) -> bool:
     """Apply cheap original-model gates before registering a SCIP plugin."""
     return bool(
-        algebraic.integer_indices.size > 0
+        algebraic.integer_indices.size >= config.minimum_core_size
         and (
             algebraic.problem_type is None
             or config.allowed_qplib_problem_types is None
@@ -194,6 +314,8 @@ def _qqa_applicability_hint(
     variable_class = problem_type[1]
     if variable_class == "C":
         return False
+    if variable_class in {"B", "I"} and num_variables < config.minimum_core_size:
+        return False
     if (
         config.maximum_problem_variables is not None
         and num_variables > config.maximum_problem_variables
@@ -239,10 +361,13 @@ def run_benchmark_instance(
     qqa_config: QQAHeuristicConfig | None = None,
     verbose: bool = False,
     worker_timeout: float | None = None,
+    include_solution_values: bool = False,
+    implementation_revision: str | None = None,
     _algebraic: AlgebraicModel | None = None,
     _reference_records: dict[str, tuple[str, float | None]] | None = None,
     _defer_cleanup: bool = False,
     _isolated_worker: bool = False,
+    _clock_started_at: float | None = None,
 ) -> BenchmarkResult:
     """Run one public benchmark with a single total SCIP/QQA deadline."""
     source = Path(path).expanduser()
@@ -265,6 +390,15 @@ def run_benchmark_instance(
         isinstance(worker_timeout, bool) or not math.isfinite(worker_timeout) or worker_timeout <= 0
     ):
         raise ValueError("worker_timeout must be finite and > 0, or None.")
+    if not isinstance(include_solution_values, bool):
+        raise TypeError("include_solution_values must be a boolean.")
+    if implementation_revision is not None and (
+        not 7 <= len(implementation_revision) <= 64
+        or any(character not in "0123456789abcdef" for character in implementation_revision)
+    ):
+        raise ValueError(
+            "implementation_revision must be a 7-64 character lowercase hexadecimal hash."
+        )
 
     if resolved_format == "qplib" and _algebraic is None and not _isolated_worker:
         return _run_isolated_benchmark_instance(
@@ -281,17 +415,20 @@ def run_benchmark_instance(
                 "threads": threads,
                 "reference_file": reference_file,
                 "verbose": verbose,
+                "include_solution_values": include_solution_values,
+                "implementation_revision": implementation_revision,
             },
             common_import=False,
             worker_timeout=worker_timeout,
         )
 
-    started = perf_counter()
+    started = perf_counter() if _clock_started_at is None else _clock_started_at
     algebraic, model, variables = _load_model(
         source,
         resolved_format,
         algebraic=_algebraic,
     )
+    model_statistics = _model_statistics(algebraic, model)
     if not verbose:
         model.hideOutput()
     model.setRealParam("limits/gap", float(relative_gap_limit))
@@ -320,7 +457,16 @@ def run_benchmark_instance(
     tracker.attach(model)
     resolved_qqa_config = qqa_config or QQAHeuristicConfig()
     qqa_structurally_applicable = _qqa_is_applicable(algebraic, resolved_qqa_config)
-    qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable
+    remaining_setup_budget = float(time_limit) - (perf_counter() - started)
+    qqa_budget_applicable = remaining_setup_budget > max(
+        resolved_qqa_config.minimum_call_time,
+        resolved_qqa_config.minimum_qqa_time,
+        resolved_qqa_config.completion_time,
+    ) and (
+        resolved_qqa_config.maximum_overhead_fraction * float(time_limit)
+        >= resolved_qqa_config.minimum_runtime_startup_time
+    )
+    qqa_applicable = solver == "sg-cqqa" and qqa_structurally_applicable and qqa_budget_applicable
     heuristic = (
         include_qqa_heuristic(
             model,
@@ -339,19 +485,23 @@ def run_benchmark_instance(
     # once before entering this solver-specific clock.
     tracker.time_offset = perf_counter() - started
     remaining = float(time_limit) - tracker.time_offset
-    optimised = remaining > 1e-3
+    verification_reserve = min(0.25, max(0.01, 0.01 * float(time_limit)))
+    solver_budget = max(0.0, remaining - verification_reserve)
+    optimised = solver_budget > 1e-3
     if optimised:
-        model.setRealParam("limits/time", remaining)
+        model.setRealParam("limits/time", solver_budget)
         model.optimize()
-    runtime = perf_counter() - started
+    solve_finished = perf_counter()
     status = str(model.getStatus()) if optimised else "setup-time-limit"
     best = model.getBestSol() if optimised else None
     objective = None
     evaluation = None
-    if best is not None and runtime <= time_limit:
+    final_values: np.ndarray | None = None
+    if best is not None:
         values = _solution_in_algebraic_order(model, algebraic, variables, best)
         evaluation = algebraic.evaluate(values)
         objective = evaluation.objective
+        final_values = values
     tracked = tracker.best_evaluation
     if tracked is not None and (
         evaluation is None
@@ -360,6 +510,7 @@ def run_benchmark_instance(
     ):
         evaluation = tracked
         objective = tracked.objective
+        final_values = np.asarray(tracker.best_values, dtype=np.float64)
     try:
         dual_bound = float(model.getDualbound()) if optimised else None
         if dual_bound is not None and not math.isfinite(dual_bound):
@@ -391,12 +542,23 @@ def run_benchmark_instance(
         if reference is not None
         else None
     )
+    target_time = _time_to_reference(
+        tracker.trajectory,
+        reference,
+        objective_sense=algebraic.objective_sense,
+    )
     provenance = {
         **dict(algebraic.metadata),
+        "model_statistics": model_statistics,
         "reference_name": Path(reference_file).name if reference_file is not None else None,
         "reference_status": reference_status,
         "software": _software_versions(qplib=resolved_format == "qplib"),
+        "implementation_revision": implementation_revision,
     }
+    runtime = perf_counter() - started
+    verification_time = perf_counter() - solve_finished
+    feasible = evaluation is not None and evaluation.maximum_infeasibility <= 1e-6
+    gap = relative_gap(objective, dual_bound)
     result = BenchmarkResult(
         instance=algebraic.name,
         format=resolved_format,
@@ -408,8 +570,8 @@ def run_benchmark_instance(
         nodes=int(model.getNNodes()) if optimised else 0,
         objective=objective,
         dual_bound=dual_bound,
-        gap=relative_gap(objective, dual_bound),
-        feasible=evaluation is not None and evaluation.maximum_infeasibility <= 1e-6,
+        gap=gap,
+        feasible=feasible,
         maximum_infeasibility=(
             evaluation.maximum_infeasibility if evaluation is not None else None
         ),
@@ -431,16 +593,41 @@ def run_benchmark_instance(
             "scip_parallel_threads": threads,
             "scip_lp_threads": threads,
             "torch_threads": threads if qqa_applicable else None,
-            "qqa_applicable": qqa_structurally_applicable,
+            "qqa_applicable": qqa_structurally_applicable and qqa_budget_applicable,
+            "qqa_structurally_applicable": qqa_structurally_applicable,
+            "qqa_budget_applicable": qqa_budget_applicable,
             "qqa_plugin_active": qqa_applicable,
             "metric_clock": (
                 "total_wall_clock"
                 if _algebraic is None
                 else "solver_wall_clock_after_common_import"
             ),
+            "initialization": "cold" if _isolated_worker else "shared-process",
+            "device": resolved_qqa_config.device if qqa_applicable else "cpu",
+            "verification_reserve": verification_reserve,
+            "deadline_reached": runtime >= float(time_limit),
+            "solution_values_included": include_solution_values,
             "seed": seed,
         },
         provenance=provenance,
+        time_to_target=target_time,
+        stage_timings={
+            "setup_and_plugin": float(tracker.time_offset),
+            "solver": solving_time,
+            "postsolve_verification": verification_time,
+        },
+        peak_memory_mb=_peak_memory_mb(),
+        outcome=_classify_outcome(status=status, feasible=feasible),
+        solution_sha256=(
+            _solution_sha256(tuple(algebraic.variable_names), final_values)
+            if final_values is not None
+            else None
+        ),
+        solution_values=(
+            tuple(float(value) for value in final_values)
+            if include_solution_values and final_values is not None
+            else ()
+        ),
     )
     if _defer_cleanup:
         # Keep every Python wrapper alive until the isolated worker calls
@@ -474,6 +661,7 @@ def _isolated_benchmark_worker(
     reference_records: dict[str, tuple[str, float | None]] | None,
     run_kwargs: dict,
     common_import: bool = True,
+    clock_started_at: float | None = None,
 ) -> None:
     """Run one native solver in a disposable process and persist its result.
 
@@ -495,6 +683,7 @@ def _isolated_benchmark_worker(
             _reference_records=reference_records,
             _defer_cleanup=True,
             _isolated_worker=True,
+            _clock_started_at=clock_started_at,
             **run_kwargs,
         )
         payload: dict[str, object] = {"result": result.to_dict()}
@@ -531,6 +720,7 @@ def _run_isolated_benchmark_instance(
             key: str(value) if isinstance(value, Path) else value
             for key, value in run_kwargs.items()
         }
+        clock_started_at = None if common_import else perf_counter()
         request.write_text(
             json.dumps(
                 {
@@ -542,6 +732,7 @@ def _run_isolated_benchmark_instance(
                     "reference_records": reference_records,
                     "run_kwargs": serializable_kwargs,
                     "common_import": common_import,
+                    "clock_started_at": clock_started_at,
                 },
                 ensure_ascii=False,
                 allow_nan=False,
@@ -559,7 +750,7 @@ def _run_isolated_benchmark_instance(
             ]
         )
         time_limit = float(run_kwargs.get("time_limit", 60.0))
-        timeout = max(300.0, time_limit + 120.0) if worker_timeout is None else worker_timeout
+        timeout = _default_worker_timeout(time_limit) if worker_timeout is None else worker_timeout
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -567,7 +758,7 @@ def _run_isolated_benchmark_instance(
             process.wait()
             raise _IsolatedBenchmarkError("WorkerTimeout") from None
         if not output.is_file():
-            raise _IsolatedBenchmarkError("NativeSolverProcessError")
+            raise _IsolatedBenchmarkError(_native_process_error_type(process.returncode))
         payload = json.loads(output.read_text(encoding="utf-8"))
     if "error_type" in payload:
         raise _IsolatedBenchmarkError(str(payload["error_type"]))
@@ -594,9 +785,14 @@ def _comparison_solver_order(
     execution_order: str,
     seed: int,
     instance_index: int,
+    instance_name: str | None = None,
 ) -> tuple[str, ...]:
-    """Return a deterministic order while balancing first-run cache effects."""
-    if execution_order == "fixed" or (seed + instance_index) % 2 == 0:
+    """Return a deterministic, shard-invariant balanced execution order."""
+    instance_phase = instance_index
+    if instance_name is not None:
+        digest = hashlib.sha256(instance_name.encode("utf-8")).digest()
+        instance_phase = digest[0] & 1
+    if execution_order == "fixed" or (seed + instance_phase) % 2 == 0:
         return solvers
     return tuple(reversed(solvers))
 
@@ -613,6 +809,10 @@ def compare_benchmark_solvers(
     resume: bool = False,
     continue_on_error: bool = False,
     retry_failures: bool = False,
+    reuse_equivalent_baseline: bool = True,
+    isolate_all: bool = False,
+    include_import_in_budget: bool = False,
+    include_solution_values: bool = False,
     **kwargs,
 ) -> BenchmarkComparisonResult:
     """Run a resumable paired campaign with portable configuration metadata."""
@@ -634,6 +834,16 @@ def compare_benchmark_solvers(
         raise ValueError("baseline_solver must be included in solvers.")
     if execution_order not in {"fixed", "balanced"}:
         raise ValueError("execution_order must be 'fixed' or 'balanced'.")
+    if not all(
+        isinstance(value, bool)
+        for value in (
+            reuse_equivalent_baseline,
+            isolate_all,
+            include_import_in_budget,
+            include_solution_values,
+        )
+    ):
+        raise TypeError("Benchmark execution switches must be booleans.")
     seed_values = tuple(seeds)
     if not seed_values or any(
         isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 for seed in seed_values
@@ -641,7 +851,12 @@ def compare_benchmark_solvers(
         raise ValueError("seeds must contain non-negative integers.")
 
     base_config = qqa_config or QQAHeuristicConfig()
-    qqa_config_metadata = asdict(base_config)
+    # Compare the same JSON-domain representation that is persisted in a
+    # checkpoint.  Dataclass tuples (notably the QPLIB PROBTYPE allow-list)
+    # otherwise become lists on disk and make a valid resume look different.
+    qqa_config_metadata = json.loads(
+        json.dumps(asdict(base_config), ensure_ascii=False, allow_nan=False)
+    )
     # Per-run seeds come from the explicit campaign ``seeds`` axis below.
     # Keeping the constructor seed here duplicates that axis and prevents
     # independently executed seed shards from validating as one campaign.
@@ -652,6 +867,9 @@ def compare_benchmark_solvers(
         "seeds": list(seed_values),
         "baseline_solver": baseline_solver,
         "execution_order": execution_order,
+        "execution_balance_key": (
+            "portable_instance_name_sha256" if execution_order == "balanced" else None
+        ),
         "format": kwargs.get("format", "auto"),
         "time_limit": float(kwargs.get("time_limit", 60.0)),
         "relative_gap_limit": float(kwargs.get("relative_gap_limit", 0.0)),
@@ -664,11 +882,18 @@ def compare_benchmark_solvers(
             "scip_lp": int(kwargs.get("threads", 1)),
             "torch_sg_cqqa": int(kwargs.get("threads", 1)),
         },
-        "metric_clock": "solver_wall_clock_after_common_import",
-        "equivalent_bypass_reuse": True,
+        "metric_clock": (
+            "end_to_end_from_original_model"
+            if include_import_in_budget
+            else "solver_wall_clock_after_common_import"
+        ),
+        "equivalent_bypass_reuse": reuse_equivalent_baseline,
+        "process_isolation": "all-solvers" if isolate_all else "qplib-only",
+        "include_solution_values": include_solution_values,
         "reference_name": (
             Path(kwargs["reference_file"]).name if kwargs.get("reference_file") else None
         ),
+        "implementation_revision": kwargs.get("implementation_revision"),
         "qqa_config": qqa_config_metadata,
     }
     checkpoint = Path(checkpoint_file).expanduser() if checkpoint_file is not None else None
@@ -715,6 +940,14 @@ def compare_benchmark_solvers(
             "completed_runs": len(rows),
             "failed_runs": len(failures),
             "failures_by_solver": by_solver,
+            "failures_by_type": {
+                error_type: sum(failure.error_type == error_type for failure in failures)
+                for error_type in sorted({failure.error_type for failure in failures})
+            },
+            "failures_by_outcome": {
+                outcome: sum(failure.outcome == outcome for failure in failures)
+                for outcome in sorted({failure.outcome for failure in failures})
+            },
         }
         return BenchmarkComparisonResult(
             rows,
@@ -757,7 +990,7 @@ def compare_benchmark_solvers(
             if not pending_solvers:
                 continue
             algebraic = None
-            if resolved_format != "qplib":
+            if resolved_format != "qplib" and not isolate_all and not include_import_in_budget:
                 try:
                     algebraic = _load_algebraic(source, resolved_format)
                 except Exception as exc:
@@ -780,6 +1013,7 @@ def compare_benchmark_solvers(
                 execution_order=execution_order,
                 seed=seed,
                 instance_index=instance_index,
+                instance_name=name,
             )
             applicability_hint = _qqa_applicability_hint(
                 source,
@@ -787,7 +1021,11 @@ def compare_benchmark_solvers(
                 seeded_config,
                 algebraic=algebraic,
             )
-            if applicability_hint is False and "scip-aggressive" in ordered_solvers:
+            if (
+                reuse_equivalent_baseline
+                and applicability_hint is False
+                and "scip-aggressive" in ordered_solvers
+            ):
                 ordered_solvers = (
                     "scip-aggressive",
                     *(solver for solver in ordered_solvers if solver != "scip-aggressive"),
@@ -796,7 +1034,11 @@ def compare_benchmark_solvers(
                 key = (name, solver, seed)
                 if key in completed or key in failed:
                     continue
-                if solver == "sg-cqqa" and applicability_hint is False:
+                if (
+                    reuse_equivalent_baseline
+                    and solver == "sg-cqqa"
+                    and applicability_hint is False
+                ):
                     equivalent = next(
                         (
                             row
@@ -836,7 +1078,7 @@ def compare_benchmark_solvers(
                         save_checkpoint()
                         continue
                 try:
-                    if resolved_format == "qplib":
+                    if resolved_format == "qplib" or isolate_all:
                         result = _run_isolated_benchmark_instance(
                             source,
                             resolved_format=resolved_format,
@@ -844,8 +1086,11 @@ def compare_benchmark_solvers(
                             seed=seed,
                             qqa_config=seeded_config,
                             reference_records=reference_records,
-                            run_kwargs=dict(kwargs),
-                            common_import=True,
+                            run_kwargs={
+                                **dict(kwargs),
+                                "include_solution_values": include_solution_values,
+                            },
+                            common_import=not include_import_in_budget,
                             worker_timeout=kwargs.get("worker_timeout"),
                         )
                     else:
@@ -854,6 +1099,7 @@ def compare_benchmark_solvers(
                             solver=solver,
                             seed=seed,
                             qqa_config=seeded_config,
+                            include_solution_values=include_solution_values,
                             _algebraic=algebraic,
                             _reference_records=reference_records,
                             **kwargs,

@@ -20,6 +20,7 @@ class EventKind(str, Enum):
     CANDIDATE_GENERATED = "CandidateGenerated"
     CANDIDATE_REPAIRED = "CandidateRepaired"
     INCUMBENT_IMPROVED = "IncumbentImproved"
+    SEARCH_MERIT_IMPROVED = "SearchMeritImproved"
     DUAL_BOUND_IMPROVED = "DualBoundImproved"
     CUT_ADDED = "CutAdded"
     REPLICA_RESTARTED = "ReplicaRestarted"
@@ -79,7 +80,13 @@ class EventRecorder(Callback):
     their existing control points.
     """
 
-    def __init__(self, *, stride: int = 10, maximum_events: int = 10_000) -> None:
+    def __init__(
+        self,
+        *,
+        stride: int = 10,
+        maximum_events: int = 10_000,
+        started_at: float | None = None,
+    ) -> None:
         if isinstance(stride, bool) or stride < 1:
             raise ValueError("stride must be a positive integer.")
         if isinstance(maximum_events, bool) or maximum_events < 2:
@@ -87,9 +94,12 @@ class EventRecorder(Callback):
         self.stride = int(stride)
         self.maximum_events = int(maximum_events)
         self.events: list[SolveEvent] = []
-        self._started = perf_counter()
+        self._started = perf_counter() if started_at is None else float(started_at)
+        if not math.isfinite(self._started):
+            raise ValueError("started_at must be a finite monotonic timestamp or None.")
         self._buffer: torch.Tensor | None = None
         self._records = 0
+        self._elapsed: list[float] = []
 
     def emit(
         self,
@@ -104,10 +114,10 @@ class EventRecorder(Callback):
         self.events.append(SolveEvent(len(self.events), EventKind(kind), elapsed, payload or {}))
 
     def on_train_begin(self, state: CallbackState) -> None:
-        self._started = perf_counter()
         records = max(1, (state.num_epochs + self.stride - 1) // self.stride + 1)
         self._buffer = torch.empty((records, 7), device=state.x.device, dtype=torch.float64)
         self._records = 0
+        self._elapsed = []
         if not any(event.kind is EventKind.SOLVE_STARTED for event in self.events):
             self.emit(
                 EventKind.SOLVE_STARTED,
@@ -133,6 +143,7 @@ class EventRecorder(Callback):
                 torch.tensor(float(state.epoch), device=state.x.device, dtype=torch.float64),
             )
         )
+        self._elapsed.append(max(0.0, perf_counter() - self._started))
         self._records += 1
 
     def on_train_end(self, state: CallbackState) -> None:
@@ -142,11 +153,11 @@ class EventRecorder(Callback):
             else self._buffer[: self._records].detach().cpu()
         )
         previous = math.inf
-        denominator = max(1, state.num_epochs)
-        for best, mean, minimum, penalty, diversity, bg, epoch in rows.tolist():
-            elapsed = max(
-                0.0, (float(epoch) + 1.0) / denominator * (perf_counter() - self._started)
-            )
+        if len(self._elapsed) != len(rows):
+            raise RuntimeError("Event timestamps and device telemetry are misaligned.")
+        for (best, mean, minimum, penalty, diversity, bg, epoch), elapsed in zip(
+            rows.tolist(), self._elapsed, strict=True
+        ):
             self.emit(
                 EventKind.RELAXATION_UPDATED,
                 {
@@ -161,8 +172,8 @@ class EventRecorder(Callback):
             )
             if best < previous:
                 self.emit(
-                    EventKind.INCUMBENT_IMPROVED,
-                    {"epoch": int(epoch), "objective": best},
+                    EventKind.SEARCH_MERIT_IMPROVED,
+                    {"epoch": int(epoch), "search_merit": best},
                     elapsed_seconds=elapsed,
                 )
                 previous = best
