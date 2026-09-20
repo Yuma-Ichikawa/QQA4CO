@@ -25,7 +25,7 @@ matplotlib==3.11.1
 tqdm==4.70.0
 
 # Interactive plots + GUI (REQUIRED by app/_common.py at import time).
-plotly==7.0.0
+plotly==7.1.0
 pandas==3.0.5
 streamlit==1.63.0
 
